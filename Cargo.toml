@@ -1,0 +1,43 @@
+[package]
+name = "curcat"
+version = "0.9.0"
+edition = "2024"
+
+[dependencies]
+egui = "0.33"
+eframe = { version = "0.33", default-features = false, features = [
+    "glow",
+    "default_fonts",
+    "persistence",
+    "x11",
+    "wayland",
+] }
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "bmp",
+    "tiff",
+    "webp",
+    "ico",
+    "tga",
+    "pnm",
+    "hdr",
+    "dds",
+] }
+chrono = { version = "0.4", default-features = false, features = [
+    "alloc",
+    "std",
+] }
+csv = "1.4"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.9.8"
+directories = "6.0"
+rust_xlsxwriter = { version = "0.91" }
+egui-file-dialog = { version = "0.12" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
