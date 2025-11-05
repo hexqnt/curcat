@@ -32,6 +32,25 @@ cargo run --release -- path/to/image.png
 ./build_musl.sh
 ```
 
+Сборка для RedOS (внутри Docker):
+
+```bash
+./build_redos.sh
+```
+
+Варианты базового образа:
+
+```bash
+# UBI 8 (по умолчанию)
+./build_redos.sh --ubi8
+
+# UBI 7
+./build_redos.sh --ubi7
+
+# Произвольный образ
+./build_redos.sh --image registry.red-soft.ru/ubi7/ubi:latest
+```
+
 ## Использование
 
 1) Откройте изображение (кнопка или перетаскивание в центральную область).
