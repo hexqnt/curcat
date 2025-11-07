@@ -1,5 +1,8 @@
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use egui::Pos2;
+
+const NANOS_PER_SEC: f64 = 1_000_000_000.0;
+const NANOS_I64: i64 = 1_000_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScaleKind {
@@ -23,7 +26,10 @@ impl AxisValue {
     pub fn to_scalar_seconds(&self) -> f64 {
         match self {
             AxisValue::Float(v) => *v,
-            AxisValue::DateTime(dt) => dt.timestamp() as f64,
+            AxisValue::DateTime(dt) => {
+                let utc = dt.and_utc();
+                utc.timestamp() as f64 + f64::from(utc.timestamp_subsec_nanos()) / NANOS_PER_SEC
+            }
         }
     }
 
@@ -31,12 +37,21 @@ impl AxisValue {
         match unit {
             AxisUnit::Float => AxisValue::Float(s),
             AxisUnit::DateTime => {
-                let secs = s.floor() as i64;
-                let nanos = ((s - s.floor()) * 1e9) as u32;
-                let base = NaiveDateTime::from_timestamp_opt(secs, nanos).unwrap_or_else(|| {
-                    // Fallback to unix epoch on overflow
-                    NaiveDateTime::from_timestamp_opt(0, 0).unwrap()
-                });
+                let secs_floor = s.floor();
+                let mut secs = secs_floor as i64;
+                let mut nanos = ((s - secs_floor) * NANOS_PER_SEC).round() as i64;
+                if nanos >= NANOS_I64 {
+                    nanos -= NANOS_I64;
+                    secs = secs.saturating_add(1);
+                } else if nanos < 0 {
+                    nanos += NANOS_I64;
+                    secs = secs.saturating_sub(1);
+                }
+                let nanos = nanos.clamp(0, NANOS_I64 - 1) as u32;
+                let base = DateTime::<Utc>::from_timestamp(secs, nanos).map_or_else(
+                    || DateTime::<Utc>::UNIX_EPOCH.naive_utc(),
+                    |dt| dt.naive_utc(),
+                );
                 AxisValue::DateTime(base)
             }
         }

@@ -1,7 +1,7 @@
 use crate::config::AppConfig;
-use crate::export;
+use crate::export::{self, ExportExtraColumn, ExportPayload};
 use crate::image_util::{LoadedImage, load_image_from_bytes};
-use crate::interp::{XYPoint, linear_interpolate_sorted};
+use crate::interp::{InterpAlgorithm, XYPoint, interpolate_sorted};
 use crate::types::{AxisMapping, AxisUnit, AxisValue, ScaleKind, parse_axis_value};
 use egui::{
     Color32, Context, CornerRadius, Key, PointerButton, Pos2, RichText, Sense, StrokeKind,
@@ -19,6 +19,12 @@ enum PickMode {
     Y1,
     Y2,
     DataPoint,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExportKind {
+    Interpolated,
+    RawPoints,
 }
 
 const ZOOM_PRESETS: &[f32] = &[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0];
@@ -39,15 +45,11 @@ enum NativeDialog {
     Open(FileDialog),
     SaveCsv {
         dialog: FileDialog,
-        x_unit: AxisUnit,
-        y_unit: AxisUnit,
-        data: Vec<XYPoint>,
+        payload: ExportPayload,
     },
     SaveXlsx {
         dialog: FileDialog,
-        x_unit: AxisUnit,
-        y_unit: AxisUnit,
-        data: Vec<XYPoint>,
+        payload: ExportPayload,
     },
 }
 
@@ -64,8 +66,14 @@ struct AxisCalUi {
 impl AxisCalUi {
     fn mapping(&self) -> Option<AxisMapping> {
         let (p1, p2) = (self.p1?, self.p2?);
+        if !Self::points_are_distinct(p1, p2) {
+            return None;
+        }
         let v1 = parse_axis_value(&self.v1_text, self.unit)?;
         let v2 = parse_axis_value(&self.v2_text, self.unit)?;
+        if !Self::values_are_valid(self.scale, self.unit, &v1, &v2) {
+            return None;
+        }
         Some(AxisMapping {
             p1,
             p2,
@@ -74,6 +82,24 @@ impl AxisCalUi {
             scale: self.scale,
             unit: self.unit,
         })
+    }
+
+    fn points_are_distinct(p1: Pos2, p2: Pos2) -> bool {
+        (p2 - p1).length_sq() > f32::EPSILON
+    }
+
+    fn values_are_valid(scale: ScaleKind, unit: AxisUnit, v1: &AxisValue, v2: &AxisValue) -> bool {
+        match (unit, v1, v2) {
+            (AxisUnit::Float, AxisValue::Float(a), AxisValue::Float(b)) => {
+                let distinct = (*a - *b).abs() > f64::EPSILON;
+                let positive = scale != ScaleKind::Log10 || (*a > 0.0 && *b > 0.0);
+                distinct && positive
+            }
+            (AxisUnit::DateTime, AxisValue::DateTime(a), AxisValue::DateTime(b)) => {
+                scale == ScaleKind::Linear && a != b
+            }
+            _ => false,
+        }
     }
 }
 
@@ -110,6 +136,10 @@ pub struct CurcatApp {
     touch_pan_active: bool,
     touch_pan_last: Option<Pos2>,
     side_open: bool,
+    export_kind: ExportKind,
+    interp_algorithm: InterpAlgorithm,
+    raw_include_distances: bool,
+    raw_include_angles: bool,
 }
 
 impl Default for CurcatApp {
@@ -144,6 +174,10 @@ impl Default for CurcatApp {
             touch_pan_active: false,
             touch_pan_last: None,
             side_open: true,
+            export_kind: ExportKind::Interpolated,
+            interp_algorithm: InterpAlgorithm::Linear,
+            raw_include_distances: false,
+            raw_include_angles: false,
         }
     }
 }
@@ -156,46 +190,24 @@ impl CurcatApp {
     }
 
     fn start_export_csv(&mut self) {
-        let x_mapping = self.cal_x.mapping();
-        let y_mapping = self.cal_y.mapping();
-        if let (Some(xmap), Some(ymap)) = (x_mapping.as_ref(), y_mapping.as_ref()) {
-            let data = self.build_samples();
-            if data.is_empty() {
-                self.set_status("Nothing to export. Add data points first.");
-            } else {
+        match self.build_export_payload() {
+            Ok(payload) => {
                 let mut dialog = Self::make_save_dialog("Export CSV", "curve.csv", &["csv"]);
                 dialog.save_file();
-                self.active_dialog = Some(NativeDialog::SaveCsv {
-                    dialog,
-                    x_unit: xmap.unit,
-                    y_unit: ymap.unit,
-                    data,
-                });
+                self.active_dialog = Some(NativeDialog::SaveCsv { dialog, payload });
             }
-        } else {
-            self.set_status("Complete both axis calibrations before export.");
+            Err(msg) => self.set_status(msg),
         }
     }
 
     fn start_export_xlsx(&mut self) {
-        let x_mapping = self.cal_x.mapping();
-        let y_mapping = self.cal_y.mapping();
-        if let (Some(xmap), Some(ymap)) = (x_mapping.as_ref(), y_mapping.as_ref()) {
-            let data = self.build_samples();
-            if data.is_empty() {
-                self.set_status("Nothing to export. Add data points first.");
-            } else {
+        match self.build_export_payload() {
+            Ok(payload) => {
                 let mut dialog = Self::make_save_dialog("Export Excel", "curve.xlsx", &["xlsx"]);
                 dialog.save_file();
-                self.active_dialog = Some(NativeDialog::SaveXlsx {
-                    dialog,
-                    x_unit: xmap.unit,
-                    y_unit: ymap.unit,
-                    data,
-                });
+                self.active_dialog = Some(NativeDialog::SaveXlsx { dialog, payload });
             }
-        } else {
-            self.set_status("Complete both axis calibrations before export.");
+            Err(msg) => self.set_status(msg),
         }
     }
 
@@ -402,7 +414,8 @@ impl CurcatApp {
                 }
             }
 
-            ui.label("Zoom:").on_hover_text("Choose a preset zoom level");
+            ui.label("Zoom:")
+                .on_hover_text("Choose a preset zoom level");
             let zoom_ir = egui::ComboBox::from_id_salt("zoom_combo")
                 .selected_text(Self::format_zoom(self.image_zoom))
                 .show_ui(ui, |ui| {
@@ -421,7 +434,8 @@ impl CurcatApp {
             let toggle_response = toggle_switch(ui, &mut self.middle_pan_enabled)
                 .on_hover_text("Pan with middle mouse button");
             ui.add_space(4.0);
-            ui.label("MMB pan").on_hover_text("Enable/disable middle-button panning");
+            ui.label("MMB pan")
+                .on_hover_text("Enable/disable middle-button panning");
             if toggle_response.changed() && !self.middle_pan_enabled {
                 self.touch_pan_active = false;
                 self.touch_pan_last = None;
@@ -453,25 +467,7 @@ impl CurcatApp {
         self.axis_cal_group(ui, false);
 
         ui.separator();
-        ui.heading("Sampling");
-        ui.label("Samples:").on_hover_text("Number of samples for interpolation");
-        let sresp = ui.add(egui::Slider::new(&mut self.sample_count, 10..=5000).text("count"));
-        sresp.on_hover_text("Total points in the interpolated curve");
-
-        ui.separator();
-        ui.heading("Export");
-        let resp_csv = ui
-            .add(egui::Button::new("📄 Export CSV…").shortcut_text("Ctrl+Shift+C"))
-            .on_hover_text("Export curve to CSV (Ctrl+Shift+C)");
-        if resp_csv.clicked() {
-            self.start_export_csv();
-        }
-        let resp_xlsx = ui
-            .add(egui::Button::new("📊 Export Excel…").shortcut_text("Ctrl+Shift+E"))
-            .on_hover_text("Export curve to Excel (Ctrl+Shift+E)");
-        if resp_xlsx.clicked() {
-            self.start_export_xlsx();
-        }
+        self.ui_export_section(ui);
 
         if let Some(msg) = &self.last_status {
             ui.separator();
@@ -488,6 +484,77 @@ impl CurcatApp {
                 .small()
                 .color(Color32::from_gray(160)),
         );
+    }
+
+    fn ui_export_section(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Export points");
+        ui.horizontal(|ui| {
+            ui.radio_value(
+                &mut self.export_kind,
+                ExportKind::Interpolated,
+                "Interpolated curve",
+            )
+            .on_hover_text("Export evenly spaced samples of the curve");
+            ui.radio_value(
+                &mut self.export_kind,
+                ExportKind::RawPoints,
+                "Raw picked points",
+            )
+            .on_hover_text("Export only the points you clicked, in order");
+        });
+        ui.add_space(4.0);
+
+        match self.export_kind {
+            ExportKind::Interpolated => {
+                ui.label("Interpolation:")
+                    .on_hover_text("Choose how to interpolate between control points");
+                let combo = egui::ComboBox::from_id_salt("interp_algo_combo")
+                    .selected_text(self.interp_algorithm.label())
+                    .show_ui(ui, |ui| {
+                        for algo in InterpAlgorithm::ALL.iter().copied() {
+                            ui.selectable_value(&mut self.interp_algorithm, algo, algo.label());
+                        }
+                    });
+                combo
+                    .response
+                    .on_hover_text("Algorithm used to generate the interpolated samples");
+
+                ui.label("Samples:")
+                    .on_hover_text("Number of evenly spaced samples to export");
+                let sresp =
+                    ui.add(egui::Slider::new(&mut self.sample_count, 10..=5000).text("count"));
+                sresp.on_hover_text("Higher values give a denser interpolated curve (max 5000)");
+            }
+            ExportKind::RawPoints => {
+                ui.label("Extra columns:")
+                    .on_hover_text("Optional metrics for the picked points");
+                let dist = ui.checkbox(
+                    &mut self.raw_include_distances,
+                    "Include distance to previous point",
+                );
+                dist.on_hover_text(
+                    "Adds a column with distances between consecutive picked points",
+                );
+                let ang = ui.checkbox(&mut self.raw_include_angles, "Include angle (deg)");
+                ang.on_hover_text(
+                    "Adds a column with angles at each interior point (first/last stay empty)",
+                );
+            }
+        }
+
+        ui.separator();
+        let resp_csv = ui
+            .add(egui::Button::new("📄 Export CSV…").shortcut_text("Ctrl+Shift+C"))
+            .on_hover_text("Export data to CSV (Ctrl+Shift+C)");
+        if resp_csv.clicked() {
+            self.start_export_csv();
+        }
+        let resp_xlsx = ui
+            .add(egui::Button::new("📊 Export Excel…").shortcut_text("Ctrl+Shift+E"))
+            .on_hover_text("Export data to Excel (Ctrl+Shift+E)");
+        if resp_xlsx.clicked() {
+            self.start_export_xlsx();
+        }
     }
 
     fn axis_cal_group(&mut self, ui: &mut egui::Ui, is_x: bool) {
@@ -551,7 +618,8 @@ impl CurcatApp {
                         AxisUnit::DateTime => "Enter date/time (e.g., 2024-10-31 12:30)",
                     });
                     let btn = ui.button("📍 Pick P1");
-                    let btn = btn.on_hover_text("Click, then pick the corresponding point on the image");
+                    let btn =
+                        btn.on_hover_text("Click, then pick the corresponding point on the image");
                     if btn.clicked() {
                         self.pick_mode = p1_mode;
                     }
@@ -571,7 +639,8 @@ impl CurcatApp {
                         AxisUnit::DateTime => "Enter date/time (e.g., 2024-10-31 12:45)",
                     });
                     let btn = ui.button("📍 Pick P2");
-                    let btn = btn.on_hover_text("Click, then pick the corresponding point on the image");
+                    let btn =
+                        btn.on_hover_text("Click, then pick the corresponding point on the image");
                     if btn.clicked() {
                         self.pick_mode = p2_mode;
                     }
@@ -589,7 +658,11 @@ impl CurcatApp {
                 }
             });
         });
-        collapsing.header_response.on_hover_text(if is_x { "X axis calibration" } else { "Y axis calibration" });
+        collapsing.header_response.on_hover_text(if is_x {
+            "X axis calibration"
+        } else {
+            "Y axis calibration"
+        });
     }
 
     fn ui_central_image(&mut self, ctx: &Context, ui: &mut egui::Ui) {
@@ -945,23 +1018,123 @@ impl CurcatApp {
         }
     }
 
-    fn build_samples(&self) -> Vec<XYPoint> {
-        if self.points.len() < 2 {
-            return Vec::new();
-        }
-        // Collect numeric points
-        let mut nums: Vec<XYPoint> = Vec::with_capacity(self.points.len());
-        for p in &self.points {
-            if let (Some(x), Some(y)) = (p.x_numeric, p.y_numeric) {
-                nums.push(XYPoint { x, y });
-            }
-        }
+    fn collect_numeric_points_in_order(&self) -> Vec<XYPoint> {
+        self.points
+            .iter()
+            .filter_map(|p| match (p.x_numeric, p.y_numeric) {
+                (Some(x), Some(y)) => Some(XYPoint { x, y }),
+                _ => None,
+            })
+            .collect()
+    }
 
+    fn collect_numeric_points_sorted(&self) -> Vec<XYPoint> {
+        let mut pts = self.collect_numeric_points_in_order();
+        pts.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(Ordering::Equal));
+        pts
+    }
+
+    fn build_interpolated_samples(&self) -> Vec<XYPoint> {
+        let nums = self.collect_numeric_points_sorted();
         if nums.len() < 2 {
             return Vec::new();
         }
-        nums.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(Ordering::Equal));
-        linear_interpolate_sorted(&nums, self.sample_count)
+        interpolate_sorted(&nums, self.sample_count, self.interp_algorithm)
+    }
+
+    fn build_export_payload(&self) -> Result<ExportPayload, &'static str> {
+        let x_unit = match self.cal_x.mapping() {
+            Some(mapping) => mapping.unit,
+            None => return Err("Complete both axis calibrations before export."),
+        };
+        let y_unit = match self.cal_y.mapping() {
+            Some(mapping) => mapping.unit,
+            None => return Err("Complete both axis calibrations before export."),
+        };
+
+        match self.export_kind {
+            ExportKind::Interpolated => {
+                let data = self.build_interpolated_samples();
+                if data.is_empty() {
+                    Err("Nothing to export. Add data points first.")
+                } else {
+                    Ok(ExportPayload {
+                        points: data,
+                        x_unit,
+                        y_unit,
+                        extra_columns: Vec::new(),
+                    })
+                }
+            }
+            ExportKind::RawPoints => {
+                let data = self.collect_numeric_points_in_order();
+                if data.is_empty() {
+                    Err("Nothing to export. Add data points first.")
+                } else {
+                    let extras = self.build_raw_extra_columns(&data);
+                    Ok(ExportPayload {
+                        points: data,
+                        x_unit,
+                        y_unit,
+                        extra_columns: extras,
+                    })
+                }
+            }
+        }
+    }
+
+    fn build_raw_extra_columns(&self, raw_points: &[XYPoint]) -> Vec<ExportExtraColumn> {
+        let mut extras = Vec::new();
+        if self.raw_include_distances {
+            extras.push(ExportExtraColumn::new(
+                "distance",
+                self.sequential_distances(raw_points),
+            ));
+        }
+        if self.raw_include_angles {
+            extras.push(ExportExtraColumn::new(
+                "angle_deg",
+                self.turning_angles(raw_points),
+            ));
+        }
+        extras
+    }
+
+    fn sequential_distances(&self, raw_points: &[XYPoint]) -> Vec<Option<f64>> {
+        let len = raw_points.len();
+        let mut values = vec![None; len];
+        for i in 1..len {
+            let prev = &raw_points[i - 1];
+            let curr = &raw_points[i];
+            let dx = curr.x - prev.x;
+            let dy = curr.y - prev.y;
+            values[i] = Some((dx * dx + dy * dy).sqrt());
+        }
+        values
+    }
+
+    fn turning_angles(&self, raw_points: &[XYPoint]) -> Vec<Option<f64>> {
+        let len = raw_points.len();
+        let mut values = vec![None; len];
+        if len < 3 {
+            return values;
+        }
+        for i in 1..(len - 1) {
+            let prev = &raw_points[i - 1];
+            let curr = &raw_points[i];
+            let next = &raw_points[i + 1];
+            let v1 = (curr.x - prev.x, curr.y - prev.y);
+            let v2 = (next.x - curr.x, next.y - curr.y);
+            let mag1 = (v1.0 * v1.0 + v1.1 * v1.1).sqrt();
+            let mag2 = (v2.0 * v2.0 + v2.1 * v2.1).sqrt();
+            if mag1 <= f64::EPSILON || mag2 <= f64::EPSILON {
+                continue;
+            }
+            let dot = v1.0 * v2.0 + v1.1 * v2.1;
+            let cos_theta = (dot / (mag1 * mag2)).clamp(-1.0, 1.0);
+            values[i] = Some(cos_theta.acos().to_degrees());
+        }
+        values
     }
 }
 
@@ -1029,15 +1202,10 @@ impl eframe::App for CurcatApp {
                         }
                     }
                 }
-                NativeDialog::SaveCsv {
-                    dialog,
-                    x_unit,
-                    y_unit,
-                    data,
-                } => {
+                NativeDialog::SaveCsv { dialog, payload } => {
                     dialog.update(ctx);
                     if let Some(path) = dialog.take_picked() {
-                        match export::export_to_csv(&path, *x_unit, *y_unit, data) {
+                        match export::export_to_csv(&path, payload) {
                             Ok(()) => self.set_status("CSV exported."),
                             Err(e) => self.set_status(format!("CSV export failed: {e}")),
                         }
@@ -1053,15 +1221,10 @@ impl eframe::App for CurcatApp {
                         }
                     }
                 }
-                NativeDialog::SaveXlsx {
-                    dialog,
-                    x_unit,
-                    y_unit,
-                    data,
-                } => {
+                NativeDialog::SaveXlsx { dialog, payload } => {
                     dialog.update(ctx);
                     if let Some(path) = dialog.take_picked() {
-                        match export::export_to_xlsx(&path, *x_unit, *y_unit, data) {
+                        match export::export_to_xlsx(&path, payload) {
                             Ok(()) => self.set_status("Excel exported."),
                             Err(e) => self.set_status(format!("Excel export failed: {e}")),
                         }

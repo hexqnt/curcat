@@ -73,7 +73,7 @@ pub fn load_image_from_bytes(
     let img = reader.decode()?;
 
     let (w, h) = img.dimensions();
-    let total_pixels = (w as u64) * (h as u64);
+    let total_pixels = u64::from(w) * u64::from(h);
     if total_pixels > il.total_pixels {
         anyhow::bail!(
             "Image too large: {}x{} (~{} MP) exceeds limit (~{} MP)",
