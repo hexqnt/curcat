@@ -32,6 +32,7 @@ const MIN_ZOOM: f32 = 0.25;
 const MAX_ZOOM: f32 = 8.0;
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const POINT_HIT_RADIUS: f32 = 12.0;
+const CAL_POINT_DRAW_RADIUS: f32 = 4.0;
 
 fn format_overlay_value(value: &AxisValue) -> String {
     match value {
@@ -131,7 +132,7 @@ pub struct CurcatApp {
     active_dialog: Option<NativeDialog>,
     config: AppConfig,
     image_zoom: f32,
-    dragging_point: Option<usize>,
+    dragging_handle: Option<DragTarget>,
     middle_pan_enabled: bool,
     touch_pan_active: bool,
     touch_pan_last: Option<Pos2>,
@@ -169,7 +170,7 @@ impl Default for CurcatApp {
             active_dialog: None,
             config: AppConfig::load(),
             image_zoom: 1.0,
-            dragging_point: None,
+            dragging_handle: None,
             middle_pan_enabled: true,
             touch_pan_active: false,
             touch_pan_last: None,
@@ -240,12 +241,13 @@ impl CurcatApp {
         self.cal_y.v1_text.clear();
         self.cal_y.v2_text.clear();
         self.pick_mode = PickMode::None;
+        self.dragging_handle = None;
     }
 
     fn reset_after_image_transform(&mut self) {
         self.reset_calibrations();
         self.points.clear();
-        self.dragging_point = None;
+        self.dragging_handle = None;
         self.touch_pan_active = false;
         self.touch_pan_last = None;
     }
@@ -521,8 +523,9 @@ impl CurcatApp {
 
                 ui.label("Samples:")
                     .on_hover_text("Number of evenly spaced samples to export");
+                ui.spacing_mut().slider_width = 150.0;
                 let sresp =
-                    ui.add(egui::Slider::new(&mut self.sample_count, 10..=5000).text("count"));
+                    ui.add(egui::Slider::new(&mut self.sample_count, 10..=10000).text("count"));
                 sresp.on_hover_text("Higher values give a denser interpolated curve (max 5000)");
             }
             ExportKind::RawPoints => {
@@ -778,32 +781,68 @@ impl CurcatApp {
                 });
 
                 if shift_pressed
-                    && !self.points.is_empty()
                     && response.drag_started_by(PointerButton::Primary)
                     && let Some(pos) = pointer_pos
                 {
-                    let mut best: Option<(usize, f32)> = None;
-                    for (idx, point) in self.points.iter().enumerate() {
-                        let screen = rect.min + point.pixel.to_vec2() * self.image_zoom;
+                    let mut best: Option<(DragTarget, f32)> = None;
+                    let mut consider = |target: DragTarget, screen: Pos2| {
                         let dist = pos.distance(screen);
                         if dist <= POINT_HIT_RADIUS
                             && best.as_ref().is_none_or(|(_, best_dist)| dist < *best_dist)
                         {
-                            best = Some((idx, dist));
+                            best = Some((target, dist));
+                        }
+                    };
+
+                    for (idx, point) in self.points.iter().enumerate() {
+                        let screen = rect.min + point.pixel.to_vec2() * self.image_zoom;
+                        consider(DragTarget::CurvePoint(idx), screen);
+                    }
+
+                    for (target, maybe_pixel) in [
+                        (DragTarget::CalX1, self.cal_x.p1),
+                        (DragTarget::CalX2, self.cal_x.p2),
+                        (DragTarget::CalY1, self.cal_y.p1),
+                        (DragTarget::CalY2, self.cal_y.p2),
+                    ] {
+                        if let Some(pixel) = maybe_pixel {
+                            let screen = rect.min + pixel.to_vec2() * self.image_zoom;
+                            consider(target, screen);
                         }
                     }
-                    self.dragging_point = best.map(|(idx, _)| idx);
+
+                    self.dragging_handle = best.map(|(target, _)| target);
                 }
 
-                if let Some(idx) = self.dragging_point {
+                if let Some(target) = self.dragging_handle {
                     if let Some(pos) = pointer_pos {
                         let pixel = to_pixel(pos);
-                        if let Some(point) = self.points.get_mut(idx) {
-                            point.pixel = pixel;
+                        match target {
+                            DragTarget::CurvePoint(idx) => {
+                                if let Some(point) = self.points.get_mut(idx) {
+                                    point.pixel = pixel;
+                                }
+                            }
+                            DragTarget::CalX1 => {
+                                self.cal_x.p1 = Some(pixel);
+                                x_mapping = self.cal_x.mapping();
+                            }
+                            DragTarget::CalX2 => {
+                                self.cal_x.p2 = Some(pixel);
+                                x_mapping = self.cal_x.mapping();
+                            }
+                            DragTarget::CalY1 => {
+                                self.cal_y.p1 = Some(pixel);
+                                y_mapping = self.cal_y.mapping();
+                            }
+                            DragTarget::CalY2 => {
+                                self.cal_y.p2 = Some(pixel);
+                                y_mapping = self.cal_y.mapping();
+                            }
                         }
                     }
                     if !shift_pressed || !primary_down {
-                        self.dragging_point = None;
+                        self.dragging_handle = None;
                     }
                 } else if response.clicked_by(PointerButton::Primary)
                     && !shift_pressed
@@ -871,6 +910,11 @@ impl CurcatApp {
                     width: 1.0,
                     color: Color32::LIGHT_BLUE,
                 };
+                let cal_point_color = stroke_cal.color;
+                let draw_cal_point = |point: Pos2| {
+                    let screen = rect.min + point.to_vec2() * self.image_zoom;
+                    painter.circle_filled(screen, CAL_POINT_DRAW_RADIUS, cal_point_color);
+                };
                 if let Some(p1) = self.cal_x.p1
                     && let Some(p2) = self.cal_x.p2
                 {
@@ -881,6 +925,18 @@ impl CurcatApp {
                         ],
                         stroke_cal,
                     );
+                }
+                if let Some(p) = self.cal_x.p1 {
+                    draw_cal_point(p);
+                }
+                if let Some(p) = self.cal_x.p2 {
+                    draw_cal_point(p);
+                }
+                if let Some(p) = self.cal_y.p1 {
+                    draw_cal_point(p);
+                }
+                if let Some(p) = self.cal_y.p2 {
+                    draw_cal_point(p);
                 }
                 if let Some(p1) = self.cal_y.p1
                     && let Some(p2) = self.cal_y.p2
@@ -1282,4 +1338,12 @@ fn toggle_switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
     }
 
     response
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DragTarget {
+    CurvePoint(usize),
+    CalX1,
+    CalX2,
+    CalY1,
+    CalY2,
 }
