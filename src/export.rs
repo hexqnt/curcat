@@ -64,14 +64,15 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
     worksheet.write_string(0, 0, "x")?;
     worksheet.write_string(0, 1, "y")?;
     for (idx, col) in payload.extra_columns.iter().enumerate() {
-        worksheet.write_string(0, (idx + 2) as u16, &col.header)?;
+        let col_idx = u16::try_from(idx + 2).expect("column index overflow");
+        worksheet.write_string(0, col_idx, &col.header)?;
     }
 
     let num_format = Format::new().set_num_format("0.0000");
     let blank_format = Format::new();
 
     for (i, p) in payload.points.iter().enumerate() {
-        let row = (i + 1) as u32;
+        let row = u32::try_from(i + 1).expect("row index overflow");
         match payload.x_unit {
             AxisUnit::Float => {
                 worksheet.write_number_with_format(row, 0, p.x, &num_format)?;
@@ -93,7 +94,7 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
         }
 
         for (col_idx, col) in payload.extra_columns.iter().enumerate() {
-            let col_num = (col_idx + 2) as u16;
+            let col_num = u16::try_from(col_idx + 2).expect("column index overflow");
             debug_assert_eq!(col.values.len(), payload.row_count());
             match col.values.get(i).and_then(|v| *v) {
                 Some(value) => {

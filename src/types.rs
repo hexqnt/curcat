@@ -28,7 +28,8 @@ impl AxisValue {
             AxisValue::Float(v) => *v,
             AxisValue::DateTime(dt) => {
                 let utc = dt.and_utc();
-                utc.timestamp() as f64 + f64::from(utc.timestamp_subsec_nanos()) / NANOS_PER_SEC
+                int_to_f64(utc.timestamp())
+                    + f64::from(utc.timestamp_subsec_nanos()) / NANOS_PER_SEC
             }
         }
     }
@@ -38,8 +39,8 @@ impl AxisValue {
             AxisUnit::Float => AxisValue::Float(s),
             AxisUnit::DateTime => {
                 let secs_floor = s.floor();
-                let mut secs = secs_floor as i64;
-                let mut nanos = ((s - secs_floor) * NANOS_PER_SEC).round() as i64;
+                let mut secs = float_to_i64(secs_floor);
+                let mut nanos = float_to_i64(((s - secs_floor) * NANOS_PER_SEC).round());
                 if nanos >= NANOS_I64 {
                     nanos -= NANOS_I64;
                     secs = secs.saturating_add(1);
@@ -47,7 +48,7 @@ impl AxisValue {
                     nanos += NANOS_I64;
                     secs = secs.saturating_sub(1);
                 }
-                let nanos = nanos.clamp(0, NANOS_I64 - 1) as u32;
+                let nanos = non_negative_i64_to_u32(nanos.clamp(0, NANOS_I64 - 1));
                 let base = DateTime::<Utc>::from_timestamp(secs, nanos).map_or_else(
                     || DateTime::<Utc>::UNIX_EPOCH.naive_utc(),
                     |dt| dt.naive_utc(),
@@ -62,6 +63,27 @@ impl AxisValue {
             AxisValue::Float(v) => format!("{v}"),
             AxisValue::DateTime(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
         }
+    }
+}
+
+fn int_to_f64(value: i64) -> f64 {
+    #[allow(clippy::cast_precision_loss)]
+    {
+        value as f64
+    }
+}
+
+fn float_to_i64(value: f64) -> i64 {
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        value as i64
+    }
+}
+
+fn non_negative_i64_to_u32(value: i64) -> u32 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        value as u32
     }
 }
 

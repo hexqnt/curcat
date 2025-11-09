@@ -14,7 +14,7 @@ pub enum InterpAlgorithm {
 impl InterpAlgorithm {
     pub const ALL: [Self; 3] = [Self::Linear, Self::StepHold, Self::NaturalCubic];
 
-    pub fn label(&self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             InterpAlgorithm::Linear => "Linear",
             InterpAlgorithm::StepHold => "Step (previous)",
@@ -54,12 +54,17 @@ fn build_sample_positions(points: &[XYPoint], samples: usize) -> Vec<f64> {
         xs.resize(samples, x_min);
         return xs;
     }
-    let step = (x_max - x_min) / (samples.saturating_sub(1) as f64);
+    let denom = samples.saturating_sub(1);
+    let step = if denom == 0 {
+        0.0
+    } else {
+        (x_max - x_min) / usize_to_f64(denom)
+    };
     for i in 0..samples {
         if i + 1 == samples {
             xs.push(x_max);
         } else {
-            xs.push(x_min + step * (i as f64));
+            xs.push(x_min + step * usize_to_f64(i));
         }
     }
     xs
@@ -158,61 +163,69 @@ fn build_natural_cubic_segments(points: &[XYPoint]) -> Option<Vec<CubicSegment>>
     if points.len() < 2 {
         return None;
     }
-    let n = points.len();
-    let mut h = vec![0.0; n - 1];
-    for i in 0..(n - 1) {
+    let point_count = points.len();
+    let mut interval_widths = vec![0.0; point_count - 1];
+    for i in 0..(point_count - 1) {
         let delta = points[i + 1].x - points[i].x;
         if delta.abs() <= f64::EPSILON {
             return None;
         }
-        h[i] = delta;
+        interval_widths[i] = delta;
     }
 
-    let mut alpha = vec![0.0; n];
-    for i in 1..(n - 1) {
-        alpha[i] = (3.0 / h[i]) * (points[i + 1].y - points[i].y)
-            - (3.0 / h[i - 1]) * (points[i].y - points[i - 1].y);
+    let mut slope_diffs = vec![0.0; point_count];
+    for i in 1..(point_count - 1) {
+        slope_diffs[i] = (3.0 / interval_widths[i]) * (points[i + 1].y - points[i].y)
+            - (3.0 / interval_widths[i - 1]) * (points[i].y - points[i - 1].y);
     }
 
-    let mut l = vec![0.0; n];
-    let mut mu = vec![0.0; n];
-    let mut z = vec![0.0; n];
+    let mut tri_diagonal = vec![0.0; point_count];
+    let mut upper_ratio = vec![0.0; point_count];
+    let mut rhs = vec![0.0; point_count];
 
-    l[0] = 1.0;
-    mu[0] = 0.0;
-    z[0] = 0.0;
+    tri_diagonal[0] = 1.0;
+    rhs[0] = 0.0;
 
-    for i in 1..(n - 1) {
-        l[i] = 2.0 * (points[i + 1].x - points[i - 1].x) - h[i - 1] * mu[i - 1];
-        if l[i].abs() <= f64::EPSILON {
+    for i in 1..(point_count - 1) {
+        tri_diagonal[i] =
+            2.0 * (points[i + 1].x - points[i - 1].x) - interval_widths[i - 1] * upper_ratio[i - 1];
+        if tri_diagonal[i].abs() <= f64::EPSILON {
             return None;
         }
-        mu[i] = h[i] / l[i];
-        z[i] = (alpha[i] - h[i - 1] * z[i - 1]) / l[i];
+        upper_ratio[i] = interval_widths[i] / tri_diagonal[i];
+        rhs[i] = (slope_diffs[i] - interval_widths[i - 1] * rhs[i - 1]) / tri_diagonal[i];
     }
 
-    l[n - 1] = 1.0;
-    z[n - 1] = 0.0;
+    tri_diagonal[point_count - 1] = 1.0;
+    rhs[point_count - 1] = 0.0;
 
-    let mut c = vec![0.0; n];
-    let mut b = vec![0.0; n - 1];
-    let mut d = vec![0.0; n - 1];
+    let mut coeff_c = vec![0.0; point_count];
+    let mut coeff_b = vec![0.0; point_count - 1];
+    let mut coeff_d = vec![0.0; point_count - 1];
 
-    for j in (0..=(n - 2)).rev() {
-        c[j] = z[j] - mu[j] * c[j + 1];
-        b[j] = (points[j + 1].y - points[j].y) / h[j] - h[j] * (c[j + 1] + 2.0 * c[j]) / 3.0;
-        d[j] = (c[j + 1] - c[j]) / (3.0 * h[j]);
+    for j in (0..=(point_count - 2)).rev() {
+        coeff_c[j] = rhs[j] - upper_ratio[j] * coeff_c[j + 1];
+        coeff_b[j] = (points[j + 1].y - points[j].y) / interval_widths[j]
+            - interval_widths[j] * (coeff_c[j + 1] + 2.0 * coeff_c[j]) / 3.0;
+        coeff_d[j] = (coeff_c[j + 1] - coeff_c[j]) / (3.0 * interval_widths[j]);
     }
 
-    let mut segments = Vec::with_capacity(n - 1);
-    for i in 0..(n - 1) {
+    let mut segments = Vec::with_capacity(point_count - 1);
+    for i in 0..(point_count - 1) {
         segments.push(CubicSegment {
             x: points[i].x,
             a: points[i].y,
-            b: b[i],
-            c: c[i],
-            d: d[i],
+            b: coeff_b[i],
+            c: coeff_c[i],
+            d: coeff_d[i],
         });
     }
     Some(segments)
+}
+
+fn usize_to_f64(value: usize) -> f64 {
+    #[allow(clippy::cast_precision_loss)]
+    {
+        value as f64
+    }
 }

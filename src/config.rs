@@ -7,6 +7,13 @@ use serde::Deserialize;
 
 const CONFIG_FILE_NAME: &str = "curcat.toml";
 
+fn alpha_to_u8(alpha: f32) -> u8 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        (alpha.clamp(0.0, 1.0) * 255.0).round() as u8
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct StrokeStyle {
@@ -27,8 +34,12 @@ impl Default for StrokeStyle {
 
 impl StrokeStyle {
     pub fn color32(&self) -> Color32 {
-        let a = (self.alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
-        Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], a)
+        Color32::from_rgba_unmultiplied(
+            self.color[0],
+            self.color[1],
+            self.color[2],
+            alpha_to_u8(self.alpha),
+        )
     }
 
     pub fn stroke(&self) -> Stroke {
@@ -59,8 +70,12 @@ impl Default for PointStyle {
 
 impl PointStyle {
     pub fn color32(&self) -> Color32 {
-        let a = (self.alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
-        Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], a)
+        Color32::from_rgba_unmultiplied(
+            self.color[0],
+            self.color[1],
+            self.color[2],
+            alpha_to_u8(self.alpha),
+        )
     }
 
     pub fn radius(&self) -> f32 {
@@ -86,8 +101,12 @@ impl Default for CrosshairStyle {
 
 impl CrosshairStyle {
     pub fn color32(&self) -> Color32 {
-        let a = (self.alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
-        Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], a)
+        Color32::from_rgba_unmultiplied(
+            self.color[0],
+            self.color[1],
+            self.color[2],
+            alpha_to_u8(self.alpha),
+        )
     }
 }
 

@@ -18,7 +18,6 @@ enum PickMode {
     X2,
     Y1,
     Y2,
-    DataPoint,
     CurveColor,
 }
 
@@ -143,8 +142,8 @@ impl SnapMapLevel {
         if self.gradient.is_empty() {
             return 0.0;
         }
-        let xi = x.clamp(0, self.size[0] as i32 - 1) as usize;
-        let yi = y.clamp(0, self.size[1] as i32 - 1) as usize;
+        let xi = clamp_index(x, self.size[0]);
+        let yi = clamp_index(y, self.size[1]);
         self.gradient[yi * self.size[0] + xi]
     }
 
@@ -152,8 +151,8 @@ impl SnapMapLevel {
         if self.color_similarity.is_empty() {
             return 0.0;
         }
-        let xi = x.clamp(0, self.size[0] as i32 - 1) as usize;
-        let yi = y.clamp(0, self.size[1] as i32 - 1) as usize;
+        let xi = clamp_index(x, self.size[0]);
+        let yi = clamp_index(y, self.size[1]);
         self.color_similarity[yi * self.size[0] + xi]
     }
 }
@@ -187,7 +186,7 @@ impl SnapMapCache {
         assert!(!self.levels.is_empty(), "SnapMapCache without levels");
         let mut chosen = 0;
         for (idx, level) in self.levels.iter().enumerate() {
-            let level_scale = level.scale as f32;
+            let level_scale = u32_to_f32(level.scale);
             if radius / level_scale <= 12.0 || idx == self.levels.len() - 1 {
                 chosen = idx;
                 break;
@@ -202,6 +201,73 @@ struct SnapCandidate {
     pos: Pos2,
     score: f32,
     dist: f32,
+}
+
+fn safe_usize_to_f32(value: usize) -> f32 {
+    let clamped = value.min(u32::MAX as usize);
+    let as_u32 = u32::try_from(clamped).unwrap_or(u32::MAX);
+    #[allow(clippy::cast_precision_loss)]
+    {
+        as_u32 as f32
+    }
+}
+
+fn u32_to_f32(value: u32) -> f32 {
+    #[allow(clippy::cast_precision_loss)]
+    {
+        value as f32
+    }
+}
+
+fn i32_to_f32(value: i32) -> f32 {
+    #[allow(clippy::cast_precision_loss)]
+    {
+        value as f32
+    }
+}
+
+fn clamp_index(value: i32, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let last = len - 1;
+    let Ok(last_i32) = i32::try_from(last) else {
+        return last;
+    };
+    let clamped = value.clamp(0, last_i32);
+    usize::try_from(clamped).unwrap_or(last)
+}
+
+fn clamp_pixel_coord(coord: f32, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let max = safe_usize_to_f32(len - 1);
+    let rounded = coord.round().clamp(0.0, max);
+    let rounded_i32 = saturating_f32_to_i32(rounded);
+    clamp_index(rounded_i32, len)
+}
+
+fn saturating_f32_to_i32(value: f32) -> i32 {
+    #[allow(clippy::cast_precision_loss)]
+    const MAX: f32 = i32::MAX as f32;
+    #[allow(clippy::cast_precision_loss)]
+    const MIN: f32 = i32::MIN as f32;
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        if value.is_nan() {
+            0
+        } else {
+            value.clamp(MIN, MAX).round() as i32
+        }
+    }
+}
+
+fn rounded_u8(value: f32) -> u8 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        value.round().clamp(0.0, f32::from(u8::MAX)) as u8
+    }
 }
 
 fn color_luminance(color: Color32) -> f32 {
@@ -326,6 +392,7 @@ impl PickedPoint {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct CurcatApp {
     image: Option<LoadedImage>,
     last_status: Option<String>,
@@ -490,7 +557,7 @@ impl CurcatApp {
         }
         let radius = self.contrast_search_radius.max(1.0);
         let (_, level) = cache.level_for_radius(radius);
-        let scale = level.scale as f32;
+        let scale = u32_to_f32(level.scale);
         let coarse_center = pos2(pixel_hint.x / scale, pixel_hint.y / scale);
         let coarse_radius = (radius / scale).max(1.0);
         let coarse_candidate = self.search_in_level(level, coarse_center, coarse_radius)?;
@@ -515,15 +582,15 @@ impl CurcatApp {
         if radius <= 0.0 || level.size[0] < 3 || level.size[1] < 3 {
             return None;
         }
-        let width = level.size[0] as i32;
-        let height = level.size[1] as i32;
+        let width = i32::try_from(level.size[0]).ok()?;
+        let height = i32::try_from(level.size[1]).ok()?;
         let radius = radius.max(1.0);
         let radius_sq = radius * radius;
-        let reach = radius.ceil() as i32;
-        let center_x = center.x.clamp(1.0, (width - 2) as f32);
-        let center_y = center.y.clamp(1.0, (height - 2) as f32);
-        let cx = center_x.round() as i32;
-        let cy = center_y.round() as i32;
+        let reach = saturating_f32_to_i32(radius.ceil());
+        let center_x = center.x.clamp(1.0, i32_to_f32(width - 2));
+        let center_y = center.y.clamp(1.0, i32_to_f32(height - 2));
+        let cx = saturating_f32_to_i32(center_x.round());
+        let cy = saturating_f32_to_i32(center_y.round());
         let min_x = (cx - reach).max(1);
         let max_x = (cx + reach).min(width - 2);
         let min_y = (cy - reach).max(1);
@@ -532,8 +599,8 @@ impl CurcatApp {
 
         for y in min_y..=max_y {
             for x in min_x..=max_x {
-                let xf = x as f32;
-                let yf = y as f32;
+                let xf = i32_to_f32(x);
+                let yf = i32_to_f32(y);
                 let dx = xf - center_x;
                 let dy = yf - center_y;
                 let dist_sq = dx * dx + dy * dy;
@@ -574,21 +641,23 @@ impl CurcatApp {
     }
 
     fn refine_snap_position(&self, approx: Pos2) -> Pos2 {
-        let cache = match &self.snap_maps {
-            Some(cache) => cache,
-            None => return approx,
+        let Some(cache) = &self.snap_maps else {
+            return approx;
         };
-        let level = match cache.levels.first() {
-            Some(level) => level,
-            None => return approx,
+        let Some(level) = cache.levels.first() else {
+            return approx;
         };
         if level.size[0] < 3 || level.size[1] < 3 {
             return approx;
         }
-        let width = level.size[0] as i32;
-        let height = level.size[1] as i32;
-        let ax = approx.x.clamp(1.0, (width - 2) as f32).round() as i32;
-        let ay = approx.y.clamp(1.0, (height - 2) as f32).round() as i32;
+        let Ok(width) = i32::try_from(level.size[0]) else {
+            return approx;
+        };
+        let Ok(height) = i32::try_from(level.size[1]) else {
+            return approx;
+        };
+        let ax = saturating_f32_to_i32(approx.x.clamp(1.0, i32_to_f32(width - 2)).round());
+        let ay = saturating_f32_to_i32(approx.y.clamp(1.0, i32_to_f32(height - 2)).round());
 
         let mut sum = 0.0;
         let mut sx = 0.0;
@@ -603,14 +672,14 @@ impl CurcatApp {
                     continue;
                 }
                 sum += strength;
-                sx += strength * px as f32;
-                sy += strength * py as f32;
+                sx += strength * i32_to_f32(px);
+                sy += strength * i32_to_f32(py);
             }
         }
         if sum > 0.0 {
             pos2(
-                (sx / sum).clamp(0.0, (width - 1) as f32),
-                (sy / sum).clamp(0.0, (height - 1) as f32),
+                (sx / sum).clamp(0.0, i32_to_f32(width - 1)),
+                (sy / sum).clamp(0.0, i32_to_f32(height - 1)),
             )
         } else {
             approx
@@ -640,8 +709,8 @@ impl CurcatApp {
         if w == 0 || h == 0 {
             return None;
         }
-        let x = pixel.x.round().clamp(0.0, (w - 1) as f32) as usize;
-        let y = pixel.y.round().clamp(0.0, (h - 1) as f32) as usize;
+        let x = clamp_pixel_coord(pixel.x, w);
+        let y = clamp_pixel_coord(pixel.y, h);
         let idx = y * w + x;
         image.pixels.pixels.get(idx).copied()
     }
@@ -901,6 +970,7 @@ impl CurcatApp {
         });
     }
 
+    #[allow(clippy::too_many_lines)]
     fn ui_point_input_section(&mut self, ui: &mut egui::Ui) {
         ui.heading("Point input");
         ui.horizontal(|ui| {
@@ -1225,6 +1295,7 @@ impl CurcatApp {
         });
     }
 
+    #[allow(clippy::too_many_lines)]
     fn ui_central_image(&mut self, ctx: &Context, ui: &mut egui::Ui) {
         // Handle drag & drop regardless of whether an image is already loaded
         let (hovered_files, dropped_files) =
@@ -1294,7 +1365,10 @@ impl CurcatApp {
                 (img.texture.id(), img.size)
             };
             egui::ScrollArea::both().show(ui, |ui| {
-                let base_size = egui::vec2(img_size[0] as f32, img_size[1] as f32);
+                let base_size = egui::vec2(
+                    safe_usize_to_f32(img_size[0]),
+                    safe_usize_to_f32(img_size[1]),
+                );
                 let display_size = base_size * self.image_zoom;
                 let image = egui::Image::new((tex_id, display_size));
                 let response = ui.add(image.sense(Sense::click_and_drag()));
@@ -1311,10 +1385,10 @@ impl CurcatApp {
                         ctrl = i.modifiers.ctrl;
                     });
                     if ctrl && scroll.abs() > f32::EPSILON {
-                        let steps = (scroll / 40.0).round() as i32;
-                        if steps != 0 {
-                            let base: f32 = if steps > 0 { 1.1 } else { 0.9 };
-                            let factor = base.powi(steps.abs());
+                        let steps = (scroll / 40.0).round();
+                        if steps.abs() > f32::EPSILON {
+                            let base: f32 = if steps > 0.0 { 1.1 } else { 0.9 };
+                            let factor = base.powf(steps.abs());
                             self.set_zoom(self.image_zoom * factor);
                         }
                     }
@@ -1459,9 +1533,6 @@ impl CurcatApp {
                                 self.cal_y.p2 = Some(snapped);
                                 self.pick_mode = PickMode::None;
                                 y_mapping = self.cal_y.mapping();
-                            }
-                            PickMode::DataPoint => {
-                                self.push_curve_point(pixel);
                             }
                             PickMode::CurveColor => {
                                 self.pick_curve_color_at(pixel);
@@ -1739,19 +1810,19 @@ impl CurcatApp {
         if self.raw_include_distances {
             extras.push(ExportExtraColumn::new(
                 "distance",
-                self.sequential_distances(raw_points),
+                Self::sequential_distances(raw_points),
             ));
         }
         if self.raw_include_angles {
             extras.push(ExportExtraColumn::new(
                 "angle_deg",
-                self.turning_angles(raw_points),
+                Self::turning_angles(raw_points),
             ));
         }
         extras
     }
 
-    fn sequential_distances(&self, raw_points: &[XYPoint]) -> Vec<Option<f64>> {
+    fn sequential_distances(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
         let len = raw_points.len();
         let mut values = vec![None; len];
         for i in 1..len {
@@ -1764,7 +1835,7 @@ impl CurcatApp {
         values
     }
 
-    fn turning_angles(&self, raw_points: &[XYPoint]) -> Vec<Option<f64>> {
+    fn turning_angles(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
         let len = raw_points.len();
         let mut values = vec![None; len];
         if len < 3 {
@@ -1916,7 +1987,7 @@ fn toggle_switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
         let radius = rect.height() / 2.0;
         ui.painter().rect(
             rect,
-            CornerRadius::same(radius.round() as u8),
+            CornerRadius::same(rounded_u8(radius)),
             visuals.bg_fill,
             visuals.bg_stroke,
             StrokeKind::Middle,
