@@ -1,9 +1,11 @@
 use crate::config::AppConfig;
+use anyhow::Context as _;
 use egui::{Color32, ColorImage, Context, TextureHandle, TextureOptions};
 use image::GenericImageView;
 use image::ImageReader;
 use image::Limits;
-use std::io::Cursor;
+use std::io::{BufRead, Cursor, Read, Seek};
+use std::path::Path;
 
 pub struct LoadedImage {
     pub size: [usize; 2],
@@ -57,20 +59,21 @@ impl LoadedImage {
     }
 }
 
-pub fn load_image_from_bytes(
+fn decode_reader<R>(
     ctx: &Context,
     cfg: &AppConfig,
-    bytes: &[u8],
-) -> anyhow::Result<LoadedImage> {
+    mut reader: ImageReader<R>,
+) -> anyhow::Result<LoadedImage>
+where
+    R: Read + Seek + BufRead,
+{
     let il = cfg.effective_image_limits();
     let mut limits = Limits::default();
     limits.max_image_width = Some(il.image_dim);
     limits.max_image_height = Some(il.image_dim);
     limits.max_alloc = Some(il.alloc_bytes);
-
-    let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
     reader.limits(limits);
-    let img = reader.decode()?;
+    let img = reader.decode().context("Failed to decode image data")?;
 
     let (w, h) = img.dimensions();
     let total_pixels = u64::from(w) * u64::from(h);
@@ -92,4 +95,28 @@ pub fn load_image_from_bytes(
         texture,
         pixels: color,
     })
+}
+
+pub fn load_image_from_bytes(
+    ctx: &Context,
+    cfg: &AppConfig,
+    bytes: &[u8],
+) -> anyhow::Result<LoadedImage> {
+    let cursor = Cursor::new(bytes);
+    let reader = ImageReader::new(cursor)
+        .with_guessed_format()
+        .context("Failed to detect image format")?;
+    decode_reader(ctx, cfg, reader)
+}
+
+pub fn load_image_from_path(
+    ctx: &Context,
+    cfg: &AppConfig,
+    path: &Path,
+) -> anyhow::Result<LoadedImage> {
+    let reader = ImageReader::open(path)
+        .with_context(|| format!("Failed to read {}", path.display()))?
+        .with_guessed_format()
+        .context("Failed to detect image format")?;
+    decode_reader(ctx, cfg, reader)
 }

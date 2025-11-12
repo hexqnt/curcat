@@ -1,6 +1,6 @@
 use crate::config::AppConfig;
 use crate::export::{self, ExportExtraColumn, ExportPayload};
-use crate::image_util::{LoadedImage, load_image_from_bytes};
+use crate::image_util::{LoadedImage, load_image_from_bytes, load_image_from_path};
 use crate::interp::{InterpAlgorithm, XYPoint, interpolate_sorted};
 use crate::types::{AxisMapping, AxisUnit, AxisValue, ScaleKind, parse_axis_value};
 use egui::{
@@ -31,7 +31,7 @@ enum SnapFeatureSource {
 impl SnapFeatureSource {
     const ALL: [Self; 3] = [Self::LumaGradient, Self::ColorMatch, Self::Hybrid];
 
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::LumaGradient => "Luma gradient",
             Self::ColorMatch => "Color mask",
@@ -47,7 +47,7 @@ enum SnapThresholdKind {
 }
 
 impl SnapThresholdKind {
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Gradient => "Gradient only",
             Self::Score => "Feature score",
@@ -80,7 +80,7 @@ impl SnapMapLevel {
                     let idx = y * width + x;
                     let gx = luminance[idx + 1] - luminance[idx - 1];
                     let gy = luminance[idx + width] - luminance[idx - width];
-                    gradient[idx] = (gx * gx + gy * gy).sqrt().min(255.0);
+                    gradient[idx] = gx.hypot(gy).min(255.0);
                 }
             }
         }
@@ -212,14 +212,14 @@ fn safe_usize_to_f32(value: usize) -> f32 {
     }
 }
 
-fn u32_to_f32(value: u32) -> f32 {
+const fn u32_to_f32(value: u32) -> f32 {
     #[allow(clippy::cast_precision_loss)]
     {
         value as f32
     }
 }
 
-fn i32_to_f32(value: i32) -> f32 {
+const fn i32_to_f32(value: i32) -> f32 {
     #[allow(clippy::cast_precision_loss)]
     {
         value as f32
@@ -248,7 +248,7 @@ fn clamp_pixel_coord(coord: f32, len: usize) -> usize {
     clamp_index(rounded_i32, len)
 }
 
-fn saturating_f32_to_i32(value: f32) -> i32 {
+const fn saturating_f32_to_i32(value: f32) -> i32 {
     #[allow(clippy::cast_precision_loss)]
     const MAX: f32 = i32::MAX as f32;
     #[allow(clippy::cast_precision_loss)]
@@ -624,13 +624,10 @@ impl CurcatApp {
                     score,
                     dist,
                 };
-                let update = match &best {
-                    Some(existing) => {
-                        score > existing.score + 0.1
-                            || ((score - existing.score).abs() <= 0.1 && dist < existing.dist)
-                    }
-                    None => true,
-                };
+                let update = best.as_ref().is_none_or(|existing| {
+                    score > existing.score + 0.1
+                        || ((score - existing.score).abs() <= 0.1 && dist < existing.dist)
+                });
                 if update {
                     best = Some(candidate);
                 }
@@ -815,22 +812,19 @@ impl CurcatApp {
     }
 
     fn handle_open_path(&mut self, ctx: &Context, path: &Path) {
-        match std::fs::read(path) {
-            Ok(bytes) => match load_image_from_bytes(ctx, &self.config, &bytes) {
-                Ok(img) => {
-                    self.image = Some(img);
-                    self.image_zoom = 1.0;
-                    self.reset_after_image_transform();
-                    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("image");
-                    self.set_status(format!("Loaded {name}"));
-                }
-                Err(e) => self.set_status(format!("Failed to decode image: {e}")),
-            },
-            Err(e) => self.set_status(format!("Failed to read file: {e}")),
+        match load_image_from_path(ctx, &self.config, path) {
+            Ok(img) => {
+                self.image = Some(img);
+                self.image_zoom = 1.0;
+                self.reset_after_image_transform();
+                let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("image");
+                self.set_status(format!("Loaded {name}"));
+            }
+            Err(e) => self.set_status(format!("Failed to load image: {e}")),
         }
     }
 
-    fn set_zoom(&mut self, zoom: f32) {
+    const fn set_zoom(&mut self, zoom: f32) {
         self.image_zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
@@ -842,7 +836,7 @@ impl CurcatApp {
         }
     }
 
-    fn handle_middle_pan(&mut self, response: &egui::Response, ui: &mut egui::Ui) {
+    fn handle_middle_pan(&mut self, response: &egui::Response, ui: &egui::Ui) {
         // When the MMB pan toggle is off, treat middle drag like direct touch pan.
         let touch_style = !self.middle_pan_enabled;
         let factor = if touch_style {
@@ -1320,6 +1314,19 @@ impl CurcatApp {
         if !dropped_files.is_empty() {
             let mut loaded = false;
             for f in &dropped_files {
+                if let Some(path) = &f.path
+                    && let Ok(new_img) = load_image_from_path(ctx, &self.config, path)
+                {
+                    self.image = Some(new_img);
+                    self.image_zoom = 1.0;
+                    self.reset_after_image_transform();
+                    loaded = true;
+                    self.set_status(format!("Loaded from drop (path): {}", path.display()));
+                    if cfg!(debug_assertions) {
+                        eprintln!("[DnD] Loaded from path: {}", path.display());
+                    }
+                    break;
+                }
                 if let Some(bytes) = &f.bytes
                     && let Ok(new_img) = load_image_from_bytes(ctx, &self.config, bytes)
                 {
@@ -1330,20 +1337,6 @@ impl CurcatApp {
                     self.set_status(format!("Loaded from drop (bytes): {}", f.name));
                     if cfg!(debug_assertions) {
                         eprintln!("[DnD] Loaded from bytes: name='{}'", f.name);
-                    }
-                    break;
-                }
-                if let Some(path) = &f.path
-                    && let Ok(bytes) = std::fs::read(path)
-                    && let Ok(new_img) = load_image_from_bytes(ctx, &self.config, &bytes)
-                {
-                    self.image = Some(new_img);
-                    self.image_zoom = 1.0;
-                    self.reset_after_image_transform();
-                    loaded = true;
-                    self.set_status(format!("Loaded from drop (path): {}", path.display()));
-                    if cfg!(debug_assertions) {
-                        eprintln!("[DnD] Loaded from path: {}", path.display());
                     }
                     break;
                 }
@@ -1413,12 +1406,13 @@ impl CurcatApp {
                     )
                 });
                 let pointer_pixel = hover_pos.map(&to_pixel);
-                let mut snap_preview: Option<Pos2> = None;
-                if self.point_input_mode == PointInputMode::ContrastSnap
+                let snap_preview = if self.point_input_mode == PointInputMode::ContrastSnap
                     && let Some(pixel) = pointer_pixel
                 {
-                    snap_preview = self.find_contrast_point(pixel);
-                }
+                    self.find_contrast_point(pixel)
+                } else {
+                    None
+                };
 
                 if shift_pressed
                     && response.drag_started_by(PointerButton::Primary)
@@ -1542,12 +1536,10 @@ impl CurcatApp {
                     }
                 }
 
-                // Update numeric values for points if mappings are ready
-                if let (Some(xm), Some(ym)) = (x_mapping.as_ref(), y_mapping.as_ref()) {
-                    for p in &mut self.points {
-                        p.x_numeric = xm.numeric_at(p.pixel);
-                        p.y_numeric = ym.numeric_at(p.pixel);
-                    }
+                // Update cached numeric coordinates so they never go stale when mappings change.
+                for p in &mut self.points {
+                    p.x_numeric = x_mapping.as_ref().and_then(|xm| xm.numeric_at(p.pixel));
+                    p.y_numeric = y_mapping.as_ref().and_then(|ym| ym.numeric_at(p.pixel));
                 }
 
                 // Draw picked calibration points lines
@@ -1677,7 +1669,7 @@ impl CurcatApp {
                         let galley = painter.layout_no_wrap(text, font.clone(), text_color);
                         let size = galley.size();
                         let total = size + padding * 2.0;
-                        let mut label_pos = pos2(pos.x - total.x * 0.5, clip.top() + 4.0);
+                        let mut label_pos = pos2(total.x.mul_add(-0.5, pos.x), clip.top() + 4.0);
                         let min_x = clip.left() + 2.0;
                         let max_x = clip.right() - total.x - 2.0;
                         label_pos.x = if max_x < min_x {
@@ -1694,10 +1686,10 @@ impl CurcatApp {
                         && let Some(value) = ymap.value_at(pixel)
                     {
                         let text = format_overlay_value(&value);
-                        let galley = painter.layout_no_wrap(text, font.clone(), text_color);
+                        let galley = painter.layout_no_wrap(text, font, text_color);
                         let size = galley.size();
                         let total = size + padding * 2.0;
-                        let mut label_pos = pos2(clip.left() + 4.0, pos.y - total.y * 0.5);
+                        let mut label_pos = pos2(clip.left() + 4.0, total.y.mul_add(-0.5, pos.y));
                         let min_y = clip.top() + 2.0;
                         let max_y = clip.bottom() - total.y - 2.0;
                         label_pos.x = clip.left() + 4.0;
@@ -1727,8 +1719,10 @@ impl CurcatApp {
                         let radius = (icon_size.x.max(icon_size.y) * 0.6).max(14.0);
                         let icon_bg = Color32::from_rgba_unmultiplied(0, 0, 0, 160);
                         painter.circle_filled(anchor, radius, icon_bg);
-                        let icon_pos =
-                            pos2(anchor.x - icon_size.x * 0.5, anchor.y - icon_size.y * 0.5);
+                        let icon_pos = pos2(
+                            icon_size.x.mul_add(-0.5, anchor.x),
+                            icon_size.y.mul_add(-0.5, anchor.y),
+                        );
                         painter.galley(icon_pos, icon_galley, Color32::WHITE);
                     }
                 }
@@ -1830,7 +1824,7 @@ impl CurcatApp {
             let curr = &raw_points[i];
             let dx = curr.x - prev.x;
             let dy = curr.y - prev.y;
-            values[i] = Some((dx * dx + dy * dy).sqrt());
+            values[i] = Some(dx.hypot(dy));
         }
         values
     }
@@ -1847,8 +1841,8 @@ impl CurcatApp {
             let next = &raw_points[i + 1];
             let v1 = (curr.x - prev.x, curr.y - prev.y);
             let v2 = (next.x - curr.x, next.y - curr.y);
-            let mag1 = (v1.0 * v1.0 + v1.1 * v1.1).sqrt();
-            let mag2 = (v2.0 * v2.0 + v2.1 * v2.1).sqrt();
+            let mag1 = v1.0.hypot(v1.1);
+            let mag2 = v2.0.hypot(v2.1);
             if mag1 <= f64::EPSILON || mag2 <= f64::EPSILON {
                 continue;
             }

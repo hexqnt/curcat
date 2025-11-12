@@ -14,11 +14,11 @@ pub enum InterpAlgorithm {
 impl InterpAlgorithm {
     pub const ALL: [Self; 3] = [Self::Linear, Self::StepHold, Self::NaturalCubic];
 
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
-            InterpAlgorithm::Linear => "Linear",
-            InterpAlgorithm::StepHold => "Step (previous)",
-            InterpAlgorithm::NaturalCubic => "Natural cubic spline",
+            Self::Linear => "Linear",
+            Self::StepHold => "Step (previous)",
+            Self::NaturalCubic => "Natural cubic spline",
         }
     }
 }
@@ -87,7 +87,7 @@ fn interpolate_linear(points: &[XYPoint], sample_xs: &[f64]) -> Vec<XYPoint> {
             y0
         } else {
             let t = (sx - x0) / (x1 - x0);
-            y0 + (y1 - y0) * t
+            (y1 - y0).mul_add(t, y0)
         };
         out.push(XYPoint { x: sx, y: sy });
     }
@@ -223,7 +223,7 @@ fn build_natural_cubic_segments(points: &[XYPoint]) -> Option<Vec<CubicSegment>>
     Some(segments)
 }
 
-fn usize_to_f64(value: usize) -> f64 {
+const fn usize_to_f64(value: usize) -> f64 {
     #[allow(clippy::cast_precision_loss)]
     {
         value as f64

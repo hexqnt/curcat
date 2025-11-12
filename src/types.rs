@@ -25,8 +25,8 @@ pub enum AxisValue {
 impl AxisValue {
     pub fn to_scalar_seconds(&self) -> f64 {
         match self {
-            AxisValue::Float(v) => *v,
-            AxisValue::DateTime(dt) => {
+            Self::Float(v) => *v,
+            Self::DateTime(dt) => {
                 let utc = dt.and_utc();
                 int_to_f64(utc.timestamp())
                     + f64::from(utc.timestamp_subsec_nanos()) / NANOS_PER_SEC
@@ -36,7 +36,7 @@ impl AxisValue {
 
     pub fn from_scalar_seconds(unit: AxisUnit, s: f64) -> Self {
         match unit {
-            AxisUnit::Float => AxisValue::Float(s),
+            AxisUnit::Float => Self::Float(s),
             AxisUnit::DateTime => {
                 let secs_floor = s.floor();
                 let mut secs = float_to_i64(secs_floor);
@@ -53,34 +53,34 @@ impl AxisValue {
                     || DateTime::<Utc>::UNIX_EPOCH.naive_utc(),
                     |dt| dt.naive_utc(),
                 );
-                AxisValue::DateTime(base)
+                Self::DateTime(base)
             }
         }
     }
 
     pub fn format(&self) -> String {
         match self {
-            AxisValue::Float(v) => format!("{v}"),
-            AxisValue::DateTime(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            Self::Float(v) => format!("{v}"),
+            Self::DateTime(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
         }
     }
 }
 
-fn int_to_f64(value: i64) -> f64 {
+const fn int_to_f64(value: i64) -> f64 {
     #[allow(clippy::cast_precision_loss)]
     {
         value as f64
     }
 }
 
-fn float_to_i64(value: f64) -> i64 {
+const fn float_to_i64(value: f64) -> i64 {
     #[allow(clippy::cast_possible_truncation)]
     {
         value as i64
     }
 }
 
-fn non_negative_i64_to_u32(value: i64) -> u32 {
+const fn non_negative_i64_to_u32(value: i64) -> u32 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     {
         value as u32
@@ -151,14 +151,14 @@ impl AxisMapping {
         let s1 = self.v1.to_scalar_seconds();
         let s2 = self.v2.to_scalar_seconds();
         match (self.scale, self.unit) {
-            (ScaleKind::Linear, _) => Some(s1 + (s2 - s1) * t),
+            (ScaleKind::Linear, _) => Some((s2 - s1).mul_add(t, s1)),
             (ScaleKind::Log10, AxisUnit::Float) => {
                 if s1 <= 0.0 || s2 <= 0.0 {
                     return None;
                 }
                 let l1 = s1.log10();
                 let l2 = s2.log10();
-                Some(10f64.powf(l1 + (l2 - l1) * t))
+                Some(10f64.powf((l2 - l1).mul_add(t, l1)))
             }
             (ScaleKind::Log10, AxisUnit::DateTime) => None,
         }

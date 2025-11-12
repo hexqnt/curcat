@@ -78,7 +78,7 @@ impl PointStyle {
         )
     }
 
-    pub fn radius(&self) -> f32 {
+    pub const fn radius(&self) -> f32 {
         self.radius.max(0.1)
     }
 }
@@ -136,7 +136,7 @@ impl AppConfig {
     pub fn load() -> Self {
         for path in Self::candidate_paths() {
             if let Ok(contents) = fs::read_to_string(&path) {
-                match toml::from_str::<AppConfig>(&contents) {
+                match toml::from_str::<Self>(&contents) {
                     Ok(cfg) => return cfg,
                     Err(err) => {
                         eprintln!("Failed to parse config {}: {err}", path.display());
@@ -147,7 +147,7 @@ impl AppConfig {
         Self::default()
     }
 
-    pub fn pan_speed_factor(&self) -> f32 {
+    pub const fn pan_speed_factor(&self) -> f32 {
         self.pan_speed.clamp(0.01, 50.0)
     }
 

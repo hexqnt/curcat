@@ -26,7 +26,7 @@ impl ExportExtraColumn {
 }
 
 impl ExportPayload {
-    fn row_count(&self) -> usize {
+    const fn row_count(&self) -> usize {
         self.points.len()
     }
 }

@@ -1,5 +1,3 @@
-#![warn(clippy::pedantic)]
-
 mod app;
 mod config;
 mod export;
