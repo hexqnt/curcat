@@ -1,7 +1,12 @@
 [package]
 name = "curcat"
-version = "0.9.2"
+version = "0.9.3"
 edition = "2024"
+license = "Apache-2.0 OR MIT"
+description = "Digitize curves from chart images; calibrate axes, interpolate, export CSV/XLSX."
+repository = "https://github.com/hexqnt/curcat"
+homepage = "https://github.com/hexqnt/curcat"
+readme = "README.md"
 
 [dependencies]
 egui = "0.33"

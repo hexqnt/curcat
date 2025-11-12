@@ -118,6 +118,7 @@ pub struct AppConfig {
     pub pan_speed: f32,
     pub crosshair: CrosshairStyle,
     pub image_limits: ImageLimits,
+    pub attention_highlight: StrokeStyle,
 }
 
 impl Default for AppConfig {
@@ -128,6 +129,11 @@ impl Default for AppConfig {
             pan_speed: 1.0,
             crosshair: CrosshairStyle::default(),
             image_limits: ImageLimits::default(),
+            attention_highlight: StrokeStyle {
+                color: [220, 70, 70],
+                alpha: 1.0,
+                thickness: 1.2,
+            },
         }
     }
 }

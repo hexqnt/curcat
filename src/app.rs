@@ -10,6 +10,7 @@ use egui::{
 use egui_file_dialog::{DialogState, FileDialog};
 use std::cmp::Ordering;
 use std::path::Path;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PickMode {
@@ -304,6 +305,10 @@ const MAX_ZOOM: f32 = 8.0;
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const POINT_HIT_RADIUS: f32 = 12.0;
 const CAL_POINT_DRAW_RADIUS: f32 = 4.0;
+const ATTENTION_BLINK_SPEED: f32 = 2.2;
+const ATTENTION_ALPHA_MIN: f32 = 0.35;
+const ATTENTION_ALPHA_MAX: f32 = 1.0;
+const ATTENTION_OUTLINE_PAD: f32 = 2.0;
 
 fn format_overlay_value(value: &AxisValue) -> String {
     match value {
@@ -373,6 +378,17 @@ impl AxisCalUi {
             _ => false,
         }
     }
+
+    fn value_invalid_flags(&self) -> (bool, bool) {
+        let v1 = parse_axis_value(&self.v1_text, self.unit);
+        let v2 = parse_axis_value(&self.v2_text, self.unit);
+        let invalid_pair = if let (Some(a), Some(b)) = (&v1, &v2) {
+            !Self::values_are_valid(self.scale, self.unit, a, b)
+        } else {
+            false
+        };
+        (v1.is_none() || invalid_pair, v2.is_none() || invalid_pair)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -383,7 +399,7 @@ struct PickedPoint {
 }
 
 impl PickedPoint {
-    fn new(pixel: Pos2) -> Self {
+    const fn new(pixel: Pos2) -> Self {
         Self {
             pixel,
             x_numeric: None,
@@ -836,6 +852,36 @@ impl CurcatApp {
         }
     }
 
+    fn attention_color(&self, ctx: &Context, base: Color32) -> Color32 {
+        let [r, g, b, a] = base.to_array();
+        let base_alpha = f32::from(a) / 255.0;
+        let time = ctx.input(|i| i.time) as f32;
+        let blink = ((time * ATTENTION_BLINK_SPEED).sin() * 0.5 + 0.5).clamp(0.0, 1.0);
+        let eased = blink * blink * (3.0 - 2.0 * blink);
+        let intensity = lerp(ATTENTION_ALPHA_MIN..=ATTENTION_ALPHA_MAX, eased);
+        let alpha = rounded_u8(base_alpha * intensity * 255.0);
+        Color32::from_rgba_unmultiplied(r, g, b, alpha)
+    }
+
+    fn paint_attention_outline_if(&self, ui: &egui::Ui, rect: egui::Rect, active: bool) {
+        if !active || !ui.is_rect_visible(rect) {
+            return;
+        }
+        let mut stroke = self.config.attention_highlight.stroke();
+        stroke.color = self.attention_color(ui.ctx(), stroke.color);
+        ui.painter().rect_stroke(
+            rect.expand(ATTENTION_OUTLINE_PAD),
+            CornerRadius::ZERO,
+            stroke,
+            StrokeKind::Outside,
+        );
+    }
+
+    fn axis_needs_attention(cal: &AxisCalUi) -> bool {
+        let (v1_invalid, v2_invalid) = cal.value_invalid_flags();
+        v1_invalid || v2_invalid || cal.p1.is_none() || cal.p2.is_none()
+    }
+
     fn handle_middle_pan(&mut self, response: &egui::Response, ui: &egui::Ui) {
         // When the MMB pan toggle is off, treat middle drag like direct touch pan.
         let touch_style = !self.middle_pan_enabled;
@@ -896,11 +942,11 @@ impl CurcatApp {
             }
             ui.separator();
 
-            if ui
+            let open_resp = ui
                 .add(egui::Button::new("📂 Open image…").shortcut_text("Ctrl+O"))
-                .on_hover_text("Open an image (Ctrl+O). You can also drag & drop into the center.")
-                .clicked()
-            {
+                .on_hover_text("Open an image (Ctrl+O). You can also drag & drop into the center.");
+            self.paint_attention_outline_if(ui, open_resp.rect, self.image.is_none());
+            if open_resp.clicked() {
                 self.open_image_dialog();
             }
 
@@ -1182,98 +1228,136 @@ impl CurcatApp {
     }
 
     fn axis_cal_group(&mut self, ui: &mut egui::Ui, is_x: bool) {
-        let (label, cal, p1_mode, p2_mode) = if is_x {
-            ("X axis", &mut self.cal_x, PickMode::X1, PickMode::X2)
+        let (label, p1_mode, p2_mode) = if is_x {
+            ("X axis", PickMode::X1, PickMode::X2)
         } else {
-            ("Y axis", &mut self.cal_y, PickMode::Y1, PickMode::Y2)
+            ("Y axis", PickMode::Y1, PickMode::Y2)
         };
 
         let collapsing = egui::CollapsingHeader::new(label).show(ui, |ui| {
             ui.push_id(label, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Unit:")
-                        .on_hover_text("Value type for the axis (Float/DateTime)");
-                    let mut unit = cal.unit;
-                    let unit_ir = egui::ComboBox::from_id_salt(format!("{label}_unit_combo"))
-                        .selected_text(match unit {
-                            AxisUnit::Float => "Float",
-                            AxisUnit::DateTime => "DateTime",
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut unit, AxisUnit::Float, "Float");
-                            ui.selectable_value(&mut unit, AxisUnit::DateTime, "DateTime");
-                        });
-                    unit_ir.response.on_hover_text("Choose the axis value type");
-                    cal.unit = unit;
-                    ui.separator();
+                let mut highlight_jobs: Vec<(egui::Rect, bool)> = Vec::new();
+                let mapping_ready;
+                {
+                    let cal = if is_x {
+                        &mut self.cal_x
+                    } else {
+                        &mut self.cal_y
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label("Unit:")
+                            .on_hover_text("Value type for the axis (Float/DateTime)");
+                        let mut unit = cal.unit;
+                        let unit_ir = egui::ComboBox::from_id_salt(format!("{label}_unit_combo"))
+                            .selected_text(match unit {
+                                AxisUnit::Float => "Float",
+                                AxisUnit::DateTime => "DateTime",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut unit, AxisUnit::Float, "Float");
+                                ui.selectable_value(&mut unit, AxisUnit::DateTime, "DateTime");
+                            });
+                        unit_ir.response.on_hover_text("Choose the axis value type");
+                        cal.unit = unit;
+                        ui.separator();
 
-                    ui.label("Scale:")
-                        .on_hover_text("Axis scale (Linear/Log10)");
-                    let mut scale = cal.scale;
-                    let scale_ir = egui::ComboBox::from_id_salt(format!("{label}_scale_combo"))
-                        .selected_text(match scale {
-                            ScaleKind::Linear => "Linear",
-                            ScaleKind::Log10 => "Log10",
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut scale, ScaleKind::Linear, "Linear");
-                            ui.selectable_value(&mut scale, ScaleKind::Log10, "Log10");
-                        });
-                    scale_ir.response.on_hover_text("Choose the axis scale");
-                    cal.scale = scale;
-                });
+                        ui.label("Scale:")
+                            .on_hover_text("Axis scale (Linear/Log10)");
+                        let mut scale = cal.scale;
+                        let scale_ir = egui::ComboBox::from_id_salt(format!("{label}_scale_combo"))
+                            .selected_text(match scale {
+                                ScaleKind::Linear => "Linear",
+                                ScaleKind::Log10 => "Log10",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut scale, ScaleKind::Linear, "Linear");
+                                ui.selectable_value(&mut scale, ScaleKind::Log10, "Log10");
+                            });
+                        scale_ir.response.on_hover_text("Choose the axis scale");
+                        cal.scale = scale;
+                    });
 
-                if cal.unit == AxisUnit::DateTime && cal.scale == ScaleKind::Log10 {
-                    ui.label(
-                        RichText::new("Log scale is not supported for DateTime")
-                            .color(Color32::YELLOW),
-                    );
+                    if cal.unit == AxisUnit::DateTime && cal.scale == ScaleKind::Log10 {
+                        ui.label(
+                            RichText::new("Log scale is not supported for DateTime")
+                                .color(Color32::YELLOW),
+                        );
+                    }
+
+                    let mut p1_value_rect = None;
+                    let mut p2_value_rect = None;
+                    let mut pick_p1_rect = None;
+                    let mut pick_p2_rect = None;
+
+                    ui.horizontal(|ui| {
+                        ui.label("P1 value:")
+                            .on_hover_text("Value of the first calibration point (P1)");
+                        let p1_resp = ui.add_sized(
+                            [100.0, ui.spacing().interact_size.y],
+                            TextEdit::singleline(&mut cal.v1_text),
+                        );
+                        let p1_resp = p1_resp.on_hover_text(match cal.unit {
+                            AxisUnit::Float => "Enter a number (e.g., 1.23)",
+                            AxisUnit::DateTime => "Enter date/time (e.g., 2024-10-31 12:30)",
+                        });
+                        p1_value_rect = Some(p1_resp.rect);
+                        let pick_resp = ui
+                            .button("📍 Pick P1")
+                            .on_hover_text("Click, then pick the corresponding point on the image");
+                        if pick_resp.clicked() {
+                            self.pick_mode = p1_mode;
+                        }
+                        pick_p1_rect = Some(pick_resp.rect);
+                        if let Some(p) = cal.p1 {
+                            ui.label(format!("@ ({:.1},{:.1})", p.x, p.y));
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("P2 value:")
+                            .on_hover_text("Value of the second calibration point (P2)");
+                        let p2_resp = ui.add_sized(
+                            [100.0, ui.spacing().interact_size.y],
+                            TextEdit::singleline(&mut cal.v2_text),
+                        );
+                        let p2_resp = p2_resp.on_hover_text(match cal.unit {
+                            AxisUnit::Float => "Enter a number (e.g., 4.56)",
+                            AxisUnit::DateTime => "Enter date/time (e.g., 2024-10-31 12:45)",
+                        });
+                        p2_value_rect = Some(p2_resp.rect);
+                        let pick_resp = ui
+                            .button("📍 Pick P2")
+                            .on_hover_text("Click, then pick the corresponding point on the image");
+                        if pick_resp.clicked() {
+                            self.pick_mode = p2_mode;
+                        }
+                        pick_p2_rect = Some(pick_resp.rect);
+                        if let Some(p) = cal.p2 {
+                            ui.label(format!("@ ({:.1},{:.1})", p.x, p.y));
+                        }
+                    });
+
+                    let (p1_value_invalid, p2_value_invalid) = cal.value_invalid_flags();
+                    if let Some(rect) = p1_value_rect {
+                        highlight_jobs.push((rect, p1_value_invalid));
+                    }
+                    if let Some(rect) = p2_value_rect {
+                        highlight_jobs.push((rect, p2_value_invalid));
+                    }
+                    if let Some(rect) = pick_p1_rect {
+                        highlight_jobs.push((rect, cal.p1.is_none()));
+                    }
+                    if let Some(rect) = pick_p2_rect {
+                        highlight_jobs.push((rect, cal.p2.is_none()));
+                    }
+
+                    mapping_ready = cal.mapping().is_some();
                 }
 
-                ui.horizontal(|ui| {
-                    ui.label("P1 value:")
-                        .on_hover_text("Value of the first calibration point (P1)");
-                    let p1_resp = ui.add_sized(
-                        [100.0, ui.spacing().interact_size.y],
-                        TextEdit::singleline(&mut cal.v1_text),
-                    );
-                    p1_resp.on_hover_text(match cal.unit {
-                        AxisUnit::Float => "Enter a number (e.g., 1.23)",
-                        AxisUnit::DateTime => "Enter date/time (e.g., 2024-10-31 12:30)",
-                    });
-                    let btn = ui.button("📍 Pick P1");
-                    let btn =
-                        btn.on_hover_text("Click, then pick the corresponding point on the image");
-                    if btn.clicked() {
-                        self.pick_mode = p1_mode;
-                    }
-                    if let Some(p) = cal.p1 {
-                        ui.label(format!("@ ({:.1},{:.1})", p.x, p.y));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("P2 value:")
-                        .on_hover_text("Value of the second calibration point (P2)");
-                    let p2_resp = ui.add_sized(
-                        [100.0, ui.spacing().interact_size.y],
-                        TextEdit::singleline(&mut cal.v2_text),
-                    );
-                    p2_resp.on_hover_text(match cal.unit {
-                        AxisUnit::Float => "Enter a number (e.g., 4.56)",
-                        AxisUnit::DateTime => "Enter date/time (e.g., 2024-10-31 12:45)",
-                    });
-                    let btn = ui.button("📍 Pick P2");
-                    let btn =
-                        btn.on_hover_text("Click, then pick the corresponding point on the image");
-                    if btn.clicked() {
-                        self.pick_mode = p2_mode;
-                    }
-                    if let Some(p) = cal.p2 {
-                        ui.label(format!("@ ({:.1},{:.1})", p.x, p.y));
-                    }
-                });
+                for (rect, active) in highlight_jobs {
+                    self.paint_attention_outline_if(ui, rect, active);
+                }
 
-                if cal.mapping().is_some() {
+                if mapping_ready {
                     ui.label(RichText::new("Mapping: OK").color(Color32::GREEN))
                         .on_hover_text("Calibration complete — you can pick points and export");
                 } else {
@@ -1889,6 +1973,13 @@ impl eframe::App for CurcatApp {
             if ctx.input(|i| i.key_pressed(Key::Z) && i.modifiers.command) {
                 self.undo_last_point();
             }
+        }
+
+        let needs_open_hint = self.image.is_none();
+        let needs_cal_hint =
+            Self::axis_needs_attention(&self.cal_x) || Self::axis_needs_attention(&self.cal_y);
+        if needs_open_hint || needs_cal_hint {
+            ctx.request_repaint_after(Duration::from_millis(16));
         }
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| self.ui_top(ui));
