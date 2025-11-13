@@ -3,13 +3,21 @@ use crate::export::{self, ExportExtraColumn, ExportPayload};
 use crate::image_util::{LoadedImage, load_image_from_bytes, load_image_from_path};
 use crate::interp::{InterpAlgorithm, XYPoint, interpolate_sorted};
 use crate::types::{AxisMapping, AxisUnit, AxisValue, ScaleKind, parse_axis_value};
+use chrono::{DateTime, Utc};
 use egui::{
     Color32, ColorImage, Context, CornerRadius, Key, PointerButton, Pos2, Response, RichText,
     Sense, StrokeKind, TextBuffer, TextEdit, Vec2, lerp, pos2,
     text::{CCursor, CCursorRange},
 };
 use egui_file_dialog::{DialogState, FileDialog};
-use std::{any::TypeId, cmp::Ordering, ops::Range, path::Path, time::Duration};
+use std::{
+    any::TypeId,
+    cmp::Ordering,
+    convert::TryFrom,
+    ops::Range,
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PickMode {
@@ -118,6 +126,7 @@ impl SnapMapLevel {
                 }
             }
         }
+
         let mut color_similarity = vec![0.0_f32; len];
         for (idx, color) in image.pixels.iter().enumerate() {
             color_similarity[idx] = color_similarity_value(*color, target, tolerance);
@@ -488,9 +497,83 @@ impl PickedPoint {
     }
 }
 
+#[derive(Debug, Clone)]
+enum ImageOrigin {
+    File(PathBuf),
+    DroppedBytes { suggested_name: Option<String> },
+}
+
+impl ImageOrigin {
+    const fn label(&self) -> &'static str {
+        match self {
+            Self::File(_) => "File on disk",
+            Self::DroppedBytes { .. } => "Dropped bytes",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ImageMeta {
+    origin: ImageOrigin,
+    byte_len: Option<u64>,
+    last_modified: Option<SystemTime>,
+}
+
+impl ImageMeta {
+    fn from_path(path: &Path) -> Self {
+        let metadata = std::fs::metadata(path).ok();
+        let (byte_len, last_modified) = metadata.map_or((None, None), |meta| {
+            (Some(meta.len()), meta.modified().ok())
+        });
+        Self {
+            origin: ImageOrigin::File(path.to_owned()),
+            byte_len,
+            last_modified,
+        }
+    }
+
+    fn from_dropped_bytes(
+        name: Option<&str>,
+        byte_len: usize,
+        last_modified: Option<SystemTime>,
+    ) -> Self {
+        Self {
+            origin: ImageOrigin::DroppedBytes {
+                suggested_name: name.filter(|s| !s.is_empty()).map(ToOwned::to_owned),
+            },
+            byte_len: Some(byte_len as u64),
+            last_modified,
+        }
+    }
+
+    fn display_name(&self) -> String {
+        match &self.origin {
+            ImageOrigin::File(path) => path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map_or_else(|| path.display().to_string(), ToOwned::to_owned),
+            ImageOrigin::DroppedBytes { suggested_name } => suggested_name
+                .as_deref()
+                .map_or_else(|| "Unnamed drop".to_string(), str::to_owned),
+        }
+    }
+
+    fn path(&self) -> Option<&Path> {
+        match &self.origin {
+            ImageOrigin::File(path) => Some(path.as_path()),
+            ImageOrigin::DroppedBytes { .. } => None,
+        }
+    }
+
+    const fn source_label(&self) -> &'static str {
+        self.origin.label()
+    }
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct CurcatApp {
     image: Option<LoadedImage>,
+    image_meta: Option<ImageMeta>,
     last_status: Option<String>,
     pick_mode: PickMode,
     pending_value_focus: Option<AxisValueField>,
@@ -515,6 +598,7 @@ pub struct CurcatApp {
     touch_pan_active: bool,
     touch_pan_last: Option<Pos2>,
     side_open: bool,
+    info_window_open: bool,
     export_kind: ExportKind,
     interp_algorithm: InterpAlgorithm,
     raw_include_distances: bool,
@@ -525,6 +609,7 @@ impl Default for CurcatApp {
     fn default() -> Self {
         Self {
             image: None,
+            image_meta: None,
             last_status: None,
             pick_mode: PickMode::None,
             pending_value_focus: None,
@@ -563,6 +648,7 @@ impl Default for CurcatApp {
             touch_pan_active: false,
             touch_pan_last: None,
             side_open: true,
+            info_window_open: false,
             export_kind: ExportKind::Interpolated,
             interp_algorithm: InterpAlgorithm::Linear,
             raw_include_distances: false,
@@ -885,6 +971,13 @@ impl CurcatApp {
         self.mark_snap_maps_dirty();
     }
 
+    fn set_loaded_image(&mut self, image: LoadedImage, meta: Option<ImageMeta>) {
+        self.image = Some(image);
+        self.image_meta = meta;
+        self.image_zoom = 1.0;
+        self.reset_after_image_transform();
+    }
+
     fn rotate_image(&mut self, clockwise: bool) {
         if let Some(img) = self.image.as_mut() {
             if clockwise {
@@ -940,9 +1033,8 @@ impl CurcatApp {
     fn handle_open_path(&mut self, ctx: &Context, path: &Path) {
         match load_image_from_path(ctx, &self.config, path) {
             Ok(img) => {
-                self.image = Some(img);
-                self.image_zoom = 1.0;
-                self.reset_after_image_transform();
+                let meta = ImageMeta::from_path(path);
+                self.set_loaded_image(img, Some(meta));
                 let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("image");
                 self.set_status(format!("Loaded {name}"));
             }
@@ -1061,6 +1153,15 @@ impl CurcatApp {
             }
 
             let has_image = self.image.is_some();
+            let info_resp = ui
+                .add_enabled(
+                    has_image,
+                    egui::Button::new("ℹ Image info").shortcut_text("Ctrl+I"),
+                )
+                .on_hover_text("Show file & image details (Ctrl+I)");
+            if info_resp.clicked() && has_image {
+                self.info_window_open = true;
+            }
             {
                 let resp = ui.add_enabled(has_image, egui::Button::new("↺ 90°"));
                 let resp = resp.on_hover_text("Rotate 90° counter-clockwise");
@@ -1118,6 +1219,68 @@ impl CurcatApp {
                 self.undo_last_point();
             }
         });
+    }
+
+    fn ui_image_info_window(&mut self, ctx: &Context) {
+        if !self.info_window_open {
+            return;
+        }
+        egui::Window::new("Image info")
+            .open(&mut self.info_window_open)
+            .resizable(false)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                if let Some(image) = &self.image {
+                    ui.heading("File");
+                    if let Some(meta) = self.image_meta.as_ref() {
+                        ui.label(format!("Source: {}", meta.source_label()));
+                        ui.label(format!("Name: {}", meta.display_name()));
+                        if let Some(path) = meta.path() {
+                            ui.label(format!("Path: {}", path.display()));
+                        }
+                        if let Some(bytes) = meta.byte_len {
+                            ui.label(format!(
+                                "Size: {} ({bytes} bytes)",
+                                human_readable_bytes(bytes),
+                            ));
+                        } else {
+                            ui.label("Size: Unknown");
+                        }
+                        if let Some(modified) = meta.last_modified {
+                            ui.label(format!("Modified: {}", format_system_time(modified),));
+                        } else {
+                            ui.label("Modified: Unknown");
+                        }
+                    } else {
+                        ui.label("No captured file metadata for this image.");
+                    }
+                    ui.add_space(6.0);
+                    ui.heading("Image");
+                    let [w, h] = image.size;
+                    ui.label(format!("Dimensions: {w} × {h} px"));
+                    if let Some(aspect_text) = describe_aspect_ratio(image.size) {
+                        ui.label(format!("Aspect ratio: {aspect_text}"));
+                    } else {
+                        ui.label("Aspect ratio: n/a");
+                    }
+                    let total_pixels = total_pixel_count(image.size);
+                    ui.label(format!(
+                        "Pixels: {total_pixels} ({:.2} MP)",
+                        total_pixels as f64 / 1_000_000.0
+                    ));
+                    let rgba_bytes = total_pixels.saturating_mul(4);
+                    ui.label(format!(
+                        "RGBA memory estimate: {} ({rgba_bytes} bytes)",
+                        human_readable_bytes(rgba_bytes),
+                    ));
+                    ui.label(format!(
+                        "Current zoom: {}",
+                        Self::format_zoom(self.image_zoom)
+                    ));
+                } else {
+                    ui.label("Load an image to inspect its metadata.");
+                }
+            });
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1560,9 +1723,8 @@ impl CurcatApp {
                 if let Some(path) = &f.path
                     && let Ok(new_img) = load_image_from_path(ctx, &self.config, path)
                 {
-                    self.image = Some(new_img);
-                    self.image_zoom = 1.0;
-                    self.reset_after_image_transform();
+                    let meta = ImageMeta::from_path(path);
+                    self.set_loaded_image(new_img, Some(meta));
                     loaded = true;
                     self.set_status(format!("Loaded from drop (path): {}", path.display()));
                     if cfg!(debug_assertions) {
@@ -1573,9 +1735,10 @@ impl CurcatApp {
                 if let Some(bytes) = &f.bytes
                     && let Ok(new_img) = load_image_from_bytes(ctx, &self.config, bytes)
                 {
-                    self.image = Some(new_img);
-                    self.image_zoom = 1.0;
-                    self.reset_after_image_transform();
+                    let name_hint = (!f.name.is_empty()).then_some(f.name.as_str());
+                    let meta =
+                        ImageMeta::from_dropped_bytes(name_hint, bytes.len(), f.last_modified);
+                    self.set_loaded_image(new_img, Some(meta));
                     loaded = true;
                     self.set_status(format!("Loaded from drop (bytes): {}", f.name));
                     if cfg!(debug_assertions) {
@@ -2132,6 +2295,10 @@ impl eframe::App for CurcatApp {
             if ctx.input(|i| i.key_pressed(Key::D) && i.modifiers.command && i.modifiers.shift) {
                 self.clear_all_points();
             }
+            // Ctrl/Cmd + I: show image info
+            if self.image.is_some() && ctx.input(|i| i.key_pressed(Key::I) && i.modifiers.command) {
+                self.info_window_open = true;
+            }
             // Ctrl/Cmd + Z: undo
             if ctx.input(|i| i.key_pressed(Key::Z) && i.modifiers.command) {
                 self.undo_last_point();
@@ -2151,6 +2318,7 @@ impl eframe::App for CurcatApp {
             .default_width(280.0)
             .show_animated(ctx, self.side_open, |ui| self.ui_side_calibration(ui));
         egui::CentralPanel::default().show(ctx, |ui| self.ui_central_image(ctx, ui));
+        self.ui_image_info_window(ctx);
 
         let mut close_dialog = false;
 
@@ -2217,6 +2385,55 @@ impl eframe::App for CurcatApp {
             self.active_dialog = None;
         }
     }
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn human_readable_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit_idx = 0;
+    while value >= 1024.0 && unit_idx < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit_idx += 1;
+    }
+    if unit_idx == 0 {
+        format!("{bytes} {}", UNITS[unit_idx])
+    } else {
+        format!("{value:.2} {}", UNITS[unit_idx])
+    }
+}
+
+fn format_system_time(time: SystemTime) -> String {
+    let datetime: DateTime<Utc> = DateTime::from(time);
+    datetime.format("%Y-%m-%d %H:%M:%S %Z").to_string()
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn describe_aspect_ratio(size: [usize; 2]) -> Option<String> {
+    let [w, h] = size;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let divisor = gcd_usize(w, h);
+    let simple_w = w / divisor;
+    let simple_h = h / divisor;
+    let approx = w as f64 / h as f64;
+    Some(format!("{simple_w}:{simple_h} (~{approx:.3}:1)"))
+}
+
+fn total_pixel_count(size: [usize; 2]) -> u64 {
+    let w = u64::try_from(size[0]).unwrap_or(u64::MAX);
+    let h = u64::try_from(size[1]).unwrap_or(u64::MAX);
+    w.saturating_mul(h)
+}
+
+const fn gcd_usize(mut a: usize, mut b: usize) -> usize {
+    while b != 0 {
+        let tmp = a % b;
+        a = b;
+        b = tmp;
+    }
+    if a == 0 { 1 } else { a }
 }
 
 fn toggle_switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
