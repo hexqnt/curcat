@@ -39,7 +39,7 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.9.8"
 directories = "6.0"
-rust_xlsxwriter = { version = "0.91", features = ["ryu"] }
+rust_xlsxwriter = { version = "0.92", features = ["ryu"] }
 egui-file-dialog = { version = "0.12" }
 
 [profile.release]
