@@ -1,8 +1,10 @@
 mod app;
 mod config;
 mod export;
+mod image_info;
 mod image_util;
 mod interp;
+mod snap;
 mod types;
 
 use app::CurcatApp;

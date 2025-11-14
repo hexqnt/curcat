@@ -1,23 +1,20 @@
 use crate::config::AppConfig;
 use crate::export::{self, ExportExtraColumn, ExportPayload};
+use crate::image_info::{
+    ImageMeta, describe_aspect_ratio, format_system_time, human_readable_bytes, total_pixel_count,
+};
 use crate::image_util::{LoadedImage, load_image_from_bytes, load_image_from_path};
 use crate::interp::{InterpAlgorithm, XYPoint, interpolate_sorted};
+use crate::snap::{SnapBehavior, SnapFeatureSource, SnapMapCache, SnapThresholdKind};
 use crate::types::{AxisMapping, AxisUnit, AxisValue, ScaleKind, parse_axis_value};
-use chrono::{DateTime, Utc};
 use egui::{
-    Color32, ColorImage, Context, CornerRadius, Key, PointerButton, Pos2, Response, RichText,
-    Sense, StrokeKind, TextBuffer, TextEdit, Vec2, lerp, pos2,
+    Color32, Context, CornerRadius, Key, PointerButton, Pos2, Response, RichText, Sense,
+    StrokeKind, TextBuffer, TextEdit, Vec2, lerp, pos2,
     text::{CCursor, CCursorRange},
 };
+
 use egui_file_dialog::{DialogState, FileDialog};
-use std::{
-    any::TypeId,
-    cmp::Ordering,
-    convert::TryFrom,
-    ops::Range,
-    path::{Path, PathBuf},
-    time::{Duration, SystemTime},
-};
+use std::{any::TypeId, cmp::Ordering, convert::TryFrom, ops::Range, path::Path, time::Duration};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PickMode {
@@ -35,25 +32,6 @@ enum AxisValueField {
     X2,
     Y1,
     Y2,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SnapFeatureSource {
-    LumaGradient,
-    ColorMatch,
-    Hybrid,
-}
-
-impl SnapFeatureSource {
-    const ALL: [Self; 3] = [Self::LumaGradient, Self::ColorMatch, Self::Hybrid];
-
-    const fn label(self) -> &'static str {
-        match self {
-            Self::LumaGradient => "Luma gradient",
-            Self::ColorMatch => "Color mask",
-            Self::Hybrid => "Gradient + color",
-        }
-    }
 }
 
 fn sanitize_axis_text(value: &mut String, unit: AxisUnit) {
@@ -83,167 +61,10 @@ const fn axis_char_allowed(unit: AxisUnit, ch: char) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SnapThresholdKind {
-    Gradient,
-    Score,
-}
-
-impl SnapThresholdKind {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Gradient => "Gradient only",
-            Self::Score => "Feature score",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct SnapMapLevel {
-    size: [usize; 2],
-    scale: u32,
-    gradient: Vec<f32>,
-    color_similarity: Vec<f32>,
-}
-
-impl SnapMapLevel {
-    fn base_from_image(image: &ColorImage, target: Color32, tolerance: f32) -> Self {
-        let size = image.size;
-        let len = size[0] * size[1];
-        let mut luminance = vec![0.0_f32; len];
-        for (idx, color) in image.pixels.iter().enumerate() {
-            luminance[idx] = color_luminance(*color);
-        }
-        let mut gradient = vec![0.0_f32; len];
-        let width = size[0];
-        let height = size[1];
-        if width >= 3 && height >= 3 {
-            for y in 1..(height - 1) {
-                for x in 1..(width - 1) {
-                    let idx = y * width + x;
-                    let gx = luminance[idx + 1] - luminance[idx - 1];
-                    let gy = luminance[idx + width] - luminance[idx - width];
-                    gradient[idx] = gx.hypot(gy).min(255.0);
-                }
-            }
-        }
-
-        let mut color_similarity = vec![0.0_f32; len];
-        for (idx, color) in image.pixels.iter().enumerate() {
-            color_similarity[idx] = color_similarity_value(*color, target, tolerance);
-        }
-        Self {
-            size,
-            scale: 1,
-            gradient,
-            color_similarity,
-        }
-    }
-
-    fn downsample(prev: &Self) -> Option<Self> {
-        let [w, h] = prev.size;
-        if w < 2 || h < 2 {
-            return None;
-        }
-        let new_w = w.div_ceil(2);
-        let new_h = h.div_ceil(2);
-        if new_w < 2 || new_h < 2 {
-            return None;
-        }
-        let mut gradient = vec![0.0; new_w * new_h];
-        let mut color_similarity = vec![0.0; new_w * new_h];
-        for y in 0..new_h {
-            for x in 0..new_w {
-                let mut g_sum = 0.0;
-                let mut c_sum = 0.0;
-                let mut count = 0.0;
-                for dy in 0..2 {
-                    for dx in 0..2 {
-                        let sx = x * 2 + dx;
-                        let sy = y * 2 + dy;
-                        if sx < w && sy < h {
-                            let idx = sy * w + sx;
-                            g_sum += prev.gradient[idx];
-                            c_sum += prev.color_similarity[idx];
-                            count += 1.0;
-                        }
-                    }
-                }
-                let idx = y * new_w + x;
-                gradient[idx] = if count > 0.0 { g_sum / count } else { 0.0 };
-                color_similarity[idx] = if count > 0.0 { c_sum / count } else { 0.0 };
-            }
-        }
-        Some(Self {
-            size: [new_w, new_h],
-            scale: prev.scale * 2,
-            gradient,
-            color_similarity,
-        })
-    }
-
-    fn gradient_at(&self, x: i32, y: i32) -> f32 {
-        if self.gradient.is_empty() {
-            return 0.0;
-        }
-        let xi = clamp_index(x, self.size[0]);
-        let yi = clamp_index(y, self.size[1]);
-        self.gradient[yi * self.size[0] + xi]
-    }
-
-    fn color_similarity_at(&self, x: i32, y: i32) -> f32 {
-        if self.color_similarity.is_empty() {
-            return 0.0;
-        }
-        let xi = clamp_index(x, self.size[0]);
-        let yi = clamp_index(y, self.size[1]);
-        self.color_similarity[yi * self.size[0] + xi]
-    }
-}
-
-#[derive(Debug, Clone)]
-struct SnapMapCache {
-    levels: Vec<SnapMapLevel>,
-}
-
-impl SnapMapCache {
-    fn build(image: &ColorImage, target: Color32, tolerance: f32) -> Option<Self> {
-        if image.size[0] == 0 || image.size[1] == 0 {
-            return None;
-        }
-        let mut levels = Vec::new();
-        levels.push(SnapMapLevel::base_from_image(image, target, tolerance));
-        while let Some(prev) = levels.last() {
-            if prev.size[0] < 4 || prev.size[1] < 4 {
-                break;
-            }
-            if let Some(next) = SnapMapLevel::downsample(prev) {
-                levels.push(next);
-            } else {
-                break;
-            }
-        }
-        Some(Self { levels })
-    }
-
-    fn level_for_radius(&self, radius: f32) -> (usize, &SnapMapLevel) {
-        assert!(!self.levels.is_empty(), "SnapMapCache without levels");
-        let mut chosen = 0;
-        for (idx, level) in self.levels.iter().enumerate() {
-            let level_scale = u32_to_f32(level.scale);
-            if radius / level_scale <= 12.0 || idx == self.levels.len() - 1 {
-                chosen = idx;
-                break;
-            }
-        }
-        (chosen, &self.levels[chosen])
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct SnapCandidate {
-    pos: Pos2,
-    score: f32,
-    dist: f32,
+enum PointInputMode {
+    Free,
+    ContrastSnap,
+    CenterlineSnap,
 }
 
 fn safe_usize_to_f32(value: usize) -> f32 {
@@ -255,84 +76,11 @@ fn safe_usize_to_f32(value: usize) -> f32 {
     }
 }
 
-const fn u32_to_f32(value: u32) -> f32 {
-    #[allow(clippy::cast_precision_loss)]
-    {
-        value as f32
-    }
-}
-
-const fn i32_to_f32(value: i32) -> f32 {
-    #[allow(clippy::cast_precision_loss)]
-    {
-        value as f32
-    }
-}
-
-fn clamp_index(value: i32, len: usize) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    let last = len - 1;
-    let Ok(last_i32) = i32::try_from(last) else {
-        return last;
-    };
-    let clamped = value.clamp(0, last_i32);
-    usize::try_from(clamped).unwrap_or(last)
-}
-
-fn clamp_pixel_coord(coord: f32, len: usize) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    let max = safe_usize_to_f32(len - 1);
-    let rounded = coord.round().clamp(0.0, max);
-    let rounded_i32 = saturating_f32_to_i32(rounded);
-    clamp_index(rounded_i32, len)
-}
-
-const fn saturating_f32_to_i32(value: f32) -> i32 {
-    #[allow(clippy::cast_precision_loss)]
-    const MAX: f32 = i32::MAX as f32;
-    #[allow(clippy::cast_precision_loss)]
-    const MIN: f32 = i32::MIN as f32;
-    #[allow(clippy::cast_possible_truncation)]
-    {
-        if value.is_nan() {
-            0
-        } else {
-            value.clamp(MIN, MAX).round() as i32
-        }
-    }
-}
-
 fn rounded_u8(value: f32) -> u8 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     {
         value.round().clamp(0.0, f32::from(u8::MAX)) as u8
     }
-}
-
-fn color_luminance(color: Color32) -> f32 {
-    let [r, g, b, _] = color.to_array();
-    0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)
-}
-
-fn color_similarity_value(color: Color32, target: Color32, tolerance: f32) -> f32 {
-    let [tr, tg, tb, _] = target.to_array();
-    let [r, g, b, _] = color.to_array();
-    let dr = f32::from(r) - f32::from(tr);
-    let dg = f32::from(g) - f32::from(tg);
-    let db = f32::from(b) - f32::from(tb);
-    let diff = (dr * dr + dg * dg + db * db).sqrt();
-    let tol = tolerance.max(1.0);
-    ((tol - diff).max(0.0) / tol).clamp(0.0, 1.0)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PointInputMode {
-    Free,
-    ContrastSnap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -497,79 +245,6 @@ impl PickedPoint {
     }
 }
 
-#[derive(Debug, Clone)]
-enum ImageOrigin {
-    File(PathBuf),
-    DroppedBytes { suggested_name: Option<String> },
-}
-
-impl ImageOrigin {
-    const fn label(&self) -> &'static str {
-        match self {
-            Self::File(_) => "File on disk",
-            Self::DroppedBytes { .. } => "Dropped bytes",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct ImageMeta {
-    origin: ImageOrigin,
-    byte_len: Option<u64>,
-    last_modified: Option<SystemTime>,
-}
-
-impl ImageMeta {
-    fn from_path(path: &Path) -> Self {
-        let metadata = std::fs::metadata(path).ok();
-        let (byte_len, last_modified) = metadata.map_or((None, None), |meta| {
-            (Some(meta.len()), meta.modified().ok())
-        });
-        Self {
-            origin: ImageOrigin::File(path.to_owned()),
-            byte_len,
-            last_modified,
-        }
-    }
-
-    fn from_dropped_bytes(
-        name: Option<&str>,
-        byte_len: usize,
-        last_modified: Option<SystemTime>,
-    ) -> Self {
-        Self {
-            origin: ImageOrigin::DroppedBytes {
-                suggested_name: name.filter(|s| !s.is_empty()).map(ToOwned::to_owned),
-            },
-            byte_len: Some(byte_len as u64),
-            last_modified,
-        }
-    }
-
-    fn display_name(&self) -> String {
-        match &self.origin {
-            ImageOrigin::File(path) => path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map_or_else(|| path.display().to_string(), ToOwned::to_owned),
-            ImageOrigin::DroppedBytes { suggested_name } => suggested_name
-                .as_deref()
-                .map_or_else(|| "Unnamed drop".to_string(), str::to_owned),
-        }
-    }
-
-    fn path(&self) -> Option<&Path> {
-        match &self.origin {
-            ImageOrigin::File(path) => Some(path.as_path()),
-            ImageOrigin::DroppedBytes { .. } => None,
-        }
-    }
-
-    const fn source_label(&self) -> &'static str {
-        self.origin.label()
-    }
-}
-
 #[allow(clippy::struct_excessive_bools)]
 pub struct CurcatApp {
     image: Option<LoadedImage>,
@@ -583,6 +258,7 @@ pub struct CurcatApp {
     point_input_mode: PointInputMode,
     contrast_search_radius: f32,
     contrast_threshold: f32,
+    centerline_threshold: f32,
     snap_feature_source: SnapFeatureSource,
     snap_threshold_kind: SnapThresholdKind,
     snap_target_color: Color32,
@@ -633,6 +309,7 @@ impl Default for CurcatApp {
             point_input_mode: PointInputMode::Free,
             contrast_search_radius: 12.0,
             contrast_threshold: 12.0,
+            centerline_threshold: 40.0,
             snap_feature_source: SnapFeatureSource::LumaGradient,
             snap_threshold_kind: SnapThresholdKind::Gradient,
             snap_target_color: Color32::from_rgb(200, 60, 60),
@@ -658,6 +335,52 @@ impl Default for CurcatApp {
 }
 
 impl CurcatApp {
+    fn ui_snap_radius_slider(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        ui.label("Search radius (px)").on_hover_text(
+            "Measured in image pixels; smaller values keep snapping near the cursor",
+        );
+        ui.spacing_mut().slider_width = 150.0;
+        ui.add(
+            egui::Slider::new(&mut self.contrast_search_radius, 3.0..=60.0)
+                .logarithmic(false)
+                .clamping(egui::SliderClamping::Always)
+                .text("px"),
+        )
+        .on_hover_text("Radius used to look for snap candidates");
+    }
+
+    fn ui_curve_color_controls(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Curve color:");
+            let color_button = ui
+                .color_edit_button_srgba(&mut self.snap_target_color)
+                .on_hover_text("Target color for the curve");
+            if color_button.changed() {
+                self.mark_snap_maps_dirty();
+            }
+            if ui
+                .button("Pick from image")
+                .on_hover_text("Click, then select a pixel on the image")
+                .clicked()
+            {
+                self.pick_mode = PickMode::CurveColor;
+                self.set_status("Click on the image to sample the curve color.");
+            }
+        });
+        let tol_resp = ui
+            .add(
+                egui::Slider::new(&mut self.snap_color_tolerance, 5.0..=150.0)
+                    .text("tolerance")
+                    .clamping(egui::SliderClamping::Always),
+            )
+            .on_hover_text("How far the pixel color may deviate from the picked color");
+        if tol_resp.changed() {
+            self.mark_snap_maps_dirty();
+        }
+    }
+
     fn open_image_dialog(&mut self) {
         let mut dialog = Self::make_open_dialog();
         dialog.pick_file();
@@ -731,11 +454,15 @@ impl CurcatApp {
     }
 
     fn snap_pixel_if_requested(&mut self, pixel_hint: Pos2) -> Pos2 {
+        self.compute_snap_candidate(pixel_hint)
+            .unwrap_or(pixel_hint)
+    }
+
+    fn compute_snap_candidate(&mut self, pixel_hint: Pos2) -> Option<Pos2> {
         match self.point_input_mode {
-            PointInputMode::Free => pixel_hint,
-            PointInputMode::ContrastSnap => {
-                self.find_contrast_point(pixel_hint).unwrap_or(pixel_hint)
-            }
+            PointInputMode::Free => None,
+            PointInputMode::ContrastSnap => self.find_contrast_point(pixel_hint),
+            PointInputMode::CenterlineSnap => self.find_centerline_point(pixel_hint),
         }
     }
 
@@ -761,154 +488,25 @@ impl CurcatApp {
     }
 
     fn find_contrast_point(&mut self, pixel_hint: Pos2) -> Option<Pos2> {
+        let behavior = SnapBehavior::Contrast {
+            feature_source: self.snap_feature_source,
+            threshold_kind: self.snap_threshold_kind,
+            threshold: self.contrast_threshold,
+        };
+        self.find_snap_point(pixel_hint, behavior)
+    }
+
+    fn find_centerline_point(&mut self, pixel_hint: Pos2) -> Option<Pos2> {
+        let behavior = SnapBehavior::Centerline {
+            threshold: self.centerline_threshold,
+        };
+        self.find_snap_point(pixel_hint, behavior)
+    }
+
+    fn find_snap_point(&mut self, pixel_hint: Pos2, behavior: SnapBehavior) -> Option<Pos2> {
         self.ensure_snap_maps();
         let cache = self.snap_maps.as_ref()?;
-        if cache.levels.is_empty() {
-            return None;
-        }
-        let radius = self.contrast_search_radius.max(1.0);
-        let (_, level) = cache.level_for_radius(radius);
-        let scale = u32_to_f32(level.scale);
-        let coarse_center = pos2(pixel_hint.x / scale, pixel_hint.y / scale);
-        let coarse_radius = (radius / scale).max(1.0);
-        let coarse_candidate = self.search_in_level(level, coarse_center, coarse_radius)?;
-        let coarse_base_pos = pos2(
-            coarse_candidate.pos.x * scale,
-            coarse_candidate.pos.y * scale,
-        );
-        let base_level = cache.levels.first().unwrap();
-        let refine_radius = (scale * 2.5).max(3.0);
-        let refined_candidate = self
-            .search_in_level(base_level, coarse_base_pos, refine_radius)
-            .map_or(coarse_base_pos, |cand| cand.pos);
-        Some(self.refine_snap_position(refined_candidate))
-    }
-
-    fn search_in_level(
-        &self,
-        level: &SnapMapLevel,
-        center: Pos2,
-        radius: f32,
-    ) -> Option<SnapCandidate> {
-        if radius <= 0.0 || level.size[0] < 3 || level.size[1] < 3 {
-            return None;
-        }
-        let width = i32::try_from(level.size[0]).ok()?;
-        let height = i32::try_from(level.size[1]).ok()?;
-        let radius = radius.max(1.0);
-        let radius_sq = radius * radius;
-        let reach = saturating_f32_to_i32(radius.ceil());
-        let center_x = center.x.clamp(1.0, i32_to_f32(width - 2));
-        let center_y = center.y.clamp(1.0, i32_to_f32(height - 2));
-        let cx = saturating_f32_to_i32(center_x.round());
-        let cy = saturating_f32_to_i32(center_y.round());
-        let min_x = (cx - reach).max(1);
-        let max_x = (cx + reach).min(width - 2);
-        let min_y = (cy - reach).max(1);
-        let max_y = (cy + reach).min(height - 2);
-        let mut best: Option<SnapCandidate> = None;
-
-        for y in min_y..=max_y {
-            for x in min_x..=max_x {
-                let xf = i32_to_f32(x);
-                let yf = i32_to_f32(y);
-                let dx = xf - center_x;
-                let dy = yf - center_y;
-                let dist_sq = dx * dx + dy * dy;
-                if dist_sq > radius_sq {
-                    continue;
-                }
-                let gradient = level.gradient_at(x, y);
-                let color_similarity = level.color_similarity_at(x, y);
-                let feature_strength = self.feature_strength(gradient, color_similarity);
-                if feature_strength <= 0.0 {
-                    continue;
-                }
-                if !self.threshold_passes(gradient, feature_strength) {
-                    continue;
-                }
-                let dist = dist_sq.sqrt();
-                let closeness = (1.0 - dist / radius).max(0.05);
-                let score = feature_strength * closeness;
-                let candidate = SnapCandidate {
-                    pos: pos2(xf, yf),
-                    score,
-                    dist,
-                };
-                let update = best.as_ref().is_none_or(|existing| {
-                    score > existing.score + 0.1
-                        || ((score - existing.score).abs() <= 0.1 && dist < existing.dist)
-                });
-                if update {
-                    best = Some(candidate);
-                }
-            }
-        }
-
-        best
-    }
-
-    fn refine_snap_position(&self, approx: Pos2) -> Pos2 {
-        let Some(cache) = &self.snap_maps else {
-            return approx;
-        };
-        let Some(level) = cache.levels.first() else {
-            return approx;
-        };
-        if level.size[0] < 3 || level.size[1] < 3 {
-            return approx;
-        }
-        let Ok(width) = i32::try_from(level.size[0]) else {
-            return approx;
-        };
-        let Ok(height) = i32::try_from(level.size[1]) else {
-            return approx;
-        };
-        let ax = saturating_f32_to_i32(approx.x.clamp(1.0, i32_to_f32(width - 2)).round());
-        let ay = saturating_f32_to_i32(approx.y.clamp(1.0, i32_to_f32(height - 2)).round());
-
-        let mut sum = 0.0;
-        let mut sx = 0.0;
-        let mut sy = 0.0;
-        for dy in -1..=1 {
-            for dx in -1..=1 {
-                let px = (ax + dx).clamp(0, width - 1);
-                let py = (ay + dy).clamp(0, height - 1);
-                let strength = self
-                    .feature_strength(level.gradient_at(px, py), level.color_similarity_at(px, py));
-                if strength <= 0.0 {
-                    continue;
-                }
-                sum += strength;
-                sx += strength * i32_to_f32(px);
-                sy += strength * i32_to_f32(py);
-            }
-        }
-        if sum > 0.0 {
-            pos2(
-                (sx / sum).clamp(0.0, i32_to_f32(width - 1)),
-                (sy / sum).clamp(0.0, i32_to_f32(height - 1)),
-            )
-        } else {
-            approx
-        }
-    }
-
-    fn feature_strength(&self, gradient: f32, color_similarity: f32) -> f32 {
-        let grad_strength = gradient.clamp(0.0, 255.0);
-        let color_strength = (color_similarity * 255.0).clamp(0.0, 255.0);
-        match self.snap_feature_source {
-            SnapFeatureSource::LumaGradient => grad_strength,
-            SnapFeatureSource::ColorMatch => color_strength,
-            SnapFeatureSource::Hybrid => 0.6 * grad_strength + 0.4 * color_strength,
-        }
-    }
-
-    fn threshold_passes(&self, gradient: f32, feature_strength: f32) -> bool {
-        match self.snap_threshold_kind {
-            SnapThresholdKind::Gradient => gradient >= self.contrast_threshold,
-            SnapThresholdKind::Score => feature_strength >= self.contrast_threshold,
-        }
+        cache.find_point(pixel_hint, self.contrast_search_radius, behavior)
     }
 
     fn sample_image_color(&self, pixel: Pos2) -> Option<Color32> {
@@ -917,8 +515,18 @@ impl CurcatApp {
         if w == 0 || h == 0 {
             return None;
         }
-        let x = clamp_pixel_coord(pixel.x, w);
-        let y = clamp_pixel_coord(pixel.y, h);
+        let clamp_coord = |coord: f32, len: usize| -> usize {
+            if len == 0 {
+                return 0;
+            }
+            let max = safe_usize_to_f32(len - 1);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            {
+                coord.round().clamp(0.0, max) as usize
+            }
+        };
+        let x = clamp_coord(pixel.x, w);
+        let y = clamp_coord(pixel.y, h);
         let idx = y * w + x;
         image.pixels.pixels.get(idx).copied()
     }
@@ -1238,7 +846,7 @@ impl CurcatApp {
                         if let Some(path) = meta.path() {
                             ui.label(format!("Path: {}", path.display()));
                         }
-                        if let Some(bytes) = meta.byte_len {
+                        if let Some(bytes) = meta.byte_len() {
                             ui.label(format!(
                                 "Size: {} ({bytes} bytes)",
                                 human_readable_bytes(bytes),
@@ -1246,7 +854,7 @@ impl CurcatApp {
                         } else {
                             ui.label("Size: Unknown");
                         }
-                        if let Some(modified) = meta.last_modified {
+                        if let Some(modified) = meta.last_modified() {
                             ui.label(format!("Modified: {}", format_system_time(modified),));
                         } else {
                             ui.label("Modified: Unknown");
@@ -1295,96 +903,100 @@ impl CurcatApp {
                 "Contrast snap",
             )
             .on_hover_text("Snap to the nearest high-contrast area inside the search radius");
+            ui.radio_value(
+                &mut self.point_input_mode,
+                PointInputMode::CenterlineSnap,
+                "Centerline snap",
+            )
+            .on_hover_text("Snap to the centerline of the color-matched curve");
         });
-        if self.point_input_mode == PointInputMode::ContrastSnap {
-            ui.add_space(4.0);
-            ui.label("Search radius (px)").on_hover_text(
-                "Measured in image pixels; smaller values keep snapping near the cursor",
-            );
-            ui.spacing_mut().slider_width = 150.0;
-            ui.add(
-                egui::Slider::new(&mut self.contrast_search_radius, 3.0..=60.0)
-                    .logarithmic(false)
-                    .clamping(egui::SliderClamping::Always)
-                    .text("px"),
-            )
-            .on_hover_text("Radius used to look for contrast");
-            ui.add_space(4.0);
-            ui.label("Feature source")
-                .on_hover_text("Choose what the snapper looks at when searching for a candidate");
-            egui::ComboBox::from_id_salt("snap_feature_source")
-                .selected_text(self.snap_feature_source.label())
-                .show_ui(ui, |ui| {
-                    for variant in SnapFeatureSource::ALL {
-                        ui.selectable_value(
-                            &mut self.snap_feature_source,
-                            variant,
-                            variant.label(),
-                        );
-                    }
-                });
-            if matches!(
-                self.snap_feature_source,
-                SnapFeatureSource::ColorMatch | SnapFeatureSource::Hybrid
-            ) {
+        match self.point_input_mode {
+            PointInputMode::Free => {}
+            PointInputMode::ContrastSnap => {
+                self.ui_snap_radius_slider(ui);
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label("Curve color:");
-                    let color_button = ui
-                        .color_edit_button_srgba(&mut self.snap_target_color)
-                        .on_hover_text("Target color for the curve");
-                    if color_button.changed() {
-                        self.mark_snap_maps_dirty();
-                    }
-                    if ui
-                        .button("Pick from image")
-                        .on_hover_text("Click, then select a pixel on the image")
-                        .clicked()
-                    {
-                        self.pick_mode = PickMode::CurveColor;
-                        self.set_status("Click on the image to sample the curve color.");
-                    }
-                });
-                let tol_resp = ui
-                    .add(
-                        egui::Slider::new(&mut self.snap_color_tolerance, 5.0..=150.0)
-                            .text("tolerance")
-                            .clamping(egui::SliderClamping::Always),
-                    )
-                    .on_hover_text("How far the pixel color may deviate from the picked color");
-                if tol_resp.changed() {
-                    self.mark_snap_maps_dirty();
+                ui.label("Feature source").on_hover_text(
+                    "Choose what the snapper looks at when searching for a candidate",
+                );
+                egui::ComboBox::from_id_salt("snap_feature_source")
+                    .selected_text(self.snap_feature_source.label())
+                    .show_ui(ui, |ui| {
+                        for variant in SnapFeatureSource::ALL {
+                            ui.selectable_value(
+                                &mut self.snap_feature_source,
+                                variant,
+                                variant.label(),
+                            );
+                        }
+                    });
+                if matches!(
+                    self.snap_feature_source,
+                    SnapFeatureSource::ColorMatch | SnapFeatureSource::Hybrid
+                ) {
+                    self.ui_curve_color_controls(ui);
                 }
+                ui.add_space(4.0);
+                ui.label("Threshold mode")
+                    .on_hover_text("Select how the detector decides if a pixel is strong enough");
+                ui.horizontal(|ui| {
+                    ui.radio_value(
+                        &mut self.snap_threshold_kind,
+                        SnapThresholdKind::Gradient,
+                        SnapThresholdKind::Gradient.label(),
+                    )
+                    .on_hover_text("Compare threshold against raw gradient strength");
+                    ui.radio_value(
+                        &mut self.snap_threshold_kind,
+                        SnapThresholdKind::Score,
+                        SnapThresholdKind::Score.label(),
+                    )
+                    .on_hover_text("Compare threshold against combined feature score");
+                });
+                let threshold_range =
+                    if matches!(self.snap_threshold_kind, SnapThresholdKind::Gradient) {
+                        0.0..=120.0
+                    } else {
+                        0.0..=255.0
+                    };
+                ui.add(
+                    egui::Slider::new(&mut self.contrast_threshold, threshold_range)
+                        .text("threshold")
+                        .clamping(egui::SliderClamping::Always),
+                )
+                .on_hover_text("Higher = snap only to strong candidates");
             }
-            ui.add_space(4.0);
-            ui.label("Threshold mode")
-                .on_hover_text("Select how the detector decides if a pixel is strong enough");
-            ui.horizontal(|ui| {
-                ui.radio_value(
-                    &mut self.snap_threshold_kind,
-                    SnapThresholdKind::Gradient,
-                    SnapThresholdKind::Gradient.label(),
+            PointInputMode::CenterlineSnap => {
+                self.ui_snap_radius_slider(ui);
+                ui.label("Centerline detects flat color interiors")
+                    .on_hover_text(
+                        "Pick the curve color to help the detector focus on the intended line",
+                    );
+                self.ui_curve_color_controls(ui);
+                ui.add_space(4.0);
+                ui.label("Strength threshold")
+                    .on_hover_text("Rejects weak centerline matches");
+                ui.spacing_mut().slider_width = 150.0;
+                ui.add(
+                    egui::Slider::new(&mut self.centerline_threshold, 0.0..=255.0)
+                        .text("threshold")
+                        .clamping(egui::SliderClamping::Always),
                 )
-                .on_hover_text("Compare threshold against raw gradient strength");
-                ui.radio_value(
-                    &mut self.snap_threshold_kind,
-                    SnapThresholdKind::Score,
-                    SnapThresholdKind::Score.label(),
-                )
-                .on_hover_text("Compare threshold against combined feature score");
-            });
-            let threshold_range = if matches!(self.snap_threshold_kind, SnapThresholdKind::Gradient)
-            {
-                0.0..=120.0
-            } else {
-                0.0..=255.0
-            };
-            ui.add(
-                egui::Slider::new(&mut self.contrast_threshold, threshold_range)
-                    .text("threshold")
-                    .clamping(egui::SliderClamping::Always),
-            )
-            .on_hover_text("Higher = snap only to strong candidates");
+                .on_hover_text("Higher = snap only to well-defined line centers");
+                ui.scope(|ui| {
+                    ui.style_mut().spacing.item_spacing.x = 4.0;
+                    ui.label(
+                        RichText::new(
+                            "Best results come from sampling the curve color before snapping.",
+                        )
+                        .small(),
+                    );
+                });
+            }
+        }
+        if matches!(
+            self.point_input_mode,
+            PointInputMode::ContrastSnap | PointInputMode::CenterlineSnap
+        ) {
             ui.scope(|ui| {
                 ui.style_mut().spacing.item_spacing.x = 4.0;
                 ui.label(
@@ -1804,18 +1416,21 @@ impl CurcatApp {
 
                 let pointer_pos = response.interact_pointer_pos();
                 let hover_pos = response.hover_pos();
-                let (shift_pressed, primary_down, delete_down) = ui.ctx().input(|i| {
-                    (
-                        i.modifiers.shift,
-                        i.pointer.button_down(PointerButton::Primary),
-                        i.key_down(Key::Delete),
-                    )
-                });
+                let (shift_pressed, primary_down, delete_down, ctrl_pressed) =
+                    ui.ctx().input(|i| {
+                        (
+                            i.modifiers.shift,
+                            i.pointer.button_down(PointerButton::Primary),
+                            i.key_down(Key::Delete),
+                            i.modifiers.ctrl,
+                        )
+                    });
                 let pointer_pixel = hover_pos.map(&to_pixel);
-                let snap_preview = if self.point_input_mode == PointInputMode::ContrastSnap
+                let snap_preview = if !matches!(self.point_input_mode, PointInputMode::Free)
+                    && !matches!(self.pick_mode, PickMode::CurveColor)
                     && let Some(pixel) = pointer_pixel
                 {
-                    self.find_contrast_point(pixel)
+                    self.compute_snap_candidate(pixel)
                 } else {
                     None
                 };
@@ -2013,7 +1628,11 @@ impl CurcatApp {
                     );
                 }
 
-                if self.point_input_mode == PointInputMode::ContrastSnap {
+                if matches!(
+                    self.point_input_mode,
+                    PointInputMode::ContrastSnap | PointInputMode::CenterlineSnap
+                ) && !matches!(self.pick_mode, PickMode::CurveColor)
+                {
                     if let Some(pixel) = pointer_pixel {
                         let screen = rect.min + pixel.to_vec2() * self.image_zoom;
                         let radius = (self.contrast_search_radius * self.image_zoom).max(4.0);
@@ -2113,10 +1732,14 @@ impl CurcatApp {
                         painter.galley(label_pos + padding, galley, text_color);
                     }
 
-                    if let Some(icon) = if delete_down {
+                    if let Some(icon) = if matches!(self.pick_mode, PickMode::CurveColor) {
+                        Some("🧪")
+                    } else if delete_down {
                         Some("🗑")
                     } else if shift_pressed {
                         Some("✋")
+                    } else if ctrl_pressed {
+                        Some("🔍")
                     } else {
                         None
                     } {
@@ -2385,55 +2008,6 @@ impl eframe::App for CurcatApp {
             self.active_dialog = None;
         }
     }
-}
-
-#[allow(clippy::cast_precision_loss)]
-fn human_readable_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit_idx = 0;
-    while value >= 1024.0 && unit_idx < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit_idx += 1;
-    }
-    if unit_idx == 0 {
-        format!("{bytes} {}", UNITS[unit_idx])
-    } else {
-        format!("{value:.2} {}", UNITS[unit_idx])
-    }
-}
-
-fn format_system_time(time: SystemTime) -> String {
-    let datetime: DateTime<Utc> = DateTime::from(time);
-    datetime.format("%Y-%m-%d %H:%M:%S %Z").to_string()
-}
-
-#[allow(clippy::cast_precision_loss)]
-fn describe_aspect_ratio(size: [usize; 2]) -> Option<String> {
-    let [w, h] = size;
-    if w == 0 || h == 0 {
-        return None;
-    }
-    let divisor = gcd_usize(w, h);
-    let simple_w = w / divisor;
-    let simple_h = h / divisor;
-    let approx = w as f64 / h as f64;
-    Some(format!("{simple_w}:{simple_h} (~{approx:.3}:1)"))
-}
-
-fn total_pixel_count(size: [usize; 2]) -> u64 {
-    let w = u64::try_from(size[0]).unwrap_or(u64::MAX);
-    let h = u64::try_from(size[1]).unwrap_or(u64::MAX);
-    w.saturating_mul(h)
-}
-
-const fn gcd_usize(mut a: usize, mut b: usize) -> usize {
-    while b != 0 {
-        let tmp = a % b;
-        a = b;
-        b = tmp;
-    }
-    if a == 0 { 1 } else { a }
 }
 
 fn toggle_switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
