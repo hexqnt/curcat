@@ -8,8 +8,8 @@ use crate::interp::{InterpAlgorithm, XYPoint, interpolate_sorted};
 use crate::snap::{SnapBehavior, SnapFeatureSource, SnapMapCache, SnapThresholdKind};
 use crate::types::{AxisMapping, AxisUnit, AxisValue, ScaleKind, parse_axis_value};
 use egui::{
-    Color32, Context, CornerRadius, Key, PointerButton, Pos2, Response, RichText, Sense,
-    StrokeKind, TextBuffer, TextEdit, Vec2, lerp, pos2,
+    Color32, ColorImage, Context, CornerRadius, Key, PointerButton, Pos2, Response, RichText,
+    Sense, StrokeKind, TextBuffer, TextEdit, Vec2, lerp, pos2,
     text::{CCursor, CCursorRange},
 };
 
@@ -89,6 +89,59 @@ enum ExportKind {
     RawPoints,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ImageColorStats {
+    avg_rgb: [f32; 3],
+    avg_luma: f32,
+    hue: f32,
+    saturation: f32,
+}
+
+impl ImageColorStats {
+    fn from_image(image: &ColorImage) -> Option<Self> {
+        let total_pixels = image.pixels.len();
+        if total_pixels == 0 {
+            return None;
+        }
+        let step = (total_pixels / SNAP_COLOR_SAMPLE_TARGET).max(1);
+        let mut sum_r = 0.0_f32;
+        let mut sum_g = 0.0_f32;
+        let mut sum_b = 0.0_f32;
+        let mut sum_luma = 0.0_f32;
+        let mut samples = 0_usize;
+        for color in image.pixels.iter().step_by(step) {
+            let [r, g, b, _] = color.to_array();
+            let rf = f32::from(r);
+            let gf = f32::from(g);
+            let bf = f32::from(b);
+            sum_r += rf;
+            sum_g += gf;
+            sum_b += bf;
+            sum_luma += srgb_luminance_components(rf, gf, bf);
+            samples += 1;
+        }
+        if samples == 0 {
+            return None;
+        }
+        let sample_count = samples as f32;
+        let avg_r = sum_r / sample_count;
+        let avg_g = sum_g / sample_count;
+        let avg_b = sum_b / sample_count;
+        let avg_luma = sum_luma / sample_count;
+        let (hue, saturation, _value) = rgb_to_hsv(
+            (avg_r / 255.0).clamp(0.0, 1.0),
+            (avg_g / 255.0).clamp(0.0, 1.0),
+            (avg_b / 255.0).clamp(0.0, 1.0),
+        );
+        Some(Self {
+            avg_rgb: [avg_r, avg_g, avg_b],
+            avg_luma,
+            hue,
+            saturation,
+        })
+    }
+}
+
 const ZOOM_PRESETS: &[f32] = &[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0];
 const MIN_ZOOM: f32 = 0.25;
 const MAX_ZOOM: f32 = 8.0;
@@ -99,6 +152,10 @@ const ATTENTION_BLINK_SPEED: f32 = 2.2;
 const ATTENTION_ALPHA_MIN: f32 = 0.35;
 const ATTENTION_ALPHA_MAX: f32 = 1.0;
 const ATTENTION_OUTLINE_PAD: f32 = 2.0;
+const SNAP_COLOR_SAMPLE_TARGET: usize = 50_000;
+const SNAP_MAX_COLOR_DISTANCE: f32 = 441.67294;
+const SNAP_HUE_OFFSETS: [f32; 5] = [-45.0, -10.0, 15.0, 40.0, 70.0];
+const SNAP_SWATCH_SIZE: f32 = 22.0;
 
 fn format_overlay_value(value: &AxisValue) -> String {
     match value {
@@ -265,6 +322,9 @@ pub struct CurcatApp {
     snap_color_tolerance: f32,
     snap_maps: Option<SnapMapCache>,
     snap_maps_dirty: bool,
+    snap_overlay_color: Color32,
+    snap_overlay_choices: Vec<Color32>,
+    snap_overlay_choice: usize,
     sample_count: usize,
     active_dialog: Option<NativeDialog>,
     config: AppConfig,
@@ -283,6 +343,11 @@ pub struct CurcatApp {
 
 impl Default for CurcatApp {
     fn default() -> Self {
+        let default_overlay_choices = Self::default_snap_overlay_choices();
+        let default_overlay_color = default_overlay_choices
+            .first()
+            .copied()
+            .unwrap_or(Color32::from_rgb(236, 214, 96));
         Self {
             image: None,
             image_meta: None,
@@ -316,6 +381,9 @@ impl Default for CurcatApp {
             snap_color_tolerance: 30.0,
             snap_maps: None,
             snap_maps_dirty: true,
+            snap_overlay_color: default_overlay_color,
+            snap_overlay_choices: default_overlay_choices,
+            snap_overlay_choice: 0,
             sample_count: 200,
             active_dialog: None,
             config: AppConfig::load(),
@@ -335,6 +403,76 @@ impl Default for CurcatApp {
 }
 
 impl CurcatApp {
+    fn default_snap_overlay_choices() -> Vec<Color32> {
+        vec![
+            Color32::from_rgb(236, 214, 96),
+            Color32::from_rgb(66, 123, 176),
+            Color32::from_rgb(184, 102, 128),
+            Color32::from_rgb(72, 138, 96),
+        ]
+    }
+
+    fn refresh_snap_overlay_palette(&mut self) {
+        let previous_choice = self
+            .snap_overlay_choices
+            .get(self.snap_overlay_choice)
+            .copied()
+            .or(Some(self.snap_overlay_color));
+        let analyzed = self.image.as_ref().map_or_else(Vec::new, |img| {
+            Self::analyze_image_for_snap_colors(&img.pixels)
+        });
+        let derived_choices = if analyzed.is_empty() {
+            Self::default_snap_overlay_choices()
+        } else {
+            analyzed
+        };
+        let new_index = if let Some(prev) = previous_choice
+            && let Some(idx) = derived_choices.iter().position(|color| *color == prev)
+        {
+            idx
+        } else {
+            0
+        };
+        self.snap_overlay_choice = new_index;
+        self.snap_overlay_color = derived_choices
+            .get(new_index)
+            .copied()
+            .unwrap_or(self.snap_overlay_color);
+        self.snap_overlay_choices = derived_choices;
+    }
+
+    fn analyze_image_for_snap_colors(image: &ColorImage) -> Vec<Color32> {
+        let Some(stats) = ImageColorStats::from_image(image) else {
+            return Self::default_snap_overlay_choices();
+        };
+        let base_hue = if stats.saturation < 0.08 {
+            if stats.avg_luma >= 128.0 { 215.0 } else { 35.0 }
+        } else {
+            wrap_hue(stats.hue + 180.0)
+        };
+        let saturation = (0.45 + (1.0 - stats.saturation) * 0.35).clamp(0.35, 0.7);
+        let values = highlight_value_candidates(stats.avg_luma);
+        let mut options: Vec<(Color32, f32)> = Vec::new();
+        for (idx, offset) in SNAP_HUE_OFFSETS.iter().enumerate() {
+            let hue = wrap_hue(base_hue + *offset);
+            let value = values[idx % values.len()];
+            let color = hsv_to_color32(hue, saturation, value);
+            options.push((color, snap_color_score(color, &stats)));
+        }
+        for neutral in [
+            Color32::from_rgb(240, 240, 240),
+            Color32::from_rgb(32, 32, 32),
+        ] {
+            options.push((neutral, snap_color_score(neutral, &stats)));
+        }
+        options.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        options
+            .into_iter()
+            .map(|(color, _)| color)
+            .take(4)
+            .collect()
+    }
+
     fn ui_snap_radius_slider(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         ui.label("Search radius (px)").on_hover_text(
@@ -379,6 +517,47 @@ impl CurcatApp {
         if tol_resp.changed() {
             self.mark_snap_maps_dirty();
         }
+    }
+
+    fn ui_snap_overlay_color_selector(&mut self, ui: &mut egui::Ui) {
+        if self.snap_overlay_choices.is_empty() {
+            return;
+        }
+        ui.add_space(4.0);
+        ui.label("Snap overlay color")
+            .on_hover_text("Choices are derived from the image to keep the snap preview visible");
+        ui.horizontal_wrapped(|ui| {
+            ui.style_mut().spacing.item_spacing.x = 6.0;
+            for (idx, color) in self.snap_overlay_choices.iter().enumerate() {
+                let selected = idx == self.snap_overlay_choice;
+                let (rect, response) =
+                    ui.allocate_exact_size(Vec2::splat(SNAP_SWATCH_SIZE), Sense::click());
+                if ui.is_rect_visible(rect) {
+                    let stroke_color = if selected {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_gray(90)
+                    };
+                    let stroke_width = if selected { 2.0 } else { 1.0 };
+                    let rounding = CornerRadius::same(4);
+                    ui.painter().rect_filled(rect, rounding, *color);
+                    ui.painter().rect_stroke(
+                        rect,
+                        rounding,
+                        egui::Stroke::new(stroke_width, stroke_color),
+                        StrokeKind::Outside,
+                    );
+                }
+                if response.clicked() {
+                    self.snap_overlay_choice = idx;
+                    self.snap_overlay_color = *color;
+                }
+                response.on_hover_ui(|ui| {
+                    let [r, g, b, _] = color.to_array();
+                    ui.label(format!("RGB {r}, {g}, {b}"));
+                });
+            }
+        });
     }
 
     fn open_image_dialog(&mut self) {
@@ -577,6 +756,7 @@ impl CurcatApp {
         self.touch_pan_active = false;
         self.touch_pan_last = None;
         self.mark_snap_maps_dirty();
+        self.refresh_snap_overlay_palette();
     }
 
     fn set_loaded_image(&mut self, image: LoadedImage, meta: Option<ImageMeta>) {
@@ -914,6 +1094,7 @@ impl CurcatApp {
             PointInputMode::Free => {}
             PointInputMode::ContrastSnap => {
                 self.ui_snap_radius_slider(ui);
+                self.ui_snap_overlay_color_selector(ui);
                 ui.add_space(4.0);
                 ui.label("Feature source").on_hover_text(
                     "Choose what the snapper looks at when searching for a candidate",
@@ -967,6 +1148,7 @@ impl CurcatApp {
             }
             PointInputMode::CenterlineSnap => {
                 self.ui_snap_radius_slider(ui);
+                self.ui_snap_overlay_color_selector(ui);
                 ui.label("Centerline detects flat color interiors")
                     .on_hover_text(
                         "Pick the curve color to help the detector focus on the intended line",
@@ -1639,7 +1821,7 @@ impl CurcatApp {
                         painter.circle_stroke(
                             screen,
                             radius,
-                            egui::Stroke::new(1.0, Color32::YELLOW),
+                            egui::Stroke::new(1.2, self.snap_overlay_color),
                         );
                     }
                     if let Some(preview) = snap_preview {
@@ -1647,9 +1829,9 @@ impl CurcatApp {
                         painter.circle_stroke(
                             screen,
                             (point_radius + 4.0).max(6.0),
-                            egui::Stroke::new(1.0, Color32::YELLOW),
+                            egui::Stroke::new(1.2, self.snap_overlay_color),
                         );
-                        painter.circle_filled(screen, 3.0, Color32::YELLOW);
+                        painter.circle_filled(screen, 3.0, self.snap_overlay_color);
                     }
                 }
 
@@ -1885,6 +2067,88 @@ impl CurcatApp {
         }
         values
     }
+}
+
+fn srgb_luminance_components(r: f32, g: f32, b: f32) -> f32 {
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+fn srgb_luminance(color: Color32) -> f32 {
+    let [r, g, b, _] = color.to_array();
+    srgb_luminance_components(f32::from(r), f32::from(g), f32::from(b))
+}
+
+fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+    let hue = if delta <= f32::EPSILON {
+        0.0
+    } else if (max - r).abs() <= f32::EPSILON {
+        60.0 * ((g - b) / delta).rem_euclid(6.0)
+    } else if (max - g).abs() <= f32::EPSILON {
+        60.0 * ((b - r) / delta + 2.0)
+    } else {
+        60.0 * ((r - g) / delta + 4.0)
+    };
+    let saturation = if max <= 0.0 { 0.0 } else { delta / max };
+    (wrap_hue(hue), saturation, max)
+}
+
+fn hsv_to_color32(hue: f32, saturation: f32, value: f32) -> Color32 {
+    let wrapped_hue = wrap_hue(hue);
+    let chroma = value * saturation;
+    let sector = (wrapped_hue / 60.0).rem_euclid(6.0);
+    let secondary = chroma * (1.0 - ((sector % 2.0) - 1.0).abs());
+    let match_value = value - chroma;
+    let (r1, g1, b1) = if sector < 1.0 {
+        (chroma, secondary, 0.0)
+    } else if sector < 2.0 {
+        (secondary, chroma, 0.0)
+    } else if sector < 3.0 {
+        (0.0, chroma, secondary)
+    } else if sector < 4.0 {
+        (0.0, secondary, chroma)
+    } else if sector < 5.0 {
+        (secondary, 0.0, chroma)
+    } else {
+        (chroma, 0.0, secondary)
+    };
+    let red = rounded_u8(((r1 + match_value) * 255.0).clamp(0.0, 255.0));
+    let green = rounded_u8(((g1 + match_value) * 255.0).clamp(0.0, 255.0));
+    let blue = rounded_u8(((b1 + match_value) * 255.0).clamp(0.0, 255.0));
+    Color32::from_rgb(red, green, blue)
+}
+
+fn wrap_hue(hue: f32) -> f32 {
+    if hue.is_finite() {
+        hue.rem_euclid(360.0)
+    } else {
+        0.0
+    }
+}
+
+fn highlight_value_candidates(avg_luma: f32) -> [f32; 3] {
+    let normalized = (avg_luma / 255.0).clamp(0.0, 1.0);
+    if normalized > 0.75 {
+        [0.2, 0.35, 0.5]
+    } else if normalized > 0.55 {
+        [0.3, 0.48, 0.64]
+    } else if normalized > 0.35 {
+        [0.45, 0.62, 0.8]
+    } else {
+        [0.92, 0.78, 0.62]
+    }
+}
+
+fn snap_color_score(color: Color32, stats: &ImageColorStats) -> f32 {
+    let luma_diff = (srgb_luminance(color) - stats.avg_luma).abs() / 255.0;
+    let [r, g, b, _] = color.to_array();
+    let dr = f32::from(r) - stats.avg_rgb[0];
+    let dg = f32::from(g) - stats.avg_rgb[1];
+    let db = f32::from(b) - stats.avg_rgb[2];
+    let color_diff = (dr * dr + dg * dg + db * db).sqrt() / SNAP_MAX_COLOR_DISTANCE;
+    (luma_diff * 0.7 + color_diff * 0.3).clamp(0.0, 1.0)
 }
 
 impl eframe::App for CurcatApp {
