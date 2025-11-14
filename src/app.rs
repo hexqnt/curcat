@@ -14,6 +14,7 @@ use egui::{
 };
 
 use egui_file_dialog::{DialogState, FileDialog};
+use rayon::prelude::*;
 use std::{any::TypeId, cmp::Ordering, convert::TryFrom, ops::Range, path::Path, time::Duration};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,22 +105,51 @@ impl ImageColorStats {
             return None;
         }
         let step = (total_pixels / SNAP_COLOR_SAMPLE_TARGET).max(1);
-        let mut sum_r = 0.0_f32;
-        let mut sum_g = 0.0_f32;
-        let mut sum_b = 0.0_f32;
-        let mut sum_luma = 0.0_f32;
-        let mut samples = 0_usize;
-        for color in image.pixels.iter().step_by(step) {
-            let [r, g, b, _] = color.to_array();
-            let rf = f32::from(r);
-            let gf = f32::from(g);
-            let bf = f32::from(b);
-            sum_r += rf;
-            sum_g += gf;
-            sum_b += bf;
-            sum_luma += srgb_luminance_components(rf, gf, bf);
-            samples += 1;
-        }
+        let (sum_r, sum_g, sum_b, sum_luma, samples) =
+            if total_pixels <= SNAP_PARALLEL_STATS_MIN_PIXELS {
+                let mut sum_r = 0.0_f32;
+                let mut sum_g = 0.0_f32;
+                let mut sum_b = 0.0_f32;
+                let mut sum_luma = 0.0_f32;
+                let mut samples = 0_usize;
+                for color in image.pixels.iter().step_by(step) {
+                    let [r, g, b, _] = color.to_array();
+                    let rf = f32::from(r);
+                    let gf = f32::from(g);
+                    let bf = f32::from(b);
+                    sum_r += rf;
+                    sum_g += gf;
+                    sum_b += bf;
+                    sum_luma += srgb_luminance_components(rf, gf, bf);
+                    samples += 1;
+                }
+                (sum_r, sum_g, sum_b, sum_luma, samples)
+            } else {
+                image
+                    .pixels
+                    .par_chunks(step)
+                    .map(|chunk| {
+                        let color = chunk[0];
+                        let [r, g, b, _] = color.to_array();
+                        let rf = f32::from(r);
+                        let gf = f32::from(g);
+                        let bf = f32::from(b);
+                        let luma = srgb_luminance_components(rf, gf, bf);
+                        (rf, gf, bf, luma, 1_usize)
+                    })
+                    .reduce(
+                        || (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0_usize),
+                        |acc, val| {
+                            (
+                                acc.0 + val.0,
+                                acc.1 + val.1,
+                                acc.2 + val.2,
+                                acc.3 + val.3,
+                                acc.4 + val.4,
+                            )
+                        },
+                    )
+            };
         if samples == 0 {
             return None;
         }
@@ -156,6 +186,7 @@ const SNAP_COLOR_SAMPLE_TARGET: usize = 50_000;
 const SNAP_MAX_COLOR_DISTANCE: f32 = 441.67294;
 const SNAP_HUE_OFFSETS: [f32; 5] = [-45.0, -10.0, 15.0, 40.0, 70.0];
 const SNAP_SWATCH_SIZE: f32 = 22.0;
+const SNAP_PARALLEL_STATS_MIN_PIXELS: usize = 8_192;
 
 fn format_overlay_value(value: &AxisValue) -> String {
     match value {

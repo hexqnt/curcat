@@ -1,4 +1,5 @@
 use egui::{Color32, ColorImage, Pos2, pos2};
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapFeatureSource {
@@ -117,27 +118,36 @@ impl SnapMapLevel {
         let size = image.size;
         let len = size[0] * size[1];
         let mut luminance = vec![0.0_f32; len];
-        for (idx, color) in image.pixels.iter().enumerate() {
-            luminance[idx] = color_luminance(*color);
-        }
+        let mut color_similarity = vec![0.0_f32; len];
+        luminance
+            .par_iter_mut()
+            .zip(color_similarity.par_iter_mut())
+            .zip(image.pixels.par_iter())
+            .for_each(|((lum, similarity), color)| {
+                *lum = color_luminance(*color);
+                *similarity = color_similarity_value(*color, target, tolerance);
+            });
         let mut gradient = vec![0.0_f32; len];
         let width = size[0];
         let height = size[1];
         if width >= 3 && height >= 3 {
-            for y in 1..(height - 1) {
-                for x in 1..(width - 1) {
-                    let idx = y * width + x;
-                    let gx = luminance[idx + 1] - luminance[idx - 1];
-                    let gy = luminance[idx + width] - luminance[idx - width];
-                    gradient[idx] = gx.hypot(gy).min(255.0);
-                }
-            }
+            let lum_slice = &luminance;
+            gradient
+                .par_chunks_mut(width)
+                .enumerate()
+                .for_each(|(y, row)| {
+                    if y == 0 || y + 1 == height {
+                        return;
+                    }
+                    for x in 1..(width - 1) {
+                        let idx = y * width + x;
+                        let gx = lum_slice[idx + 1] - lum_slice[idx - 1];
+                        let gy = lum_slice[idx + width] - lum_slice[idx - width];
+                        row[x] = gx.hypot(gy).min(255.0);
+                    }
+                });
         }
 
-        let mut color_similarity = vec![0.0_f32; len];
-        for (idx, color) in image.pixels.iter().enumerate() {
-            color_similarity[idx] = color_similarity_value(*color, target, tolerance);
-        }
         Self {
             size,
             scale: 1,
@@ -158,28 +168,31 @@ impl SnapMapLevel {
         }
         let mut gradient = vec![0.0; new_w * new_h];
         let mut color_similarity = vec![0.0; new_w * new_h];
-        for y in 0..new_h {
-            for x in 0..new_w {
-                let mut g_sum = 0.0;
-                let mut c_sum = 0.0;
-                let mut count = 0.0;
-                for dy in 0..2 {
-                    for dx in 0..2 {
-                        let sx = x * 2 + dx;
-                        let sy = y * 2 + dy;
-                        if sx < w && sy < h {
-                            let idx = sy * w + sx;
-                            g_sum += prev.gradient[idx];
-                            c_sum += prev.color_similarity[idx];
-                            count += 1.0;
+        gradient
+            .par_chunks_mut(new_w)
+            .zip(color_similarity.par_chunks_mut(new_w))
+            .enumerate()
+            .for_each(|(y, (grad_row, color_row))| {
+                for x in 0..new_w {
+                    let mut g_sum = 0.0;
+                    let mut c_sum = 0.0;
+                    let mut count = 0.0;
+                    for dy in 0..2 {
+                        for dx in 0..2 {
+                            let sx = x * 2 + dx;
+                            let sy = y * 2 + dy;
+                            if sx < w && sy < h {
+                                let idx = sy * w + sx;
+                                g_sum += prev.gradient[idx];
+                                c_sum += prev.color_similarity[idx];
+                                count += 1.0;
+                            }
                         }
                     }
+                    grad_row[x] = if count > 0.0 { g_sum / count } else { 0.0 };
+                    color_row[x] = if count > 0.0 { c_sum / count } else { 0.0 };
                 }
-                let idx = y * new_w + x;
-                gradient[idx] = if count > 0.0 { g_sum / count } else { 0.0 };
-                color_similarity[idx] = if count > 0.0 { c_sum / count } else { 0.0 };
-            }
-        }
+            });
         Some(Self {
             size: [new_w, new_h],
             scale: prev.scale * 2,

@@ -4,6 +4,7 @@ use egui::{Color32, ColorImage, Context, TextureHandle, TextureOptions};
 use image::GenericImageView;
 use image::ImageReader;
 use image::Limits;
+use rayon::prelude::*;
 use std::io::{BufRead, Cursor, Read, Seek};
 use std::path::Path;
 
@@ -21,40 +22,46 @@ impl LoadedImage {
     }
 
     pub fn rotate_90_cw(&mut self) {
-        let [w, h] = self.size;
-        if w == 0 || h == 0 {
+        let [width, height] = self.size;
+        if width == 0 || height == 0 {
             return;
         }
-        let mut rotated = ColorImage::new([h, w], vec![Color32::TRANSPARENT; w * h]);
-        for y in 0..h {
-            for x in 0..w {
-                let src_idx = y * w + x;
-                let new_x = h - 1 - y;
-                let new_y = x;
-                let dst_idx = new_y * h + new_x;
-                rotated.pixels[dst_idx] = self.pixels.pixels[src_idx];
-            }
-        }
-        self.pixels = rotated;
+        let new_width = height;
+        let total_pixels = width * height;
+        let rotated_pixels: Vec<Color32> = (0..total_pixels)
+            .into_par_iter()
+            .map(|idx| {
+                let dx = idx % new_width;
+                let dy = idx / new_width;
+                let src_x = dy;
+                let src_y = new_width - 1 - dx;
+                let src_idx = src_y * width + src_x;
+                self.pixels.pixels[src_idx]
+            })
+            .collect();
+        self.pixels = ColorImage::new([height, width], rotated_pixels);
         self.refresh_texture();
     }
 
     pub fn rotate_90_ccw(&mut self) {
-        let [w, h] = self.size;
-        if w == 0 || h == 0 {
+        let [width, height] = self.size;
+        if width == 0 || height == 0 {
             return;
         }
-        let mut rotated = ColorImage::new([h, w], vec![Color32::TRANSPARENT; w * h]);
-        for y in 0..h {
-            for x in 0..w {
-                let src_idx = y * w + x;
-                let new_x = y;
-                let new_y = w - 1 - x;
-                let dst_idx = new_y * h + new_x;
-                rotated.pixels[dst_idx] = self.pixels.pixels[src_idx];
-            }
-        }
-        self.pixels = rotated;
+        let new_width = height;
+        let total_pixels = width * height;
+        let rotated_pixels: Vec<Color32> = (0..total_pixels)
+            .into_par_iter()
+            .map(|idx| {
+                let dx = idx % new_width;
+                let dy = idx / new_width;
+                let src_y = dx;
+                let src_x = width - 1 - dy;
+                let src_idx = src_y * width + src_x;
+                self.pixels.pixels[src_idx]
+            })
+            .collect();
+        self.pixels = ColorImage::new([height, width], rotated_pixels);
         self.refresh_texture();
     }
 }
