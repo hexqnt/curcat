@@ -3,6 +3,31 @@ use egui::Pos2;
 
 const NANOS_PER_SEC: f64 = 1_000_000_000.0;
 const NANOS_I64: i64 = 1_000_000_000;
+const DEFAULT_FLOAT_DECIMALS: usize = 6;
+
+const TZ_FORMATS: [&str; 4] = [
+    "%Y-%m-%d %H:%M:%S%.f%:z",
+    "%Y-%m-%dT%H:%M:%S%.f%:z",
+    "%Y/%m/%d %H:%M:%S%.f%:z",
+    "%d.%m.%Y %H:%M:%S%.f%:z",
+];
+
+const DATETIME_FORMATS: [&str; 12] = [
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M:%S%.f",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S%.f",
+    "%Y-%m-%dT%H:%M",
+    "%Y/%m/%d %H:%M:%S",
+    "%Y/%m/%d %H:%M:%S%.f",
+    "%Y/%m/%d %H:%M",
+    "%d.%m.%Y %H:%M:%S",
+    "%d.%m.%Y %H:%M:%S%.f",
+    "%d.%m.%Y %H:%M",
+];
+
+const DATE_FORMATS: [&str; 5] = ["%Y-%m-%d", "%Y/%m/%d", "%d.%m.%Y", "%d/%m/%Y", "%m/%d/%Y"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScaleKind {
@@ -60,10 +85,26 @@ impl AxisValue {
 
     pub fn format(&self) -> String {
         match self {
-            Self::Float(v) => format!("{v}"),
+            Self::Float(v) => format_float(*v),
             Self::DateTime(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
         }
     }
+}
+
+fn format_float(value: f64) -> String {
+    let mut text = format!("{value:.DEFAULT_FLOAT_DECIMALS$}");
+    if let Some(dot) = text.find('.') {
+        let mut end = text.len();
+        while end > dot + 1 && text.as_bytes()[end - 1] == b'0' {
+            end -= 1;
+        }
+        if end > dot + 1 {
+            text.truncate(end);
+        } else {
+            text.truncate(dot);
+        }
+    }
+    if text == "-0" { "0".to_string() } else { text }
 }
 
 const fn int_to_f64(value: i64) -> f64 {
@@ -96,31 +137,31 @@ pub fn parse_axis_value(input: &str, unit: AxisUnit) -> Option<AxisValue> {
 
 fn parse_datetime(input: &str) -> Option<NaiveDateTime> {
     let s = input.trim();
-    // Try several common formats
-    let fmts = [
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y/%m/%d %H:%M:%S",
-        "%Y/%m/%d %H:%M",
-        "%d.%m.%Y %H:%M:%S",
-        "%d.%m.%Y %H:%M",
-        "%Y-%m-%d",
-        "%d.%m.%Y",
-        "%Y/%m/%d",
-    ];
-    for f in fmts {
-        if let Ok(dt) = NaiveDateTime::parse_from_str(s, f) {
+    if s.is_empty() {
+        return None;
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.naive_utc());
+    }
+    for fmt in TZ_FORMATS {
+        if let Ok(dt) = chrono::DateTime::parse_from_str(s, fmt) {
+            return Some(dt.naive_utc());
+        }
+    }
+    for fmt in DATETIME_FORMATS {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
             return Some(dt);
         }
-        if let Ok(d) = NaiveDate::parse_from_str(s, f) {
-            // Assume midnight
+    }
+    for fmt in DATE_FORMATS {
+        if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
             return Some(d.and_hms_opt(0, 0, 0).unwrap());
         }
     }
     None
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AxisMapping {
     pub p1: Pos2,
     pub p2: Pos2,

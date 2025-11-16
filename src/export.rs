@@ -1,6 +1,7 @@
 use crate::interp::XYPoint;
 use crate::types::{AxisUnit, AxisValue};
-use rust_xlsxwriter::{Format, Workbook, XlsxError};
+use chrono::{Datelike, Timelike};
+use rust_xlsxwriter::{ExcelDateTime, Format, Workbook, XlsxError};
 
 #[derive(Debug, Clone)]
 pub struct ExportPayload {
@@ -69,6 +70,7 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
     }
 
     let num_format = Format::new().set_num_format("0.0000");
+    let datetime_format = Format::new().set_num_format("yyyy-mm-dd hh:mm:ss");
     let blank_format = Format::new();
 
     for (i, p) in payload.points.iter().enumerate() {
@@ -79,7 +81,11 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
             }
             AxisUnit::DateTime => {
                 let xv = AxisValue::from_scalar_seconds(payload.x_unit, p.x);
-                worksheet.write_string(row, 0, xv.format())?;
+                if let Some(excel_dt) = axis_value_to_excel_datetime(&xv) {
+                    worksheet.write_datetime_with_format(row, 0, &excel_dt, &datetime_format)?;
+                } else {
+                    worksheet.write_string(row, 0, xv.format())?;
+                }
             }
         }
 
@@ -89,7 +95,11 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
             }
             AxisUnit::DateTime => {
                 let yv = AxisValue::from_scalar_seconds(payload.y_unit, p.y);
-                worksheet.write_string(row, 1, yv.format())?;
+                if let Some(excel_dt) = axis_value_to_excel_datetime(&yv) {
+                    worksheet.write_datetime_with_format(row, 1, &excel_dt, &datetime_format)?;
+                } else {
+                    worksheet.write_string(row, 1, yv.format())?;
+                }
             }
         }
 
@@ -108,4 +118,19 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
     }
 
     workbook.save(path)
+}
+
+fn axis_value_to_excel_datetime(value: &AxisValue) -> Option<ExcelDateTime> {
+    let AxisValue::DateTime(dt) = value else {
+        return None;
+    };
+    let year = u16::try_from(dt.year()).ok()?;
+    let month = u8::try_from(dt.month()).ok()?;
+    let day = u8::try_from(dt.day()).ok()?;
+    let hour = u16::try_from(dt.hour()).ok()?;
+    let minute = u8::try_from(dt.minute()).ok()?;
+    let second = u8::try_from(dt.second()).ok()?;
+    let millis = u16::try_from(dt.and_utc().timestamp_subsec_millis()).ok()?;
+    let base = ExcelDateTime::from_ymd(year, month, day).ok()?;
+    base.and_hms_milli(hour, minute, second, millis).ok()
 }

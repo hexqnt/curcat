@@ -3,7 +3,7 @@ use crate::export::{self, ExportExtraColumn, ExportPayload};
 use crate::image_info::{
     ImageMeta, describe_aspect_ratio, format_system_time, human_readable_bytes, total_pixel_count,
 };
-use crate::image_util::{LoadedImage, load_image_from_bytes, load_image_from_path};
+use crate::image_util::{LoadedImage, decode_image_from_bytes, decode_image_from_path};
 use crate::interp::{InterpAlgorithm, XYPoint, interpolate_sorted};
 use crate::snap::{SnapBehavior, SnapFeatureSource, SnapMapCache, SnapThresholdKind};
 use crate::types::{AxisMapping, AxisUnit, AxisValue, ScaleKind, parse_axis_value};
@@ -15,7 +15,16 @@ use egui::{
 
 use egui_file_dialog::{DialogState, FileDialog};
 use rayon::prelude::*;
-use std::{any::TypeId, cmp::Ordering, convert::TryFrom, ops::Range, path::Path, time::Duration};
+use std::{
+    any::TypeId,
+    cmp::Ordering,
+    convert::TryFrom,
+    ops::Range,
+    path::{Path, PathBuf},
+    sync::mpsc::{self, Receiver, TryRecvError},
+    thread,
+    time::{Duration, SystemTime},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PickMode {
@@ -33,6 +42,62 @@ enum AxisValueField {
     X2,
     Y1,
     Y2,
+}
+
+enum ImageLoadRequest {
+    Path(PathBuf),
+    Bytes(Vec<u8>),
+}
+
+struct PendingImageTask {
+    rx: Receiver<ImageLoadResult>,
+    meta: PendingImageMeta,
+}
+
+enum ImageLoadResult {
+    Success(ColorImage),
+    Error(String),
+}
+
+#[derive(Clone)]
+enum PendingImageMeta {
+    Path {
+        path: PathBuf,
+    },
+    DroppedBytes {
+        name: Option<String>,
+        byte_len: usize,
+        last_modified: Option<SystemTime>,
+    },
+}
+
+impl PendingImageMeta {
+    fn description(&self) -> String {
+        match self {
+            Self::Path { path } => path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map_or_else(|| path.display().to_string(), str::to_string),
+            Self::DroppedBytes { name, .. } => name
+                .as_deref()
+                .map_or_else(|| "dropped bytes".to_string(), str::to_string),
+        }
+    }
+
+    fn into_image_meta(self) -> ImageMeta {
+        match self {
+            Self::Path { path } => ImageMeta::from_path(&path),
+            Self::DroppedBytes {
+                name,
+                byte_len,
+                last_modified,
+            } => ImageMeta::from_dropped_bytes(name.as_deref(), byte_len, last_modified),
+        }
+    }
+}
+
+struct SnapBuildJob {
+    rx: Receiver<Option<SnapMapCache>>,
 }
 
 fn sanitize_axis_text(value: &mut String, unit: AxisUnit) {
@@ -337,12 +402,20 @@ impl PickedPoint {
 pub struct CurcatApp {
     image: Option<LoadedImage>,
     image_meta: Option<ImageMeta>,
+    pending_image_task: Option<PendingImageTask>,
     last_status: Option<String>,
     pick_mode: PickMode,
     pending_value_focus: Option<AxisValueField>,
     cal_x: AxisCalUi,
     cal_y: AxisCalUi,
     points: Vec<PickedPoint>,
+    points_numeric_dirty: bool,
+    cached_sorted_preview: Vec<(f64, Pos2)>,
+    cached_sorted_numeric: Vec<XYPoint>,
+    sorted_preview_dirty: bool,
+    sorted_numeric_dirty: bool,
+    last_x_mapping: Option<AxisMapping>,
+    last_y_mapping: Option<AxisMapping>,
     point_input_mode: PointInputMode,
     contrast_search_radius: f32,
     contrast_threshold: f32,
@@ -352,6 +425,7 @@ pub struct CurcatApp {
     snap_target_color: Color32,
     snap_color_tolerance: f32,
     snap_maps: Option<SnapMapCache>,
+    pending_snap_job: Option<SnapBuildJob>,
     snap_maps_dirty: bool,
     snap_overlay_color: Color32,
     snap_overlay_choices: Vec<Color32>,
@@ -382,6 +456,7 @@ impl Default for CurcatApp {
         Self {
             image: None,
             image_meta: None,
+            pending_image_task: None,
             last_status: None,
             pick_mode: PickMode::None,
             pending_value_focus: None,
@@ -402,6 +477,13 @@ impl Default for CurcatApp {
                 v2_text: String::new(),
             },
             points: Vec::new(),
+            points_numeric_dirty: true,
+            cached_sorted_preview: Vec::new(),
+            cached_sorted_numeric: Vec::new(),
+            sorted_preview_dirty: true,
+            sorted_numeric_dirty: true,
+            last_x_mapping: None,
+            last_y_mapping: None,
             point_input_mode: PointInputMode::Free,
             contrast_search_radius: 12.0,
             contrast_threshold: 12.0,
@@ -411,6 +493,7 @@ impl Default for CurcatApp {
             snap_target_color: Color32::from_rgb(200, 60, 60),
             snap_color_tolerance: 30.0,
             snap_maps: None,
+            pending_snap_job: None,
             snap_maps_dirty: true,
             snap_overlay_color: default_overlay_color,
             snap_overlay_choices: default_overlay_choices,
@@ -441,6 +524,63 @@ impl CurcatApp {
             Color32::from_rgb(184, 102, 128),
             Color32::from_rgb(72, 138, 96),
         ]
+    }
+
+    fn mark_points_dirty(&mut self) {
+        self.points_numeric_dirty = true;
+        self.sorted_preview_dirty = true;
+        self.sorted_numeric_dirty = true;
+    }
+
+    fn ensure_point_numeric_cache(
+        &mut self,
+        x_mapping: &Option<AxisMapping>,
+        y_mapping: &Option<AxisMapping>,
+    ) {
+        let mapping_changed = self.last_x_mapping.as_ref() != x_mapping.as_ref()
+            || self.last_y_mapping.as_ref() != y_mapping.as_ref();
+        if mapping_changed {
+            self.last_x_mapping = x_mapping.clone();
+            self.last_y_mapping = y_mapping.clone();
+            self.mark_points_dirty();
+        }
+        if self.points_numeric_dirty {
+            for p in &mut self.points {
+                p.x_numeric = x_mapping.as_ref().and_then(|xm| xm.numeric_at(p.pixel));
+                p.y_numeric = y_mapping.as_ref().and_then(|ym| ym.numeric_at(p.pixel));
+            }
+            self.points_numeric_dirty = false;
+        }
+    }
+
+    fn sorted_preview_segments(&mut self) -> &[(f64, Pos2)] {
+        if self.sorted_preview_dirty {
+            self.cached_sorted_preview.clear();
+            for point in &self.points {
+                if let Some(xn) = point.x_numeric {
+                    self.cached_sorted_preview.push((xn, point.pixel));
+                }
+            }
+            self.cached_sorted_preview
+                .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+            self.sorted_preview_dirty = false;
+        }
+        &self.cached_sorted_preview
+    }
+
+    fn sorted_numeric_points_cache(&mut self) -> &[XYPoint] {
+        if self.sorted_numeric_dirty {
+            self.cached_sorted_numeric.clear();
+            for point in &self.points {
+                if let (Some(x), Some(y)) = (point.x_numeric, point.y_numeric) {
+                    self.cached_sorted_numeric.push(XYPoint { x, y });
+                }
+            }
+            self.cached_sorted_numeric
+                .sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(Ordering::Equal));
+            self.sorted_numeric_dirty = false;
+        }
+        &self.cached_sorted_numeric
     }
 
     fn refresh_snap_overlay_palette(&mut self) {
@@ -502,6 +642,112 @@ impl CurcatApp {
             .map(|(color, _)| color)
             .take(4)
             .collect()
+    }
+
+    fn start_loading_image_from_path(&mut self, path: PathBuf) {
+        let meta = PendingImageMeta::Path { path: path.clone() };
+        self.start_image_load(ImageLoadRequest::Path(path), meta);
+    }
+
+    fn start_loading_image_from_bytes(
+        &mut self,
+        name: Option<String>,
+        bytes: Vec<u8>,
+        last_modified: Option<SystemTime>,
+    ) {
+        let meta = PendingImageMeta::DroppedBytes {
+            name,
+            byte_len: bytes.len(),
+            last_modified,
+        };
+        self.start_image_load(ImageLoadRequest::Bytes(bytes), meta);
+    }
+
+    fn start_image_load(&mut self, request: ImageLoadRequest, meta: PendingImageMeta) {
+        let description = meta.description();
+        let cfg = self.config.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = match request {
+                ImageLoadRequest::Path(path) => decode_image_from_path(&cfg, &path),
+                ImageLoadRequest::Bytes(bytes) => decode_image_from_bytes(&cfg, bytes),
+            };
+            let msg = match result {
+                Ok(color) => ImageLoadResult::Success(color),
+                Err(err) => ImageLoadResult::Error(err.to_string()),
+            };
+            let _ = tx.send(msg);
+        });
+        self.pending_image_task = Some(PendingImageTask { rx, meta });
+        self.set_status(format!("Loading {description}…"));
+    }
+
+    fn poll_image_loader(&mut self, ctx: &Context) {
+        let Some(task) = self.pending_image_task.take() else {
+            return;
+        };
+        match task.rx.try_recv() {
+            Ok(ImageLoadResult::Success(color)) => {
+                let meta = task.meta.into_image_meta();
+                self.finish_loaded_color_image(ctx, color, meta);
+            }
+            Ok(ImageLoadResult::Error(err)) => {
+                let label = task.meta.description();
+                self.set_status(format!("Failed to load {label}: {err}"));
+            }
+            Err(TryRecvError::Empty) => {
+                self.pending_image_task = Some(task);
+            }
+            Err(TryRecvError::Disconnected) => {
+                let label = task.meta.description();
+                self.set_status(format!("Loading {label} failed: worker disconnected."));
+            }
+        }
+    }
+
+    fn finish_loaded_color_image(&mut self, ctx: &Context, color: ColorImage, meta: ImageMeta) {
+        let name = meta.display_name();
+        let loaded = LoadedImage::from_color_image(ctx, color);
+        self.set_loaded_image(loaded, Some(meta));
+        self.set_status(format!("Loaded {name}"));
+    }
+
+    fn start_snap_job(&mut self) {
+        if self.pending_snap_job.is_some() || !self.snap_maps_dirty {
+            return;
+        }
+        let Some(image) = &self.image else {
+            self.snap_maps_dirty = false;
+            self.snap_maps = None;
+            return;
+        };
+        let color_image = image.pixels.clone();
+        let overlay_color = self.snap_target_color;
+        let tolerance = self.snap_color_tolerance;
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = SnapMapCache::build(&color_image, overlay_color, tolerance);
+            let _ = tx.send(result);
+        });
+        self.pending_snap_job = Some(SnapBuildJob { rx });
+        self.snap_maps_dirty = false;
+    }
+
+    fn poll_snap_build_job(&mut self) {
+        let Some(job) = self.pending_snap_job.take() else {
+            return;
+        };
+        match job.rx.try_recv() {
+            Ok(result) => {
+                self.snap_maps = result;
+            }
+            Err(TryRecvError::Empty) => {
+                self.pending_snap_job = Some(job);
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.snap_maps = None;
+            }
+        }
     }
 
     fn ui_snap_radius_slider(&mut self, ui: &mut egui::Ui) {
@@ -648,15 +894,19 @@ impl CurcatApp {
 
     fn clear_all_points(&mut self) {
         self.points.clear();
+        self.mark_points_dirty();
     }
 
     fn undo_last_point(&mut self) {
-        self.points.pop();
+        if self.points.pop().is_some() {
+            self.mark_points_dirty();
+        }
     }
 
     fn push_curve_point(&mut self, pixel_hint: Pos2) {
         let resolved = self.resolve_curve_pick(pixel_hint);
         self.points.push(PickedPoint::new(resolved));
+        self.mark_points_dirty();
     }
 
     fn resolve_curve_pick(&mut self, pixel_hint: Pos2) -> Pos2 {
@@ -679,22 +929,18 @@ impl CurcatApp {
     fn mark_snap_maps_dirty(&mut self) {
         self.snap_maps_dirty = true;
         self.snap_maps = None;
+        self.pending_snap_job = None;
     }
 
     fn ensure_snap_maps(&mut self) {
-        if !self.snap_maps_dirty {
+        self.poll_snap_build_job();
+        if self.snap_maps.is_some() {
             return;
         }
-        if let Some(image) = &self.image {
-            self.snap_maps = SnapMapCache::build(
-                &image.pixels,
-                self.snap_target_color,
-                self.snap_color_tolerance,
-            );
-        } else {
-            self.snap_maps = None;
+        if self.snap_maps_dirty && self.pending_snap_job.is_none() {
+            self.start_snap_job();
         }
-        self.snap_maps_dirty = false;
+        self.poll_snap_build_job();
     }
 
     fn find_contrast_point(&mut self, pixel_hint: Pos2) -> Option<Pos2> {
@@ -754,10 +1000,10 @@ impl CurcatApp {
         }
     }
 
-    pub fn new_with_initial_path(ctx: &Context, initial_path: Option<&Path>) -> Self {
+    pub fn new_with_initial_path(_ctx: &Context, initial_path: Option<&Path>) -> Self {
         let mut app = Self::default();
         if let Some(p) = initial_path {
-            app.handle_open_path(ctx, p);
+            app.start_loading_image_from_path(p.to_owned());
         }
         app
     }
@@ -783,6 +1029,7 @@ impl CurcatApp {
     fn reset_after_image_transform(&mut self) {
         self.reset_calibrations();
         self.points.clear();
+        self.mark_points_dirty();
         self.dragging_handle = None;
         self.touch_pan_active = false;
         self.touch_pan_last = None;
@@ -847,18 +1094,6 @@ impl CurcatApp {
             dialog = dialog.default_save_extension(label);
         }
         dialog
-    }
-
-    fn handle_open_path(&mut self, ctx: &Context, path: &Path) {
-        match load_image_from_path(ctx, &self.config, path) {
-            Ok(img) => {
-                let meta = ImageMeta::from_path(path);
-                self.set_loaded_image(img, Some(meta));
-                let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("image");
-                self.set_status(format!("Loaded {name}"));
-            }
-            Err(e) => self.set_status(format!("Failed to load image: {e}")),
-        }
     }
 
     const fn set_zoom(&mut self, zoom: f32) {
@@ -1291,7 +1526,7 @@ impl CurcatApp {
                 ui.spacing_mut().slider_width = 150.0;
                 let sresp =
                     ui.add(egui::Slider::new(&mut self.sample_count, 10..=10000).text("count"));
-                sresp.on_hover_text("Higher values give a denser interpolated curve (max 5000)");
+                sresp.on_hover_text("Higher values give a denser interpolated curve (max 10000)");
             }
             ExportKind::RawPoints => {
                 ui.label("Extra columns:")
@@ -1371,6 +1606,7 @@ impl CurcatApp {
                             ui.label("Scale:")
                                 .on_hover_text("Axis scale (Linear/Log10)");
                             let mut scale = cal.scale;
+                            let allow_log = matches!(cal.unit, AxisUnit::Float);
                             let scale_ir =
                                 egui::ComboBox::from_id_salt(format!("{label}_scale_combo"))
                                     .selected_text(match scale {
@@ -1383,21 +1619,23 @@ impl CurcatApp {
                                             ScaleKind::Linear,
                                             "Linear",
                                         );
-                                        ui.selectable_value(&mut scale, ScaleKind::Log10, "Log10");
+                                        if allow_log {
+                                            ui.selectable_value(
+                                                &mut scale,
+                                                ScaleKind::Log10,
+                                                "Log10",
+                                            );
+                                        }
                                     });
                             scale_ir.response.on_hover_text("Choose the axis scale");
+                            if !allow_log && matches!(scale, ScaleKind::Log10) {
+                                scale = ScaleKind::Linear;
+                            }
                             cal.scale = scale;
                         });
                         if cal.unit != previous_unit {
                             sanitize_axis_text(&mut cal.v1_text, cal.unit);
                             sanitize_axis_text(&mut cal.v2_text, cal.unit);
-                        }
-
-                        if cal.unit == AxisUnit::DateTime && cal.scale == ScaleKind::Log10 {
-                            ui.label(
-                                RichText::new("Log scale is not supported for DateTime")
-                                    .color(Color32::YELLOW),
-                            );
                         }
 
                         let mut p1_value_rect = None;
@@ -1521,7 +1759,7 @@ impl CurcatApp {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn ui_central_image(&mut self, ctx: &Context, ui: &mut egui::Ui) {
+    fn ui_central_image(&mut self, _ctx: &Context, ui: &mut egui::Ui) {
         // Handle drag & drop regardless of whether an image is already loaded
         let (hovered_files, dropped_files) =
             ui.input(|i| (i.raw.hovered_files.clone(), i.raw.dropped_files.clone()));
@@ -1545,29 +1783,23 @@ impl CurcatApp {
         if !dropped_files.is_empty() {
             let mut loaded = false;
             for f in &dropped_files {
-                if let Some(path) = &f.path
-                    && let Ok(new_img) = load_image_from_path(ctx, &self.config, path)
-                {
-                    let meta = ImageMeta::from_path(path);
-                    self.set_loaded_image(new_img, Some(meta));
+                if let Some(path) = &f.path {
+                    self.start_loading_image_from_path(path.clone());
                     loaded = true;
-                    self.set_status(format!("Loaded from drop (path): {}", path.display()));
                     if cfg!(debug_assertions) {
-                        eprintln!("[DnD] Loaded from path: {}", path.display());
+                        eprintln!("[DnD] Loading from path: {}", path.display());
                     }
                     break;
                 }
-                if let Some(bytes) = &f.bytes
-                    && let Ok(new_img) = load_image_from_bytes(ctx, &self.config, bytes)
-                {
-                    let name_hint = (!f.name.is_empty()).then_some(f.name.as_str());
-                    let meta =
-                        ImageMeta::from_dropped_bytes(name_hint, bytes.len(), f.last_modified);
-                    self.set_loaded_image(new_img, Some(meta));
+                if let Some(bytes) = &f.bytes {
+                    self.start_loading_image_from_bytes(
+                        (!f.name.is_empty()).then(|| f.name.clone()),
+                        bytes.to_vec(),
+                        f.last_modified,
+                    );
                     loaded = true;
-                    self.set_status(format!("Loaded from drop (bytes): {}", f.name));
                     if cfg!(debug_assertions) {
-                        eprintln!("[DnD] Loaded from bytes: name='{}'", f.name);
+                        eprintln!("[DnD] Loading from dropped bytes: name='{}'", f.name);
                     }
                     break;
                 }
@@ -1689,6 +1921,7 @@ impl CurcatApp {
                             DragTarget::CurvePoint(idx) => {
                                 if let Some(point) = self.points.get_mut(idx) {
                                     point.pixel = pixel;
+                                    self.mark_points_dirty();
                                 }
                             }
                             DragTarget::CalX1 => {
@@ -1729,6 +1962,7 @@ impl CurcatApp {
                         }
                         if let Some((idx, _)) = best {
                             self.points.remove(idx);
+                            self.mark_points_dirty();
                         }
                     } else {
                         let pixel = to_pixel(pos);
@@ -1774,11 +2008,7 @@ impl CurcatApp {
                     }
                 }
 
-                // Update cached numeric coordinates so they never go stale when mappings change.
-                for p in &mut self.points {
-                    p.x_numeric = x_mapping.as_ref().and_then(|xm| xm.numeric_at(p.pixel));
-                    p.y_numeric = y_mapping.as_ref().and_then(|ym| ym.numeric_at(p.pixel));
-                }
+                self.ensure_point_numeric_cache(&x_mapping, &y_mapping);
 
                 // Draw picked calibration points lines
                 let stroke_cal = egui::Stroke {
@@ -1867,18 +2097,13 @@ impl CurcatApp {
                 }
 
                 // Draw interpolation preview: connect points sorted by X numeric
-                let mut valid: Vec<(f64, Pos2)> = Vec::with_capacity(self.points.len());
-                for p in &self.points {
-                    if let Some(xn) = p.x_numeric {
-                        valid.push((xn, p.pixel));
-                    }
-                }
-                valid.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-                if valid.len() >= 2 {
-                    let stroke_curve = self.config.curve_line.stroke();
-                    for win in valid.windows(2) {
-                        let a = rect.min + win[0].1.to_vec2() * self.image_zoom;
-                        let b = rect.min + win[1].1.to_vec2() * self.image_zoom;
+                let stroke_curve = self.config.curve_line.stroke();
+                let zoom = self.image_zoom;
+                let preview_segments = self.sorted_preview_segments();
+                if preview_segments.len() >= 2 {
+                    for win in preview_segments.windows(2) {
+                        let a = rect.min + win[0].1.to_vec2() * zoom;
+                        let b = rect.min + win[1].1.to_vec2() * zoom;
                         painter.line_segment([a, b], stroke_curve);
                     }
                 }
@@ -1973,6 +2198,10 @@ impl CurcatApp {
                     }
                 }
             });
+        } else if self.pending_image_task.is_some() {
+            ui.centered_and_justified(|ui| {
+                ui.label("Loading image…");
+            });
         } else {
             ui.centered_and_justified(|ui| {
                 ui.label("Drop an image here or use Open image…");
@@ -1990,29 +2219,29 @@ impl CurcatApp {
             .collect()
     }
 
-    fn collect_numeric_points_sorted(&self) -> Vec<XYPoint> {
-        let mut pts = self.collect_numeric_points_in_order();
-        pts.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(Ordering::Equal));
-        pts
-    }
-
-    fn build_interpolated_samples(&self) -> Vec<XYPoint> {
-        let nums = self.collect_numeric_points_sorted();
+    fn build_interpolated_samples(&mut self) -> Vec<XYPoint> {
+        let sample_count = self.sample_count;
+        let algo = self.interp_algorithm;
+        let nums = self.sorted_numeric_points_cache();
         if nums.len() < 2 {
             return Vec::new();
         }
-        interpolate_sorted(&nums, self.sample_count, self.interp_algorithm)
+        interpolate_sorted(nums, sample_count, algo)
     }
 
-    fn build_export_payload(&self) -> Result<ExportPayload, &'static str> {
-        let x_unit = match self.cal_x.mapping() {
+    fn build_export_payload(&mut self) -> Result<ExportPayload, &'static str> {
+        let x_mapping = self.cal_x.mapping();
+        let y_mapping = self.cal_y.mapping();
+        let x_unit = match x_mapping.as_ref() {
             Some(mapping) => mapping.unit,
             None => return Err("Complete both axis calibrations before export."),
         };
-        let y_unit = match self.cal_y.mapping() {
+        let y_unit = match y_mapping.as_ref() {
             Some(mapping) => mapping.unit,
             None => return Err("Complete both axis calibrations before export."),
         };
+
+        self.ensure_point_numeric_cache(&x_mapping, &y_mapping);
 
         match self.export_kind {
             ExportKind::Interpolated => {
@@ -2184,6 +2413,8 @@ fn snap_color_score(color: Color32, stats: &ImageColorStats) -> f32 {
 
 impl eframe::App for CurcatApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        self.poll_image_loader(ctx);
+        self.poll_snap_build_job();
         // Global hotkeys (ignored while typing in text fields)
         let wants_kb = ctx.wants_keyboard_input();
         if !wants_kb {
@@ -2245,7 +2476,7 @@ impl eframe::App for CurcatApp {
                 NativeDialog::Open(dialog) => {
                     dialog.update(ctx);
                     if let Some(path) = dialog.take_picked() {
-                        self.handle_open_path(ctx, &path);
+                        self.start_loading_image_from_path(path);
                         close_dialog = true;
                     } else {
                         match dialog.state() {
