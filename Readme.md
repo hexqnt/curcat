@@ -1,12 +1,14 @@
 <div align="center">
 
-  <img src="images/curcat_logo.png" alt="Curcat" width="220" />
+  <img src="images/curcat_logo_small.png" alt="Curcat" width="220" />
 
   <h1>Curcat — Curve Catcher — оцифровка графиков из растров</h1>
 
 </div>
 
 ---
+
+![Alt text](images/curcat_screenshot.png "Optional title text")
 
 ## 🚀 Установка и запуск
 
