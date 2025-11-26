@@ -432,6 +432,8 @@ pub struct CurcatApp {
     snap_overlay_choice: usize,
     sample_count: usize,
     active_dialog: Option<NativeDialog>,
+    last_image_dir: Option<PathBuf>,
+    last_export_dir: Option<PathBuf>,
     config: AppConfig,
     image_zoom: f32,
     dragging_handle: Option<DragTarget>,
@@ -500,6 +502,8 @@ impl Default for CurcatApp {
             snap_overlay_choice: 0,
             sample_count: 200,
             active_dialog: None,
+            last_image_dir: None,
+            last_export_dir: None,
             config: AppConfig::load(),
             image_zoom: 1.0,
             dragging_handle: None,
@@ -645,6 +649,7 @@ impl CurcatApp {
     }
 
     fn start_loading_image_from_path(&mut self, path: PathBuf) {
+        self.remember_image_dir_from_path(&path);
         let meta = PendingImageMeta::Path { path: path.clone() };
         self.start_image_load(ImageLoadRequest::Path(path), meta);
     }
@@ -838,7 +843,7 @@ impl CurcatApp {
     }
 
     fn open_image_dialog(&mut self) {
-        let mut dialog = Self::make_open_dialog();
+        let mut dialog = Self::make_open_dialog(self.last_image_dir.as_deref());
         dialog.pick_file();
         self.active_dialog = Some(NativeDialog::Open(dialog));
     }
@@ -846,7 +851,12 @@ impl CurcatApp {
     fn start_export_csv(&mut self) {
         match self.build_export_payload() {
             Ok(payload) => {
-                let mut dialog = Self::make_save_dialog("Export CSV", "curve.csv", &["csv"]);
+                let mut dialog = Self::make_save_dialog(
+                    "Export CSV",
+                    "curve.csv",
+                    &["csv"],
+                    self.last_export_dir.as_deref(),
+                );
                 dialog.save_file();
                 self.active_dialog = Some(NativeDialog::SaveCsv { dialog, payload });
             }
@@ -857,7 +867,12 @@ impl CurcatApp {
     fn start_export_xlsx(&mut self) {
         match self.build_export_payload() {
             Ok(payload) => {
-                let mut dialog = Self::make_save_dialog("Export Excel", "curve.xlsx", &["xlsx"]);
+                let mut dialog = Self::make_save_dialog(
+                    "Export Excel",
+                    "curve.xlsx",
+                    &["xlsx"],
+                    self.last_export_dir.as_deref(),
+                );
                 dialog.save_file();
                 self.active_dialog = Some(NativeDialog::SaveXlsx { dialog, payload });
             }
@@ -1003,6 +1018,7 @@ impl CurcatApp {
     pub fn new_with_initial_path(_ctx: &Context, initial_path: Option<&Path>) -> Self {
         let mut app = Self::default();
         if let Some(p) = initial_path {
+            app.remember_image_dir_from_path(p);
             app.start_loading_image_from_path(p.to_owned());
         }
         app
@@ -1057,10 +1073,10 @@ impl CurcatApp {
         }
     }
 
-    fn make_open_dialog() -> FileDialog {
+    fn make_open_dialog(initial_dir: Option<&Path>) -> FileDialog {
         // Keep in sync with enabled `image` crate features.
         // Add separate presets for frequent formats.
-        FileDialog::new()
+        let mut dialog = FileDialog::new()
             .title("Open image")
             // Combined filter
             .add_file_filter_extensions(
@@ -1075,10 +1091,19 @@ impl CurcatApp {
             .add_file_filter_extensions("JPEG/JPG", vec!["jpg", "jpeg"])
             .add_file_filter_extensions("BMP", vec!["bmp"])
             .add_file_filter_extensions("TIFF", vec!["tiff", "tif"])
-            .default_file_filter("All images")
+            .default_file_filter("All images");
+        if let Some(dir) = initial_dir {
+            dialog = dialog.initial_directory(dir.to_path_buf());
+        }
+        dialog
     }
 
-    fn make_save_dialog(title: &str, default_name: &str, extensions: &[&str]) -> FileDialog {
+    fn make_save_dialog(
+        title: &str,
+        default_name: &str,
+        extensions: &[&str],
+        initial_dir: Option<&Path>,
+    ) -> FileDialog {
         let mut dialog = FileDialog::new()
             .title(title)
             .default_file_name(default_name);
@@ -1093,6 +1118,9 @@ impl CurcatApp {
         if let Some(label) = first_label.as_deref() {
             dialog = dialog.default_save_extension(label);
         }
+        if let Some(dir) = initial_dir {
+            dialog = dialog.initial_directory(dir.to_path_buf());
+        }
         dialog
     }
 
@@ -1106,6 +1134,22 @@ impl CurcatApp {
         } else {
             format!("{:.0}%", zoom * 100.0)
         }
+    }
+
+    fn remember_image_dir_from_path(&mut self, path: &Path) {
+        let dir = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.last_image_dir = Some(dir);
+    }
+
+    fn remember_export_dir_from_path(&mut self, path: &Path) {
+        let dir = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.last_export_dir = Some(dir);
     }
 
     fn attention_color(&self, ctx: &Context, base: Color32) -> Color32 {
@@ -2470,6 +2514,7 @@ impl eframe::App for CurcatApp {
         self.ui_image_info_window(ctx);
 
         let mut close_dialog = false;
+        let mut picked_export_path: Option<PathBuf> = None;
 
         if let Some(dialog_state) = self.active_dialog.as_mut() {
             match dialog_state {
@@ -2492,6 +2537,7 @@ impl eframe::App for CurcatApp {
                 NativeDialog::SaveCsv { dialog, payload } => {
                     dialog.update(ctx);
                     if let Some(path) = dialog.take_picked() {
+                        picked_export_path = Some(path.clone());
                         match export::export_to_csv(&path, payload) {
                             Ok(()) => self.set_status("CSV exported."),
                             Err(e) => self.set_status(format!("CSV export failed: {e}")),
@@ -2511,6 +2557,7 @@ impl eframe::App for CurcatApp {
                 NativeDialog::SaveXlsx { dialog, payload } => {
                     dialog.update(ctx);
                     if let Some(path) = dialog.take_picked() {
+                        picked_export_path = Some(path.clone());
                         match export::export_to_xlsx(&path, payload) {
                             Ok(()) => self.set_status("Excel exported."),
                             Err(e) => self.set_status(format!("Excel export failed: {e}")),
@@ -2528,6 +2575,10 @@ impl eframe::App for CurcatApp {
                     }
                 }
             }
+        }
+
+        if let Some(path) = picked_export_path {
+            self.remember_export_dir_from_path(&path);
         }
 
         if close_dialog {
