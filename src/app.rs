@@ -243,6 +243,10 @@ const MAX_ZOOM: f32 = 8.0;
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const POINT_HIT_RADIUS: f32 = 12.0;
 const CAL_POINT_DRAW_RADIUS: f32 = 4.0;
+const CAL_POINT_OUTLINE_PAD: f32 = 1.5;
+const CAL_LINE_WIDTH: f32 = 1.6;
+const CAL_LINE_OUTLINE_WIDTH: f32 = 3.2;
+const CAL_OUTLINE_ALPHA: u8 = 180;
 const ATTENTION_BLINK_SPEED: f32 = 2.2;
 const ATTENTION_ALPHA_MIN: f32 = 0.35;
 const ATTENTION_ALPHA_MAX: f32 = 1.0;
@@ -2055,25 +2059,41 @@ impl CurcatApp {
                 self.ensure_point_numeric_cache(&x_mapping, &y_mapping);
 
                 // Draw picked calibration points lines
+                let stroke_cal_outline = egui::Stroke {
+                    width: CAL_LINE_OUTLINE_WIDTH,
+                    color: Color32::from_black_alpha(CAL_OUTLINE_ALPHA),
+                };
                 let stroke_cal = egui::Stroke {
-                    width: 1.0,
+                    width: CAL_LINE_WIDTH,
                     color: Color32::LIGHT_BLUE,
                 };
                 let cal_point_color = stroke_cal.color;
                 let draw_cal_point = |point: Pos2| {
                     let screen = rect.min + point.to_vec2() * self.image_zoom;
+                    painter.circle_filled(
+                        screen,
+                        CAL_POINT_DRAW_RADIUS + CAL_POINT_OUTLINE_PAD,
+                        stroke_cal_outline.color,
+                    );
                     painter.circle_filled(screen, CAL_POINT_DRAW_RADIUS, cal_point_color);
+                };
+                let draw_cal_line = |p1: Pos2, p2: Pos2| {
+                    let line = [
+                        rect.min + p1.to_vec2() * self.image_zoom,
+                        rect.min + p2.to_vec2() * self.image_zoom,
+                    ];
+                    painter.line_segment(line, stroke_cal_outline);
+                    painter.line_segment(line, stroke_cal);
                 };
                 if let Some(p1) = self.cal_x.p1
                     && let Some(p2) = self.cal_x.p2
                 {
-                    painter.line_segment(
-                        [
-                            rect.min + p1.to_vec2() * self.image_zoom,
-                            rect.min + p2.to_vec2() * self.image_zoom,
-                        ],
-                        stroke_cal,
-                    );
+                    draw_cal_line(p1, p2);
+                }
+                if let Some(p1) = self.cal_y.p1
+                    && let Some(p2) = self.cal_y.p2
+                {
+                    draw_cal_line(p1, p2);
                 }
                 if let Some(p) = self.cal_x.p1 {
                     draw_cal_point(p);
@@ -2086,17 +2106,6 @@ impl CurcatApp {
                 }
                 if let Some(p) = self.cal_y.p2 {
                     draw_cal_point(p);
-                }
-                if let Some(p1) = self.cal_y.p1
-                    && let Some(p2) = self.cal_y.p2
-                {
-                    painter.line_segment(
-                        [
-                            rect.min + p1.to_vec2() * self.image_zoom,
-                            rect.min + p2.to_vec2() * self.image_zoom,
-                        ],
-                        stroke_cal,
-                    );
                 }
 
                 // Draw picked points
