@@ -247,6 +247,7 @@ const CAL_POINT_OUTLINE_PAD: f32 = 1.5;
 const CAL_LINE_WIDTH: f32 = 1.6;
 const CAL_LINE_OUTLINE_WIDTH: f32 = 3.2;
 const CAL_OUTLINE_ALPHA: u8 = 180;
+const CAL_ANGLE_SNAP_STEP_RAD: f32 = std::f32::consts::PI / 12.0;
 const ATTENTION_BLINK_SPEED: f32 = 2.2;
 const ATTENTION_ALPHA_MIN: f32 = 0.35;
 const ATTENTION_ALPHA_MAX: f32 = 1.0;
@@ -420,6 +421,7 @@ pub struct CurcatApp {
     sorted_numeric_dirty: bool,
     last_x_mapping: Option<AxisMapping>,
     last_y_mapping: Option<AxisMapping>,
+    calibration_angle_snap: bool,
     point_input_mode: PointInputMode,
     contrast_search_radius: f32,
     contrast_threshold: f32,
@@ -490,6 +492,7 @@ impl Default for CurcatApp {
             sorted_numeric_dirty: true,
             last_x_mapping: None,
             last_y_mapping: None,
+            calibration_angle_snap: false,
             point_input_mode: PointInputMode::Free,
             contrast_search_radius: 12.0,
             contrast_threshold: 12.0,
@@ -629,7 +632,9 @@ impl CurcatApp {
         } else {
             wrap_hue(stats.hue + 180.0)
         };
-        let saturation = (0.45 + (1.0 - stats.saturation) * 0.35).clamp(0.35, 0.7);
+        let saturation = (1.0 - stats.saturation)
+            .mul_add(0.35, 0.45)
+            .clamp(0.35, 0.7);
         let values = highlight_value_candidates(stats.avg_luma);
         let mut options: Vec<(Color32, f32)> = Vec::new();
         for (idx, offset) in SNAP_HUE_OFFSETS.iter().enumerate() {
@@ -884,7 +889,7 @@ impl CurcatApp {
         }
     }
 
-    fn queue_value_focus(&mut self, field: AxisValueField) {
+    const fn queue_value_focus(&mut self, field: AxisValueField) {
         self.pending_value_focus = Some(field);
     }
 
@@ -943,6 +948,32 @@ impl CurcatApp {
             PointInputMode::ContrastSnap => self.find_contrast_point(pixel_hint),
             PointInputMode::CenterlineSnap => self.find_centerline_point(pixel_hint),
         }
+    }
+
+    fn snap_calibration_angle(
+        &self,
+        candidate: Pos2,
+        anchor: Option<Pos2>,
+        image_size: Vec2,
+    ) -> Pos2 {
+        if !self.calibration_angle_snap {
+            return candidate;
+        }
+        let Some(anchor) = anchor else {
+            return candidate;
+        };
+        let delta = candidate - anchor;
+        let len = delta.length();
+        if len <= f32::EPSILON {
+            return candidate;
+        }
+        let angle = delta.y.atan2(delta.x);
+        let snapped_angle = (angle / CAL_ANGLE_SNAP_STEP_RAD).round() * CAL_ANGLE_SNAP_STEP_RAD;
+        let snapped_delta = Vec2::new(snapped_angle.cos() * len, snapped_angle.sin() * len);
+        let mut snapped = anchor + snapped_delta;
+        snapped.x = snapped.x.clamp(0.0, image_size.x);
+        snapped.y = snapped.y.clamp(0.0, image_size.y);
+        snapped
     }
 
     fn mark_snap_maps_dirty(&mut self) {
@@ -1143,16 +1174,14 @@ impl CurcatApp {
     fn remember_image_dir_from_path(&mut self, path: &Path) {
         let dir = path
             .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         self.last_image_dir = Some(dir);
     }
 
     fn remember_export_dir_from_path(&mut self, path: &Path) {
         let dir = path
             .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         self.last_export_dir = Some(dir);
     }
 
@@ -1160,7 +1189,10 @@ impl CurcatApp {
         let [r, g, b, a] = base.to_array();
         let base_alpha = f32::from(a) / 255.0;
         let time = ctx.input(|i| i.time) as f32;
-        let blink = ((time * ATTENTION_BLINK_SPEED).sin() * 0.5 + 0.5).clamp(0.0, 1.0);
+        let blink = (time * ATTENTION_BLINK_SPEED)
+            .sin()
+            .mul_add(0.5, 0.5)
+            .clamp(0.0, 1.0);
         let eased = blink * blink * 2.0f32.mul_add(-blink, 3.0);
         let intensity = lerp(ATTENTION_ALPHA_MIN..=ATTENTION_ALPHA_MAX, eased);
         let alpha = rounded_u8(base_alpha * intensity * 255.0);
@@ -1510,6 +1542,14 @@ impl CurcatApp {
         ui.separator();
 
         ui.heading("Calibration");
+        ui.separator();
+        ui.horizontal(|ui| {
+            toggle_switch(ui, &mut self.calibration_angle_snap)
+                .on_hover_text("Snap calibration lines to 15° steps while picking or dragging");
+            ui.add_space(4.0);
+            ui.label("15° snap")
+                .on_hover_text("Snap calibration lines to 15° steps while picking or dragging");
+        });
         ui.separator();
 
         self.axis_cal_group(ui, true);
@@ -1965,6 +2005,21 @@ impl CurcatApp {
                 if let Some(target) = self.dragging_handle {
                     if let Some(pos) = pointer_pos {
                         let pixel = to_pixel(pos);
+                        let pixel = match target {
+                            DragTarget::CurvePoint(_) => pixel,
+                            DragTarget::CalX1 => {
+                                self.snap_calibration_angle(pixel, self.cal_x.p2, base_size)
+                            }
+                            DragTarget::CalX2 => {
+                                self.snap_calibration_angle(pixel, self.cal_x.p1, base_size)
+                            }
+                            DragTarget::CalY1 => {
+                                self.snap_calibration_angle(pixel, self.cal_y.p2, base_size)
+                            }
+                            DragTarget::CalY2 => {
+                                self.snap_calibration_angle(pixel, self.cal_y.p1, base_size)
+                            }
+                        };
                         match target {
                             DragTarget::CurvePoint(idx) => {
                                 if let Some(point) = self.points.get_mut(idx) {
@@ -2022,6 +2077,8 @@ impl CurcatApp {
                             }
                             PickMode::X1 => {
                                 let snapped = self.snap_pixel_if_requested(pixel);
+                                let snapped =
+                                    self.snap_calibration_angle(snapped, self.cal_x.p2, base_size);
                                 self.cal_x.p1 = Some(snapped);
                                 self.pick_mode = PickMode::None;
                                 x_mapping = self.cal_x.mapping();
@@ -2029,6 +2086,8 @@ impl CurcatApp {
                             }
                             PickMode::X2 => {
                                 let snapped = self.snap_pixel_if_requested(pixel);
+                                let snapped =
+                                    self.snap_calibration_angle(snapped, self.cal_x.p1, base_size);
                                 self.cal_x.p2 = Some(snapped);
                                 self.pick_mode = PickMode::None;
                                 x_mapping = self.cal_x.mapping();
@@ -2036,6 +2095,8 @@ impl CurcatApp {
                             }
                             PickMode::Y1 => {
                                 let snapped = self.snap_pixel_if_requested(pixel);
+                                let snapped =
+                                    self.snap_calibration_angle(snapped, self.cal_y.p2, base_size);
                                 self.cal_y.p1 = Some(snapped);
                                 self.pick_mode = PickMode::None;
                                 y_mapping = self.cal_y.mapping();
@@ -2043,6 +2104,8 @@ impl CurcatApp {
                             }
                             PickMode::Y2 => {
                                 let snapped = self.snap_pixel_if_requested(pixel);
+                                let snapped =
+                                    self.snap_calibration_angle(snapped, self.cal_y.p1, base_size);
                                 self.cal_y.p2 = Some(snapped);
                                 self.pick_mode = PickMode::None;
                                 y_mapping = self.cal_y.mapping();
