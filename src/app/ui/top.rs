@@ -31,6 +31,12 @@ impl CurcatApp {
             }
 
             let has_image = self.image.is_some();
+            let stats_resp = ui
+                .add(egui::Button::new("📊 Points stats"))
+                .on_hover_text("Show stats for picked points");
+            if stats_resp.clicked() {
+                self.points_info_window_open = true;
+            }
             let info_resp = ui
                 .add_enabled(
                     has_image,

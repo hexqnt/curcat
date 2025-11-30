@@ -278,6 +278,7 @@ pub struct CurcatApp {
     touch_pan_last: Option<Pos2>,
     side_open: bool,
     info_window_open: bool,
+    points_info_window_open: bool,
     export_kind: ExportKind,
     interp_algorithm: InterpAlgorithm,
     raw_include_distances: bool,
@@ -349,6 +350,7 @@ impl Default for CurcatApp {
             touch_pan_last: None,
             side_open: true,
             info_window_open: false,
+            points_info_window_open: false,
             export_kind: ExportKind::Interpolated,
             interp_algorithm: InterpAlgorithm::Linear,
             raw_include_distances: false,
@@ -499,6 +501,7 @@ impl eframe::App for CurcatApp {
             .show_animated(ctx, self.side_open, |ui| self.ui_side_calibration(ui));
         egui::CentralPanel::default().show(ctx, |ui| self.ui_central_image(ctx, ui));
         self.ui_image_info_window(ctx);
+        self.ui_points_info_window(ctx);
 
         let mut close_dialog = false;
         let mut picked_export_path: Option<PathBuf> = None;
