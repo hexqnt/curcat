@@ -86,7 +86,7 @@ impl AxisValue {
     pub fn format(&self) -> String {
         match self {
             Self::Float(v) => format_float(*v),
-            Self::DateTime(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            Self::DateTime(dt) => format_datetime(dt),
         }
     }
 }
@@ -125,6 +125,20 @@ const fn non_negative_i64_to_u32(value: i64) -> u32 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     {
         value as u32
+    }
+}
+
+fn format_datetime(dt: &NaiveDateTime) -> String {
+    let base = dt.format("%Y-%m-%d %H:%M:%S").to_string();
+    let nanos = dt.and_utc().timestamp_subsec_nanos();
+    if nanos == 0 {
+        base
+    } else {
+        let mut frac = format!("{nanos:09}");
+        while frac.ends_with('0') {
+            frac.pop();
+        }
+        format!("{base}.{frac}")
     }
 }
 

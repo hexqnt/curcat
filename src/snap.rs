@@ -139,11 +139,11 @@ impl SnapMapLevel {
                     if y == 0 || y + 1 == height {
                         return;
                     }
-                    for x in 1..(width - 1) {
-                        let idx = y * width + x;
+                    for (x, pixel) in row[1..width - 1].iter_mut().enumerate() {
+                        let idx = y * width + x + 1;
                         let gx = lum_slice[idx + 1] - lum_slice[idx - 1];
                         let gy = lum_slice[idx + width] - lum_slice[idx - width];
-                        row[x] = gx.hypot(gy).min(255.0);
+                        *pixel = gx.hypot(gy).min(255.0);
                     }
                 });
         }
