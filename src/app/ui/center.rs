@@ -317,93 +317,95 @@ impl CurcatApp {
 
                 self.ensure_point_numeric_cache(x_mapping.as_ref(), y_mapping.as_ref());
 
-                // Draw picked calibration points lines
-                let stroke_cal_outline = egui::Stroke {
-                    width: super::super::CAL_LINE_OUTLINE_WIDTH,
-                    color: Color32::from_black_alpha(super::super::CAL_OUTLINE_ALPHA),
-                };
-                let stroke_cal = egui::Stroke {
-                    width: super::super::CAL_LINE_WIDTH,
-                    color: Color32::LIGHT_BLUE,
-                };
-                let cal_point_color = stroke_cal.color;
-                let cal_radius =
-                    super::super::CAL_POINT_DRAW_RADIUS + super::super::CAL_POINT_OUTLINE_PAD;
-                let cal_label_shadow = Color32::from_black_alpha(160);
-                let cal_label_font = egui::FontId::monospace(11.0);
-                let label_gap_px = 6.0;
-                let default_label_offset = Vec2::new(8.0, -8.0);
-                let default_dir = {
-                    let len = default_label_offset.length();
-                    if len > f32::EPSILON {
-                        default_label_offset / len
-                    } else {
-                        Vec2::new(0.0, -1.0)
-                    }
-                };
-                let calc_label_normal = |a: Option<Pos2>, b: Option<Pos2>| -> Option<Vec2> {
-                    let p1 = a?;
-                    let p2 = b?;
-                    let dir_screen = (p2 - p1) * self.image_zoom;
-                    if dir_screen.length_sq() <= f32::EPSILON {
-                        return None;
-                    }
-                    Some(Vec2::new(-dir_screen.y, dir_screen.x).normalized())
-                };
-                let x_normal = calc_label_normal(self.cal_x.p1, self.cal_x.p2);
-                let y_normal = calc_label_normal(self.cal_y.p1, self.cal_y.p2);
-                let draw_cal_point =
-                    |point: Pos2, label: &str, normal: Option<Vec2>, flip_side: bool| {
-                        let screen = rect.min + point.to_vec2() * self.image_zoom;
-                        let dir = normal.unwrap_or(default_dir);
-                        let dir = if flip_side { -dir } else { dir };
-                        let galley = painter.layout_no_wrap(
-                            label.to_owned(),
-                            cal_label_font.clone(),
-                            cal_point_color,
-                        );
-                        let offset = galley.size().y.mul_add(0.5, cal_radius + label_gap_px);
-                        let label_center = screen + dir * offset;
-                        let label_pos = label_center - galley.size() * 0.5;
-                        painter.circle_filled(screen, cal_radius, stroke_cal_outline.color);
-                        painter.circle_filled(
-                            screen,
-                            super::super::CAL_POINT_DRAW_RADIUS,
-                            cal_point_color,
-                        );
-                        let shadow_pos = label_pos + Vec2::splat(1.0);
-                        painter.galley(shadow_pos, galley.clone(), cal_label_shadow);
-                        painter.galley(label_pos, galley, cal_point_color);
+                // Draw picked calibration overlays (lines, points, labels)
+                if self.show_calibration_segments {
+                    let stroke_cal_outline = egui::Stroke {
+                        width: super::super::CAL_LINE_OUTLINE_WIDTH,
+                        color: Color32::from_black_alpha(super::super::CAL_OUTLINE_ALPHA),
                     };
-                let draw_cal_line = |p1: Pos2, p2: Pos2| {
-                    let line = [
-                        rect.min + p1.to_vec2() * self.image_zoom,
-                        rect.min + p2.to_vec2() * self.image_zoom,
-                    ];
-                    painter.line_segment(line, stroke_cal_outline);
-                    painter.line_segment(line, stroke_cal);
-                };
-                if let Some(p1) = self.cal_x.p1
-                    && let Some(p2) = self.cal_x.p2
-                {
-                    draw_cal_line(p1, p2);
-                }
-                if let Some(p1) = self.cal_y.p1
-                    && let Some(p2) = self.cal_y.p2
-                {
-                    draw_cal_line(p1, p2);
-                }
-                if let Some(p) = self.cal_x.p1 {
-                    draw_cal_point(p, "X1", x_normal, false);
-                }
-                if let Some(p) = self.cal_x.p2 {
-                    draw_cal_point(p, "X2", x_normal, true);
-                }
-                if let Some(p) = self.cal_y.p1 {
-                    draw_cal_point(p, "Y1", y_normal, false);
-                }
-                if let Some(p) = self.cal_y.p2 {
-                    draw_cal_point(p, "Y2", y_normal, true);
+                    let stroke_cal = egui::Stroke {
+                        width: super::super::CAL_LINE_WIDTH,
+                        color: Color32::LIGHT_BLUE,
+                    };
+                    let cal_point_color = stroke_cal.color;
+                    let cal_radius =
+                        super::super::CAL_POINT_DRAW_RADIUS + super::super::CAL_POINT_OUTLINE_PAD;
+                    let cal_label_shadow = Color32::from_black_alpha(160);
+                    let cal_label_font = egui::FontId::monospace(11.0);
+                    let label_gap_px = 6.0;
+                    let default_label_offset = Vec2::new(8.0, -8.0);
+                    let default_dir = {
+                        let len = default_label_offset.length();
+                        if len > f32::EPSILON {
+                            default_label_offset / len
+                        } else {
+                            Vec2::new(0.0, -1.0)
+                        }
+                    };
+                    let calc_label_normal = |a: Option<Pos2>, b: Option<Pos2>| -> Option<Vec2> {
+                        let p1 = a?;
+                        let p2 = b?;
+                        let dir_screen = (p2 - p1) * self.image_zoom;
+                        if dir_screen.length_sq() <= f32::EPSILON {
+                            return None;
+                        }
+                        Some(Vec2::new(-dir_screen.y, dir_screen.x).normalized())
+                    };
+                    let x_normal = calc_label_normal(self.cal_x.p1, self.cal_x.p2);
+                    let y_normal = calc_label_normal(self.cal_y.p1, self.cal_y.p2);
+                    let draw_cal_point =
+                        |point: Pos2, label: &str, normal: Option<Vec2>, flip_side: bool| {
+                            let screen = rect.min + point.to_vec2() * self.image_zoom;
+                            let dir = normal.unwrap_or(default_dir);
+                            let dir = if flip_side { -dir } else { dir };
+                            let galley = painter.layout_no_wrap(
+                                label.to_owned(),
+                                cal_label_font.clone(),
+                                cal_point_color,
+                            );
+                            let offset = galley.size().y.mul_add(0.5, cal_radius + label_gap_px);
+                            let label_center = screen + dir * offset;
+                            let label_pos = label_center - galley.size() * 0.5;
+                            painter.circle_filled(screen, cal_radius, stroke_cal_outline.color);
+                            painter.circle_filled(
+                                screen,
+                                super::super::CAL_POINT_DRAW_RADIUS,
+                                cal_point_color,
+                            );
+                            let shadow_pos = label_pos + Vec2::splat(1.0);
+                            painter.galley(shadow_pos, galley.clone(), cal_label_shadow);
+                            painter.galley(label_pos, galley, cal_point_color);
+                        };
+                    let draw_cal_line = |p1: Pos2, p2: Pos2| {
+                        let line = [
+                            rect.min + p1.to_vec2() * self.image_zoom,
+                            rect.min + p2.to_vec2() * self.image_zoom,
+                        ];
+                        painter.line_segment(line, stroke_cal_outline);
+                        painter.line_segment(line, stroke_cal);
+                    };
+                    if let Some(p1) = self.cal_x.p1
+                        && let Some(p2) = self.cal_x.p2
+                    {
+                        draw_cal_line(p1, p2);
+                    }
+                    if let Some(p1) = self.cal_y.p1
+                        && let Some(p2) = self.cal_y.p2
+                    {
+                        draw_cal_line(p1, p2);
+                    }
+                    if let Some(p) = self.cal_x.p1 {
+                        draw_cal_point(p, "X1", x_normal, false);
+                    }
+                    if let Some(p) = self.cal_x.p2 {
+                        draw_cal_point(p, "X2", x_normal, true);
+                    }
+                    if let Some(p) = self.cal_y.p1 {
+                        draw_cal_point(p, "Y1", y_normal, false);
+                    }
+                    if let Some(p) = self.cal_y.p2 {
+                        draw_cal_point(p, "Y2", y_normal, true);
+                    }
                 }
 
                 // Draw picked points

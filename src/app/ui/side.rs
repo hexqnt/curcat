@@ -105,6 +105,14 @@ impl CurcatApp {
         self.axis_cal_group(ui, false);
 
         ui.separator();
+        ui.horizontal(|ui| {
+            toggle_switch(ui, &mut self.show_calibration_segments)
+                .on_hover_text("Show calibration lines and point labels on the image");
+            ui.add_space(4.0);
+            ui.label("Show calibration overlay")
+                .on_hover_text("Show or hide calibration lines and point labels on the image");
+        });
+        ui.separator();
         self.ui_export_section(ui);
 
         if let Some(msg) = &self.last_status {
