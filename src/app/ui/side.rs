@@ -317,10 +317,10 @@ impl CurcatApp {
     }
 
     pub(crate) fn axis_cal_group(&mut self, ui: &mut egui::Ui, is_x: bool) {
-        let (label, p1_mode, p2_mode) = if is_x {
-            ("X axis", PickMode::X1, PickMode::X2)
+        let (label, p1_mode, p2_mode, p1_name, p2_name) = if is_x {
+            ("X axis", PickMode::X1, PickMode::X2, "X1", "X2")
         } else {
-            ("Y axis", PickMode::Y1, PickMode::Y2)
+            ("Y axis", PickMode::Y1, PickMode::Y2, "Y1", "Y2")
         };
 
         let collapsing = egui::CollapsingHeader::new(label)
@@ -400,8 +400,9 @@ impl CurcatApp {
                         let mut pick_p2_rect = None;
 
                         ui.horizontal(|ui| {
-                            ui.label("P1 value:")
-                                .on_hover_text("Value of the first calibration point (P1)");
+                            ui.label(format!("{p1_name} value:")).on_hover_text(format!(
+                                "Value of the calibration point ({p1_name})"
+                            ));
                             let p1_resp = {
                                 let mut buffer = AxisFilteredText::new(&mut cal.v1_text, cal.unit);
                                 ui.add_sized(
@@ -425,9 +426,11 @@ impl CurcatApp {
                                 &cal.v1_text,
                             );
                             p1_value_rect = Some(p1_resp.rect);
-                            let pick_resp = ui.button("📍 Pick P1").on_hover_text(
-                                "Click, then pick the corresponding point on the image",
-                            );
+                            let pick_resp =
+                                ui.button(format!("📍 Pick {p1_name}"))
+                                    .on_hover_text(format!(
+                                        "Click, then pick the {p1_name} point on the image"
+                                    ));
                             if pick_resp.clicked() {
                                 self.pick_mode = p1_mode;
                             }
@@ -437,8 +440,9 @@ impl CurcatApp {
                             }
                         });
                         ui.horizontal(|ui| {
-                            ui.label("P2 value:")
-                                .on_hover_text("Value of the second calibration point (P2)");
+                            ui.label(format!("{p2_name} value:")).on_hover_text(format!(
+                                "Value of the calibration point ({p2_name})"
+                            ));
                             let p2_resp = {
                                 let mut buffer = AxisFilteredText::new(&mut cal.v2_text, cal.unit);
                                 ui.add_sized(
@@ -462,9 +466,11 @@ impl CurcatApp {
                                 &cal.v2_text,
                             );
                             p2_value_rect = Some(p2_resp.rect);
-                            let pick_resp = ui.button("📍 Pick P2").on_hover_text(
-                                "Click, then pick the corresponding point on the image",
-                            );
+                            let pick_resp =
+                                ui.button(format!("📍 Pick {p2_name}"))
+                                    .on_hover_text(format!(
+                                        "Click, then pick the {p2_name} point on the image"
+                                    ));
                             if pick_resp.clicked() {
                                 self.pick_mode = p2_mode;
                             }
