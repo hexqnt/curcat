@@ -6,6 +6,7 @@ use std::time::SystemTime;
 pub enum ImageOrigin {
     File(PathBuf),
     DroppedBytes { suggested_name: Option<String> },
+    Clipboard,
 }
 
 impl ImageOrigin {
@@ -13,6 +14,7 @@ impl ImageOrigin {
         match self {
             Self::File(_) => "File on disk",
             Self::DroppedBytes { .. } => "Dropped bytes",
+            Self::Clipboard => "Clipboard",
         }
     }
 }
@@ -51,6 +53,14 @@ impl ImageMeta {
         }
     }
 
+    pub const fn from_clipboard(byte_len: Option<u64>) -> Self {
+        Self {
+            origin: ImageOrigin::Clipboard,
+            byte_len,
+            last_modified: None,
+        }
+    }
+
     pub fn display_name(&self) -> String {
         match &self.origin {
             ImageOrigin::File(path) => path
@@ -60,13 +70,14 @@ impl ImageMeta {
             ImageOrigin::DroppedBytes { suggested_name } => suggested_name
                 .as_deref()
                 .map_or_else(|| "Unnamed drop".to_string(), str::to_owned),
+            ImageOrigin::Clipboard => "Clipboard image".to_string(),
         }
     }
 
     pub fn path(&self) -> Option<&Path> {
         match &self.origin {
             ImageOrigin::File(path) => Some(path.as_path()),
-            ImageOrigin::DroppedBytes { .. } => None,
+            ImageOrigin::DroppedBytes { .. } | ImageOrigin::Clipboard => None,
         }
     }
 

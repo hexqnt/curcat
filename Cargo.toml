@@ -9,6 +9,7 @@ homepage = "https://github.com/hexqnt/curcat"
 readme = "README.md"
 
 [dependencies]
+arboard = "3.6"
 egui = "0.33"
 eframe = { version = "0.33", default-features = false, features = [
     "glow",

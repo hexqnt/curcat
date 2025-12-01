@@ -17,6 +17,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+mod clipboard;
 mod export_helpers;
 mod image_loader;
 mod points;
@@ -460,6 +461,12 @@ impl eframe::App for CurcatApp {
                 && ctx.input(|i| i.key_pressed(Key::O) && i.modifiers.command)
             {
                 self.open_image_dialog();
+            }
+            // Ctrl/Cmd + V: paste image from clipboard
+            if self.active_dialog.is_none()
+                && ctx.input(|i| i.key_pressed(Key::V) && i.modifiers.command)
+            {
+                self.paste_image_from_clipboard(ctx);
             }
             // Ctrl/Cmd + Shift + C: export CSV
             if self.active_dialog.is_none()

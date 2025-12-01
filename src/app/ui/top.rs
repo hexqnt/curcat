@@ -29,6 +29,12 @@ impl CurcatApp {
             if open_resp.clicked() {
                 self.open_image_dialog();
             }
+            let paste_resp = ui
+                .add(egui::Button::new("📋 Paste image").shortcut_text("Ctrl+V"))
+                .on_hover_text("Paste image from clipboard (Ctrl+V)");
+            if paste_resp.clicked() {
+                self.paste_image_from_clipboard(ui.ctx());
+            }
 
             let has_image = self.image.is_some();
             let stats_resp = ui

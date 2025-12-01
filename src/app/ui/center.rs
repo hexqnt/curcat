@@ -555,7 +555,7 @@ impl CurcatApp {
             });
         } else {
             ui.centered_and_justified(|ui| {
-                ui.label("Drop an image here or use Open image…");
+                ui.label("Drop an image here, open a file, or paste from clipboard (Ctrl+V).");
             });
         }
     }
