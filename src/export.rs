@@ -2,6 +2,8 @@ use crate::interp::XYPoint;
 use crate::types::{AxisUnit, AxisValue};
 use chrono::{Datelike, Duration, Timelike};
 use rust_xlsxwriter::{ExcelDateTime, Format, Workbook, XlsxError};
+use serde_json::{Map, Number, Value, json};
+use std::io::BufWriter;
 
 #[derive(Debug, Clone)]
 pub struct ExportPayload {
@@ -118,6 +120,57 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
     }
 
     workbook.save(path)
+}
+
+pub fn export_to_json(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
+    let mut points = Vec::with_capacity(payload.row_count());
+    for row_idx in 0..payload.row_count() {
+        let mut obj = Map::new();
+        let p = &payload.points[row_idx];
+        obj.insert("x".to_string(), axis_value_to_json(payload.x_unit, p.x));
+        obj.insert("y".to_string(), axis_value_to_json(payload.y_unit, p.y));
+        for col in &payload.extra_columns {
+            debug_assert_eq!(col.values.len(), payload.row_count());
+            let cell = col.values.get(row_idx).and_then(|v| *v);
+            obj.insert(col.header.clone(), optional_number_json(cell));
+        }
+        points.push(Value::Object(obj));
+    }
+
+    let root = json!({
+        "x_unit": axis_unit_label(payload.x_unit),
+        "y_unit": axis_unit_label(payload.y_unit),
+        "points": points
+    });
+
+    let writer = BufWriter::new(std::fs::File::create(path)?);
+    serde_json::to_writer_pretty(writer, &root)?;
+    Ok(())
+}
+
+const fn axis_unit_label(unit: AxisUnit) -> &'static str {
+    match unit {
+        AxisUnit::Float => "float",
+        AxisUnit::DateTime => "datetime",
+    }
+}
+
+fn axis_value_to_json(unit: AxisUnit, scalar_seconds: f64) -> Value {
+    let value = AxisValue::from_scalar_seconds(unit, scalar_seconds);
+    match value {
+        AxisValue::Float(v) => rounded_number_json(v),
+        AxisValue::DateTime(_) => Value::String(value.format()),
+    }
+}
+
+fn optional_number_json(value: Option<f64>) -> Value {
+    value.map_or(Value::Null, rounded_number_json)
+}
+
+fn rounded_number_json(value: f64) -> Value {
+    // Keep parity with CSV output: 6 fractional digits, rounded.
+    let rounded = (value * 1_000_000.0).round() / 1_000_000.0;
+    Number::from_f64(rounded).map_or_else(|| Value::String(format!("{rounded}")), Value::Number)
 }
 
 fn axis_value_to_excel_datetime(value: &AxisValue) -> Option<ExcelDateTime> {

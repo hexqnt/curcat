@@ -3,7 +3,7 @@ name = "curcat"
 version = "0.9.5"
 edition = "2024"
 license = "Apache-2.0 OR MIT"
-description = "Digitize curves from chart images; calibrate axes, interpolate, export CSV/XLSX."
+description = "Digitize curves from chart images; calibrate axes, interpolate, export CSV/JSON/XLSX."
 repository = "https://github.com/hexqnt/curcat"
 homepage = "https://github.com/hexqnt/curcat"
 readme = "README.md"
@@ -38,6 +38,7 @@ chrono = { version = "0.4", default-features = false, features = [
 csv = "1.4"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 toml = "0.9.8"
 directories = "6.0"
 rust_xlsxwriter = { version = "0.92", features = ["ryu"] }

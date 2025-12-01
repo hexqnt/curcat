@@ -154,6 +154,10 @@ enum NativeDialog {
         dialog: FileDialog,
         payload: ExportPayload,
     },
+    SaveJson {
+        dialog: FileDialog,
+        payload: ExportPayload,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -476,6 +480,12 @@ impl eframe::App for CurcatApp {
             {
                 self.start_export_csv();
             }
+            // Ctrl/Cmd + Shift + J: export JSON
+            if self.active_dialog.is_none()
+                && ctx.input(|i| i.key_pressed(Key::J) && i.modifiers.command && i.modifiers.shift)
+            {
+                self.start_export_json();
+            }
             // Ctrl/Cmd + Shift + E: export Excel
             if self.active_dialog.is_none()
                 && ctx.input(|i| i.key_pressed(Key::E) && i.modifiers.command && i.modifiers.shift)
@@ -560,6 +570,26 @@ impl eframe::App for CurcatApp {
                         match export::export_to_xlsx(&path, payload) {
                             Ok(()) => self.set_status("Excel exported."),
                             Err(e) => self.set_status(format!("Excel export failed: {e}")),
+                        }
+                        close_dialog = true;
+                    } else {
+                        match dialog.state() {
+                            DialogState::Cancelled => {
+                                self.set_status("Export canceled.");
+                                close_dialog = true;
+                            }
+                            DialogState::Closed => close_dialog = true,
+                            _ => {}
+                        }
+                    }
+                }
+                NativeDialog::SaveJson { dialog, payload } => {
+                    dialog.update(ctx);
+                    if let Some(path) = dialog.take_picked() {
+                        picked_export_path = Some(path.clone());
+                        match export::export_to_json(&path, payload) {
+                            Ok(()) => self.set_status("JSON exported."),
+                            Err(e) => self.set_status(format!("JSON export failed: {e}")),
                         }
                         close_dialog = true;
                     } else {

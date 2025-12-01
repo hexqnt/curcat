@@ -316,6 +316,12 @@ impl CurcatApp {
         if resp_csv.clicked() {
             self.start_export_csv();
         }
+        let resp_json = ui
+            .add(egui::Button::new("🧾 Export JSON…").shortcut_text("Ctrl+Shift+J"))
+            .on_hover_text("Export data to JSON (Ctrl+Shift+J)");
+        if resp_json.clicked() {
+            self.start_export_json();
+        }
         let resp_xlsx = ui
             .add(egui::Button::new("📊 Export Excel…").shortcut_text("Ctrl+Shift+E"))
             .on_hover_text("Export data to Excel (Ctrl+Shift+E)");
