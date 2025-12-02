@@ -160,6 +160,7 @@ pub struct AppConfig {
     pub image_limits: ImageLimits,
     pub attention_highlight: StrokeStyle,
     pub export: ExportConfig,
+    pub auto_place: AutoPlaceConfig,
 }
 
 impl Default for AppConfig {
@@ -176,6 +177,7 @@ impl Default for AppConfig {
                 thickness: 1.2,
             },
             export: ExportConfig::default(),
+            auto_place: AutoPlaceConfig::default(),
         }
     }
 }
@@ -201,6 +203,10 @@ impl AppConfig {
 
     pub fn effective_image_limits(&self) -> ImageLimits {
         self.image_limits.sanitized()
+    }
+
+    pub fn auto_place(&self) -> AutoPlaceConfig {
+        self.auto_place.sanitized()
     }
 
     fn candidate_paths() -> Vec<PathBuf> {
@@ -254,6 +260,69 @@ impl ImageLimits {
             image_dim: dim,
             total_pixels: pixels,
             alloc_bytes: alloc,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(default)]
+pub struct AutoPlaceConfig {
+    pub hold_activation_secs: f32,
+    pub distance_min: f32,
+    pub distance_max: f32,
+    pub distance_per_speed: f32,
+    pub time_min_secs: f32,
+    pub time_max_secs: f32,
+    pub time_per_speed: f32,
+    pub pause_speed_threshold: f32,
+    pub pause_timeout_ms: u32,
+    pub dedup_radius: f32,
+    pub speed_smoothing: f32,
+}
+
+impl Default for AutoPlaceConfig {
+    fn default() -> Self {
+        Self {
+            hold_activation_secs: 1.25,
+            distance_min: 2.5,
+            distance_max: 24.0,
+            distance_per_speed: 0.01,
+            time_min_secs: 0.05,
+            time_max_secs: 0.28,
+            time_per_speed: 28.0,
+            pause_speed_threshold: 6.0,
+            pause_timeout_ms: 160,
+            dedup_radius: 1.5,
+            speed_smoothing: 0.25,
+        }
+    }
+}
+
+impl AutoPlaceConfig {
+    pub fn sanitized(&self) -> Self {
+        let hold_activation_secs = self.hold_activation_secs.clamp(0.1, 10.0);
+        let distance_min = self.distance_min.clamp(0.1, 200.0);
+        let distance_max = self.distance_max.clamp(distance_min, 1_000.0);
+        let distance_per_speed = self.distance_per_speed.clamp(0.0, 1.0);
+        let time_min_secs = self.time_min_secs.clamp(0.01, 2.0);
+        let time_max_secs = self.time_max_secs.clamp(time_min_secs, 3.0);
+        let time_per_speed = self.time_per_speed.clamp(0.1, 1_000.0);
+        let pause_speed_threshold = self.pause_speed_threshold.clamp(0.0, 1_000.0);
+        let pause_timeout_ms = self.pause_timeout_ms.clamp(0, 10_000);
+        let dedup_radius = self.dedup_radius.clamp(0.0, 200.0);
+        let speed_smoothing = self.speed_smoothing.clamp(0.0, 1.0);
+        Self {
+            hold_activation_secs,
+            distance_min,
+            distance_max,
+            distance_per_speed,
+            time_min_secs,
+            time_max_secs,
+            time_per_speed,
+            pause_speed_threshold,
+            pause_timeout_ms,
+            dedup_radius,
+            speed_smoothing,
         }
     }
 }

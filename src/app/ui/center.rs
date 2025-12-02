@@ -1,8 +1,12 @@
 use super::super::export_helpers::format_overlay_value;
 use super::super::{
-    AxisValueField, CurcatApp, DragTarget, PickMode, PointInputMode, safe_usize_to_f32,
+    AutoPlaceState, AxisValueField, CurcatApp, DragTarget, PickMode, PointInputMode,
+    safe_usize_to_f32,
 };
+
+use crate::types::AxisMapping;
 use egui::{Color32, Key, PointerButton, Pos2, Sense, Vec2, pos2};
+use std::time::{Duration, Instant};
 
 impl CurcatApp {
     pub(crate) fn handle_middle_pan(&mut self, response: &egui::Response, ui: &egui::Ui) {
@@ -144,12 +148,15 @@ impl CurcatApp {
                 };
 
                 let pointer_pos = response.interact_pointer_pos();
-                let hover_pos = response.hover_pos();
-                let (shift_pressed, primary_down, delete_down, ctrl_pressed) =
+                let hover_pos = response
+                    .hover_pos()
+                    .or_else(|| ui.ctx().input(|i| i.pointer.latest_pos()));
+                let (shift_pressed, primary_down, primary_pressed, delete_down, ctrl_pressed) =
                     ui.ctx().input(|i| {
                         (
                             i.modifiers.shift,
                             i.pointer.button_down(PointerButton::Primary),
+                            i.pointer.button_pressed(PointerButton::Primary),
                             i.key_down(Key::Delete),
                             i.modifiers.ctrl,
                         )
@@ -163,6 +170,20 @@ impl CurcatApp {
                 } else {
                     None
                 };
+
+                let suppress_primary_click = self.auto_place_tick(
+                    pointer_pixel,
+                    primary_down,
+                    primary_pressed,
+                    shift_pressed,
+                    delete_down,
+                    x_mapping.as_ref(),
+                    y_mapping.as_ref(),
+                );
+
+                if primary_down {
+                    ui.ctx().request_repaint_after(Duration::from_millis(16));
+                }
 
                 if shift_pressed
                     && response.drag_started_by(PointerButton::Primary)
@@ -245,6 +266,7 @@ impl CurcatApp {
                         self.dragging_handle = None;
                     }
                 } else if response.clicked_by(PointerButton::Primary)
+                    && !suppress_primary_click
                     && !shift_pressed
                     && let Some(pos) = pointer_pos
                 {
@@ -523,7 +545,9 @@ impl CurcatApp {
                         painter.galley(label_pos + padding, galley, text_color);
                     }
 
-                    if let Some(icon) = if matches!(self.pick_mode, PickMode::CurveColor) {
+                    if let Some(icon) = if self.auto_place_state.active {
+                        Some("✚")
+                    } else if matches!(self.pick_mode, PickMode::CurveColor) {
                         Some("🧪")
                     } else if delete_down {
                         Some("🗑")
@@ -560,5 +584,146 @@ impl CurcatApp {
                 ui.label("Drop an image here, open a file, or paste from clipboard (Ctrl+V).");
             });
         }
+    }
+}
+
+impl CurcatApp {
+    fn reset_auto_place_runtime(&mut self, keep_suppress: bool) {
+        let suppress_click = self.auto_place_state.suppress_click && keep_suppress;
+        self.auto_place_state = AutoPlaceState {
+            suppress_click,
+            ..AutoPlaceState::default()
+        };
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn auto_place_tick(
+        &mut self,
+        pointer_pixel: Option<Pos2>,
+        primary_down: bool,
+        primary_pressed: bool,
+        shift_pressed: bool,
+        delete_down: bool,
+        x_mapping: Option<&AxisMapping>,
+        y_mapping: Option<&AxisMapping>,
+    ) -> bool {
+        if primary_pressed {
+            self.reset_auto_place_runtime(false);
+        }
+
+        let mut suppress_click = self.auto_place_state.suppress_click;
+
+        if !primary_down {
+            suppress_click = self.auto_place_state.suppress_click;
+            self.reset_auto_place_runtime(false);
+            return suppress_click;
+        }
+
+        if shift_pressed || delete_down || !matches!(self.pick_mode, PickMode::None) {
+            self.reset_auto_place_runtime(true);
+            return suppress_click;
+        }
+
+        if x_mapping.is_none() || y_mapping.is_none() {
+            return suppress_click;
+        }
+
+        let Some(pixel) = pointer_pixel else {
+            self.reset_auto_place_runtime(true);
+            return suppress_click;
+        };
+
+        let now = Instant::now();
+        let cfg = self.auto_place_cfg;
+
+        if self.auto_place_state.hold_started_at.is_none() {
+            self.auto_place_state.hold_started_at = Some(now);
+            self.auto_place_state.last_pointer = Some((pixel, now));
+            self.auto_place_state.pause_started_at = None;
+            self.auto_place_state.speed_ewma = 0.0;
+        }
+
+        if !self.auto_place_state.active {
+            let hold_elapsed = now
+                .saturating_duration_since(self.auto_place_state.hold_started_at.unwrap())
+                .as_secs_f32();
+            if hold_elapsed >= cfg.hold_activation_secs {
+                self.auto_place_state.active = true;
+                self.auto_place_state.suppress_click = true;
+                suppress_click = true;
+                self.update_auto_place_speed(pixel, now);
+                self.try_auto_place_point(pixel, now);
+            }
+            return suppress_click;
+        }
+
+        self.update_auto_place_speed(pixel, now);
+        self.auto_place_state.suppress_click = true;
+        let _ = self.try_auto_place_point(pixel, now);
+        true
+    }
+
+    fn update_auto_place_speed(&mut self, pixel: Pos2, now: Instant) {
+        if let Some((prev, prev_time)) = self.auto_place_state.last_pointer {
+            let dt = now
+                .saturating_duration_since(prev_time)
+                .as_secs_f32()
+                .max(f32::EPSILON);
+            let dist = (pixel - prev).length();
+            let inst_speed = dist / dt;
+            let alpha = self.auto_place_cfg.speed_smoothing.clamp(0.0, 1.0);
+            self.auto_place_state.speed_ewma =
+                if alpha <= f32::EPSILON || !self.auto_place_state.speed_ewma.is_finite() {
+                    inst_speed
+                } else if self.auto_place_state.speed_ewma <= f32::EPSILON {
+                    inst_speed
+                } else {
+                    self.auto_place_state.speed_ewma
+                        + alpha * (inst_speed - self.auto_place_state.speed_ewma)
+                };
+        } else {
+            self.auto_place_state.speed_ewma = 0.0;
+        }
+        self.auto_place_state.last_pointer = Some((pixel, now));
+    }
+
+    fn try_auto_place_point(&mut self, pointer_pixel: Pos2, now: Instant) -> bool {
+        let cfg = self.auto_place_cfg;
+        let speed = self.auto_place_state.speed_ewma.max(0.0);
+        let distance_threshold =
+            (speed * cfg.distance_per_speed).clamp(cfg.distance_min, cfg.distance_max);
+        let time_threshold = if speed <= f32::EPSILON {
+            cfg.time_max_secs
+        } else {
+            (cfg.time_per_speed / speed).clamp(cfg.time_min_secs, cfg.time_max_secs)
+        };
+
+        let paused = if speed < cfg.pause_speed_threshold {
+            let start = self.auto_place_state.pause_started_at.get_or_insert(now);
+            now.saturating_duration_since(*start).as_millis() >= u128::from(cfg.pause_timeout_ms)
+        } else {
+            self.auto_place_state.pause_started_at = None;
+            false
+        };
+        if paused {
+            return false;
+        }
+
+        let snapped = self.resolve_curve_pick(pointer_pixel);
+
+        if let Some((last_pos, last_time)) = self.auto_place_state.last_snapped_point {
+            let dist = (snapped - last_pos).length();
+            if dist < cfg.dedup_radius {
+                return false;
+            }
+            let elapsed = now.saturating_duration_since(last_time).as_secs_f32();
+            if dist < distance_threshold || elapsed < time_threshold {
+                return false;
+            }
+        }
+
+        self.push_curve_point_snapped(snapped);
+        self.auto_place_state.last_snapped_point = Some((snapped, now));
+        true
     }
 }

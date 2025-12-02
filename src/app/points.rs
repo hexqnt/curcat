@@ -67,6 +67,11 @@ impl CurcatApp {
         self.mark_points_dirty();
     }
 
+    pub(crate) fn push_curve_point_snapped(&mut self, snapped: Pos2) {
+        self.points.push(super::PickedPoint::new(snapped));
+        self.mark_points_dirty();
+    }
+
     pub(crate) fn resolve_curve_pick(&mut self, pixel_hint: Pos2) -> Pos2 {
         self.snap_pixel_if_requested(pixel_hint)
     }

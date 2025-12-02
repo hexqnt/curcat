@@ -1,4 +1,4 @@
-use crate::config::AppConfig;
+use crate::config::{AppConfig, AutoPlaceConfig};
 use crate::export::{self, ExportPayload};
 use crate::image_info::{
     ImageMeta, describe_aspect_ratio, format_system_time, human_readable_bytes, total_pixel_count,
@@ -15,7 +15,7 @@ use std::{
     convert::TryFrom,
     path::{Path, PathBuf},
     sync::mpsc::Receiver,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 mod clipboard;
@@ -56,6 +56,17 @@ struct PendingImageTask {
 enum ImageLoadResult {
     Success(ColorImage),
     Error(String),
+}
+
+#[derive(Debug, Default)]
+struct AutoPlaceState {
+    hold_started_at: Option<Instant>,
+    active: bool,
+    last_pointer: Option<(Pos2, Instant)>,
+    last_snapped_point: Option<(Pos2, Instant)>,
+    speed_ewma: f32,
+    pause_started_at: Option<Instant>,
+    suppress_click: bool,
 }
 
 #[derive(Clone)]
@@ -279,6 +290,8 @@ pub struct CurcatApp {
     last_image_dir: Option<PathBuf>,
     last_export_dir: Option<PathBuf>,
     config: AppConfig,
+    auto_place_cfg: AutoPlaceConfig,
+    auto_place_state: AutoPlaceState,
     image_zoom: f32,
     dragging_handle: Option<DragTarget>,
     middle_pan_enabled: bool,
@@ -295,6 +308,8 @@ pub struct CurcatApp {
 
 impl Default for CurcatApp {
     fn default() -> Self {
+        let config = AppConfig::load();
+        let auto_place_cfg = config.auto_place();
         let default_overlay_choices = Self::default_snap_overlay_choices();
         let default_overlay_color = default_overlay_choices
             .first()
@@ -351,7 +366,8 @@ impl Default for CurcatApp {
             active_dialog: None,
             last_image_dir: None,
             last_export_dir: None,
-            config: AppConfig::load(),
+            config,
+            auto_place_cfg,
             image_zoom: 1.0,
             dragging_handle: None,
             middle_pan_enabled: true,
@@ -364,6 +380,7 @@ impl Default for CurcatApp {
             interp_algorithm: InterpAlgorithm::Linear,
             raw_include_distances: false,
             raw_include_angles: false,
+            auto_place_state: AutoPlaceState::default(),
         }
     }
 }
@@ -409,6 +426,7 @@ impl CurcatApp {
         self.touch_pan_last = None;
         self.mark_snap_maps_dirty();
         self.refresh_snap_overlay_palette();
+        self.auto_place_state = AutoPlaceState::default();
     }
 
     fn set_loaded_image(&mut self, image: LoadedImage, meta: Option<ImageMeta>) {
