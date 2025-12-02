@@ -1,9 +1,9 @@
 use super::CurcatApp;
 use crate::export::{ExportExtraColumn, ExportPayload};
-use crate::interp::{XYPoint, interpolate_sorted};
+use crate::interp::{XYPoint, auto_sample_count, interpolate_sorted};
 use crate::types::AxisValue;
 
-pub(crate) fn format_overlay_value(value: &AxisValue) -> String {
+pub fn format_overlay_value(value: &AxisValue) -> String {
     match value {
         AxisValue::Float(v) => format!("{v:.3}"),
         AxisValue::DateTime(_) => value.format(),
@@ -29,6 +29,33 @@ impl CurcatApp {
             return Vec::new();
         }
         interpolate_sorted(nums, sample_count, algo)
+    }
+
+    pub(crate) fn auto_tune_sample_count(&mut self) {
+        let x_mapping = self.cal_x.mapping();
+        let y_mapping = self.cal_y.mapping();
+        if x_mapping.is_none() || y_mapping.is_none() {
+            self.set_status("Complete both axis calibrations before auto-tuning samples.");
+            return;
+        }
+
+        let algo = self.interp_algorithm;
+        let min_samples = super::SAMPLE_COUNT_MIN;
+        let max_samples = self.config.export.samples_max_sanitized();
+        let rel_tol = self.config.export.auto_rel_tolerance_sanitized();
+        let ref_samples = self.config.export.auto_ref_samples_sanitized();
+
+        self.ensure_point_numeric_cache(x_mapping.as_ref(), y_mapping.as_ref());
+        let nums = self.sorted_numeric_points_cache();
+        if nums.len() < 2 {
+            self.set_status("Add at least two points before auto-tuning samples.");
+            return;
+        }
+
+        let suggested =
+            auto_sample_count(nums, algo, min_samples, max_samples, rel_tol, ref_samples);
+        self.sample_count = suggested;
+        self.set_status(format!("Sample count auto-tuned to {suggested}."));
     }
 
     pub(crate) fn build_export_payload(&mut self) -> Result<ExportPayload, &'static str> {

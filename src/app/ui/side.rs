@@ -288,9 +288,31 @@ impl CurcatApp {
                 ui.label("Samples:")
                     .on_hover_text("Number of evenly spaced samples to export");
                 ui.spacing_mut().slider_width = 150.0;
-                let sresp =
-                    ui.add(egui::Slider::new(&mut self.sample_count, 10..=10000).text("count"));
-                sresp.on_hover_text("Higher values give a denser interpolated curve (max 10000)");
+                ui.horizontal(|ui| {
+                    let max_samples = self.config.export.samples_max_sanitized();
+                    self.sample_count = self
+                        .sample_count
+                        .clamp(super::super::SAMPLE_COUNT_MIN, max_samples);
+                    let sresp = ui.add(
+                        egui::Slider::new(
+                            &mut self.sample_count,
+                            super::super::SAMPLE_COUNT_MIN..=max_samples,
+                        )
+                        .text("count"),
+                    );
+                    sresp.on_hover_text(format!(
+                        "Higher values give a denser interpolated curve (max {max_samples})"
+                    ));
+                    if ui
+                        .button("Auto")
+                        .on_hover_text(
+                            "Automatically choose a sample count based on curve smoothness",
+                        )
+                        .clicked()
+                    {
+                        self.auto_tune_sample_count();
+                    }
+                });
             }
             ExportKind::RawPoints => {
                 ui.label("Extra columns:")

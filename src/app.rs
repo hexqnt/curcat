@@ -3,6 +3,7 @@ use crate::export::{self, ExportPayload};
 use crate::image_info::{
     ImageMeta, describe_aspect_ratio, format_system_time, human_readable_bytes, total_pixel_count,
 };
+
 use crate::image_util::LoadedImage;
 use crate::interp::{InterpAlgorithm, XYPoint};
 use crate::snap::{SnapFeatureSource, SnapMapCache, SnapThresholdKind};
@@ -132,6 +133,7 @@ const MIN_ZOOM: f32 = 0.25;
 const MAX_ZOOM: f32 = 8.0;
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const POINT_HIT_RADIUS: f32 = 12.0;
+const SAMPLE_COUNT_MIN: usize = 10;
 const CAL_POINT_DRAW_RADIUS: f32 = 4.0;
 const CAL_POINT_OUTLINE_PAD: f32 = 1.5;
 const CAL_LINE_WIDTH: f32 = 1.6;

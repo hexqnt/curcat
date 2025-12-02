@@ -43,6 +43,121 @@ pub fn interpolate_sorted(
     }
 }
 
+/// Heuristic auto-selection of sample count for exporting an interpolated curve.
+///
+/// The goal is to find the smallest `samples` such that a polyline through the
+/// exported samples approximates the underlying interpolated curve within a
+/// relative tolerance on Y.
+///
+/// - `points` are expected to be sorted by `x`.
+/// - `min_samples`/`max_samples` bound the search (inclusive).
+/// - `rel_tolerance` is the allowed fraction of the Y-range (0–1).
+/// - `ref_target_samples` controls the resolution of the internal reference curve.
+pub fn auto_sample_count(
+    points: &[XYPoint],
+    algo: InterpAlgorithm,
+    min_samples: usize,
+    max_samples: usize,
+    rel_tolerance: f64,
+    ref_target_samples: usize,
+) -> usize {
+    let mut min_samples = min_samples.max(2);
+    let max_samples = max_samples.max(min_samples);
+
+    if points.len() < 2 {
+        return min_samples;
+    }
+
+    // Build a "reference" curve at relatively high resolution that
+    // represents the underlying interpolation as closely as we need.
+    const MIN_REF_SAMPLES: usize = 16;
+    const MIN_ABS_TOLERANCE: f64 = 1.0e-9;
+
+    let ref_tolerance = rel_tolerance.clamp(1.0e-6, 1.0);
+
+    let ref_samples = ref_target_samples
+        .max(MIN_REF_SAMPLES)
+        .min(max_samples.max(min_samples).max(MIN_REF_SAMPLES));
+    if ref_samples <= 1 {
+        return min_samples;
+    }
+
+    let ref_xs = build_sample_positions(points, ref_samples);
+    let ref_curve = match algo {
+        InterpAlgorithm::Linear => interpolate_linear(points, &ref_xs),
+        InterpAlgorithm::StepHold => interpolate_step(points, &ref_xs),
+        InterpAlgorithm::NaturalCubic => interpolate_cubic(points, &ref_xs),
+    };
+
+    // Compute Y-range on the reference curve to derive an absolute tolerance.
+    let mut y_min = ref_curve[0].y;
+    let mut y_max = ref_curve[0].y;
+    for p in &ref_curve[1..] {
+        if p.y < y_min {
+            y_min = p.y;
+        }
+        if p.y > y_max {
+            y_max = p.y;
+        }
+    }
+    let mut y_range = y_max - y_min;
+    if y_range < 0.0 {
+        y_range = -y_range;
+    }
+
+    // If the curve is almost flat, any reasonable sample count is fine.
+    if y_range <= f64::EPSILON {
+        return min_samples;
+    }
+
+    let abs_tolerance = (y_range * ref_tolerance).max(MIN_ABS_TOLERANCE);
+
+    // Clamp min_samples so that it is not larger than max_samples.
+    if min_samples > max_samples {
+        min_samples = max_samples;
+    }
+
+    let mut current = min_samples;
+
+    loop {
+        if current >= max_samples {
+            return max_samples;
+        }
+
+        let coarse = interpolate_sorted(points, current, algo);
+        if coarse.len() < 2 {
+            return current;
+        }
+
+        // Treat the coarse samples as a polyline and approximate it at the
+        // reference X positions using linear interpolation.
+        let approx = interpolate_linear(&coarse, &ref_xs);
+
+        let mut max_err = 0.0;
+        for (ref_pt, approx_pt) in ref_curve.iter().zip(approx.iter()) {
+            let err = (ref_pt.y - approx_pt.y).abs();
+            if err > max_err {
+                max_err = err;
+                if max_err > abs_tolerance {
+                    break;
+                }
+            }
+        }
+
+        if max_err <= abs_tolerance {
+            return current;
+        }
+
+        let next = current.saturating_mul(2).saturating_sub(1);
+        if next <= current {
+            break;
+        }
+        current = next.min(max_samples);
+    }
+
+    max_samples
+}
+
 fn build_sample_positions(points: &[XYPoint], samples: usize) -> Vec<f64> {
     if samples == 0 {
         return vec![];

@@ -112,6 +112,46 @@ impl CrosshairStyle {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+pub struct ExportConfig {
+    pub samples_max: u32,
+    pub auto_rel_tolerance: f32,
+    pub auto_ref_samples: u32,
+}
+
+impl Default for ExportConfig {
+    fn default() -> Self {
+        Self {
+            samples_max: 10_000,
+            auto_rel_tolerance: 0.005,
+            auto_ref_samples: 2048,
+        }
+    }
+}
+
+impl ExportConfig {
+    pub fn samples_max_sanitized(&self) -> usize {
+        const MIN_ALLOWED: u32 = 10;
+        const MAX_ALLOWED: u32 = 1_000_000;
+        let clamped = self.samples_max.clamp(MIN_ALLOWED, MAX_ALLOWED);
+        clamped as usize
+    }
+
+    pub fn auto_rel_tolerance_sanitized(&self) -> f64 {
+        let t = self.auto_rel_tolerance;
+        let clamped = t.clamp(1.0e-6, 1.0);
+        f64::from(clamped)
+    }
+
+    pub fn auto_ref_samples_sanitized(&self) -> usize {
+        const MIN_REF: u32 = 16;
+        const MAX_REF: u32 = 65_536;
+        let clamped = self.auto_ref_samples.clamp(MIN_REF, MAX_REF);
+        clamped as usize
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub curve_line: StrokeStyle,
     pub curve_points: PointStyle,
@@ -119,6 +159,7 @@ pub struct AppConfig {
     pub crosshair: CrosshairStyle,
     pub image_limits: ImageLimits,
     pub attention_highlight: StrokeStyle,
+    pub export: ExportConfig,
 }
 
 impl Default for AppConfig {
@@ -134,6 +175,7 @@ impl Default for AppConfig {
                 alpha: 1.0,
                 thickness: 1.2,
             },
+            export: ExportConfig::default(),
         }
     }
 }
