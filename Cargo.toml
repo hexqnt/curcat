@@ -7,6 +7,7 @@ description = "Digitize curves from chart images; calibrate axes, interpolate, e
 repository = "https://github.com/hexqnt/curcat"
 homepage = "https://github.com/hexqnt/curcat"
 readme = "README.md"
+rust-version = "1.88"
 
 [dependencies]
 arboard = "3.6"
