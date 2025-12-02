@@ -129,9 +129,12 @@ pub fn auto_sample_count(
             return current;
         }
 
-        // Treat the coarse samples as a polyline and approximate it at the
-        // reference X positions using linear interpolation.
-        let approx = interpolate_linear(&coarse, &ref_xs);
+        // Approximate the coarse curve at the reference X positions.
+        // Use step reconstruction for step-hold to avoid smoothing away jumps.
+        let approx = match algo {
+            InterpAlgorithm::StepHold => interpolate_step(&coarse, &ref_xs),
+            _ => interpolate_linear(&coarse, &ref_xs),
+        };
 
         let mut max_err = 0.0;
         for (ref_pt, approx_pt) in ref_curve.iter().zip(approx.iter()) {

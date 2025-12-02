@@ -256,6 +256,16 @@ impl CurcatApp {
         behavior: SnapBehavior,
     ) -> Option<Pos2> {
         self.ensure_snap_maps();
+        if self.snap_maps.is_none() {
+            if let Some(image) = &self.image {
+                let color_image = image.pixels.clone();
+                let overlay_color = self.snap_target_color;
+                let tolerance = self.snap_color_tolerance;
+                self.snap_maps = SnapMapCache::build(&color_image, overlay_color, tolerance);
+                self.pending_snap_job = None;
+                self.snap_maps_dirty = false;
+            }
+        }
         let cache = self.snap_maps.as_ref()?;
         cache.find_point(pixel_hint, self.contrast_search_radius, behavior)
     }

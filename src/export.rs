@@ -71,7 +71,8 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
         worksheet.write_string(0, col_idx, &col.header)?;
     }
 
-    let num_format = Format::new().set_num_format("0.0000");
+    // Keep parity with CSV/JSON (6 fractional digits).
+    let num_format = Format::new().set_num_format("0.000000");
     let datetime_format = Format::new().set_num_format("yyyy-mm-dd hh:mm:ss.000");
     let blank_format = Format::new();
 
