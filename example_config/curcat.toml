@@ -1,0 +1,34 @@
+[curve_line]
+color = "#50C878FF"
+thickness = 2.0
+
+[curve_points]
+color = "#C85050FF"
+radius = 3.0
+
+# Pan speed while holding the middle mouse button
+pan_speed = 1.0
+
+[crosshair]
+color = "#C8C8C8CC"
+
+[attention_highlight]
+# Color/opacity of the blinking hint outline (open button, calibration fields)
+color = "#DC4646FF"
+thickness = 1.2
+
+[export]
+# Maximum number of points in interpolation mode (Samples slider / auto-pick)
+samples_max = 10000
+# Relative error threshold for auto-pick (fraction of Y range, 0–1)
+auto_rel_tolerance = 0.005
+# Target density of the reference curve for auto-pick (internal sample count)
+auto_ref_samples = 2048
+
+[image_limits]
+# Max width/height for decoding (px)
+image_dim = 12000
+# Max total pixels (after decoding)
+total_pixels = 80000000
+# Memory limit for decoder allocations (bytes)
+alloc_bytes = 536870912

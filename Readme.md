@@ -114,31 +114,28 @@ cargo run --release -- path/to/image.png
 Необязательный файл конфигурации можно положить рядом с бинарником,
 в XDG‑каталогах (`~/.config/curcat/curcat.toml`) или в системном профиле приложения
 (`~/.config/Curcat/Curcat/curcat.toml`). Поля имеют разумные значения по умолчанию.
+Цвета задаются шестнадцатиричными строками вида `#RRGGBBAA` (нижний регистр тоже подходит).
 
 Пример:
 
 ```toml
 [curve_line]
-color = [80, 200, 120]
-alpha = 1.0
+color = "#50C878FF"
 thickness = 2.0
 
 [curve_points]
-color = [200, 80, 80]
-alpha = 1.0
+color = "#C85050FF"
 radius = 3.0
 
 # Скорость панорамирования при зажатой средней кнопке
 pan_speed = 1.0
 
 [crosshair]
-color = [200, 200, 200]
-alpha = 0.8
+color = "#C8C8C8CC"
 
 [attention_highlight]
 # Цвет/прозрачность мигающего контура подсказок (кнопка открытия, поля калибровки)
-color = [220, 70, 70]
-alpha = 1.0
+color = "#DC4646FF"
 thickness = 1.2
 
 [export]

@@ -1,48 +1,139 @@
+use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
 use directories::{BaseDirs, ProjectDirs};
 use egui::{Color32, Stroke};
-use serde::Deserialize;
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, Visitor},
+};
 
 const CONFIG_FILE_NAME: &str = "curcat.toml";
 
-fn alpha_to_u8(alpha: f32) -> u8 {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    {
-        (alpha.clamp(0.0, 1.0) * 255.0).round() as u8
+/// Hex-encoded RGBA color stored as raw bytes (`#RRGGBBAA` on disk).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HexColor([u8; 4]);
+
+impl HexColor {
+    /// Create an opaque color from RGB bytes.
+    pub const fn from_rgb(r: u8, g: u8, b: u8) -> Self {
+        Self([r, g, b, 255])
+    }
+
+    /// Create a color from RGBA bytes.
+    pub const fn from_rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self([r, g, b, a])
+    }
+
+    /// Convert into `Color32` with the stored opacity.
+    pub const fn to_color32(self) -> Color32 {
+        let [r, g, b, a] = self.0;
+        Color32::from_rgba_unmultiplied_const(r, g, b, a)
+    }
+
+    fn fmt_hex(self) -> String {
+        let [r, g, b, a] = self.0;
+        format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
+    }
+
+    fn parse_hex(value: &str) -> Result<Self, String> {
+        let trimmed = value.trim();
+        let hex = trimmed
+            .strip_prefix('#')
+            .or_else(|| trimmed.strip_prefix("0x"))
+            .unwrap_or(trimmed);
+        if hex.len() != 6 && hex.len() != 8 {
+            return Err(format!(
+                "expected a hex color like #RRGGBB or #RRGGBBAA, got \"{value}\""
+            ));
+        }
+        if !hex.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+            return Err(format!("invalid hex color \"{value}\""));
+        }
+        let parse_component = |range: std::ops::Range<usize>| -> Result<u8, String> {
+            u8::from_str_radix(&hex[range], 16)
+                .map_err(|_| format!("invalid hex color \"{value}\""))
+        };
+        let r = parse_component(0..2)?;
+        let g = parse_component(2..4)?;
+        let b = parse_component(4..6)?;
+        let a = if hex.len() == 8 {
+            parse_component(6..8)?
+        } else {
+            255
+        };
+        Ok(Self::from_rgba(r, g, b, a))
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+impl Serialize for HexColor {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.fmt_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for HexColor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct HexColorVisitor;
+
+        impl Visitor<'_> for HexColorVisitor {
+            type Value = HexColor;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a hex color string like \"#FF0000\" or \"#FF0000AA\"")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                HexColor::parse_hex(value).map_err(E::custom)
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                self.visit_str(&value)
+            }
+        }
+
+        deserializer.deserialize_str(HexColorVisitor)
+    }
+}
+
+/// Stroke appearance settings for curves and outlines.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StrokeStyle {
-    pub color: [u8; 3],
-    pub alpha: f32,
+    pub color: HexColor,
     pub thickness: f32,
 }
 
 impl Default for StrokeStyle {
     fn default() -> Self {
         Self {
-            color: [80, 200, 120],
-            alpha: 1.0,
+            color: HexColor::from_rgb(80, 200, 120),
             thickness: 2.0,
         }
     }
 }
 
 impl StrokeStyle {
-    pub fn color32(&self) -> Color32 {
-        Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            alpha_to_u8(self.alpha),
-        )
+    /// Return the stroke color with embedded alpha.
+    pub const fn color32(&self) -> Color32 {
+        self.color.to_color32()
     }
 
-    pub fn stroke(&self) -> Stroke {
+    /// Build an `egui::Stroke` with sanitized thickness.
+    pub const fn stroke(&self) -> Stroke {
         Stroke {
             width: self.thickness.max(0.1),
             color: self.color32(),
@@ -50,67 +141,59 @@ impl StrokeStyle {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Appearance settings for picked points.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PointStyle {
-    pub color: [u8; 3],
-    pub alpha: f32,
+    pub color: HexColor,
     pub radius: f32,
 }
 
 impl Default for PointStyle {
     fn default() -> Self {
         Self {
-            color: [200, 80, 80],
-            alpha: 1.0,
+            color: HexColor::from_rgb(200, 80, 80),
             radius: 3.0,
         }
     }
 }
 
 impl PointStyle {
-    pub fn color32(&self) -> Color32 {
-        Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            alpha_to_u8(self.alpha),
-        )
+    /// Return the point color with embedded alpha.
+    pub const fn color32(&self) -> Color32 {
+        self.color.to_color32()
     }
 
+    /// Radius constrained to a sensible minimum.
     pub const fn radius(&self) -> f32 {
         self.radius.max(0.1)
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Appearance settings for the hover crosshair.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CrosshairStyle {
-    pub color: [u8; 3],
-    pub alpha: f32,
+    pub color: HexColor,
 }
 
 impl Default for CrosshairStyle {
     fn default() -> Self {
         Self {
-            color: [200, 200, 200],
-            alpha: 0.8,
+            color: HexColor::from_rgba(200, 200, 200, 204),
         }
     }
 }
 
 impl CrosshairStyle {
-    pub fn color32(&self) -> Color32 {
-        Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            alpha_to_u8(self.alpha),
-        )
+    /// Return the crosshair color with embedded alpha.
+    pub const fn color32(&self) -> Color32 {
+        self.color.to_color32()
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Parameters controlling export and auto-sampling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExportConfig {
     pub samples_max: u32,
@@ -129,6 +212,7 @@ impl Default for ExportConfig {
 }
 
 impl ExportConfig {
+    /// `samples_max` clamped to operational bounds.
     pub fn samples_max_sanitized(&self) -> usize {
         const MIN_ALLOWED: u32 = 10;
         const MAX_ALLOWED: u32 = 1_000_000;
@@ -136,12 +220,14 @@ impl ExportConfig {
         clamped as usize
     }
 
+    /// `auto_rel_tolerance` clamped to a safe range.
     pub fn auto_rel_tolerance_sanitized(&self) -> f64 {
         let t = self.auto_rel_tolerance;
         let clamped = t.clamp(1.0e-6, 1.0);
         f64::from(clamped)
     }
 
+    /// `auto_ref_samples` clamped to operational bounds.
     pub fn auto_ref_samples_sanitized(&self) -> usize {
         const MIN_REF: u32 = 16;
         const MAX_REF: u32 = 65_536;
@@ -150,7 +236,8 @@ impl ExportConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Root application configuration loaded from TOML.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
     pub curve_line: StrokeStyle,
@@ -172,8 +259,7 @@ impl Default for AppConfig {
             crosshair: CrosshairStyle::default(),
             image_limits: ImageLimits::default(),
             attention_highlight: StrokeStyle {
-                color: [220, 70, 70],
-                alpha: 1.0,
+                color: HexColor::from_rgb(220, 70, 70),
                 thickness: 1.2,
             },
             export: ExportConfig::default(),
@@ -183,6 +269,7 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Load configuration from known locations or fall back to defaults.
     pub fn load() -> Self {
         for path in Self::candidate_paths() {
             if let Ok(contents) = fs::read_to_string(&path) {
@@ -197,14 +284,17 @@ impl AppConfig {
         Self::default()
     }
 
+    /// Sanitized multiplier for panning speed.
     pub const fn pan_speed_factor(&self) -> f32 {
         self.pan_speed.clamp(0.01, 50.0)
     }
 
+    /// Apply safety bounds to image limits.
     pub fn effective_image_limits(&self) -> ImageLimits {
         self.image_limits.sanitized()
     }
 
+    /// Apply safety bounds to auto-place parameters.
     pub fn auto_place(&self) -> AutoPlaceConfig {
         self.auto_place.sanitized()
     }
@@ -230,7 +320,8 @@ impl AppConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Limits for image decoding to guard against resource abuse.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ImageLimits {
     pub image_dim: u32,
@@ -249,6 +340,7 @@ impl Default for ImageLimits {
 }
 
 impl ImageLimits {
+    /// Clamp values to conservative, safe bounds.
     pub fn sanitized(&self) -> Self {
         // Clamp to reasonable operating bounds to avoid pathological configs.
         let dim = self.image_dim.clamp(64, 100_000);
@@ -264,7 +356,8 @@ impl ImageLimits {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+/// Parameters that govern auto-placement of points.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AutoPlaceConfig {
     pub hold_activation_secs: f32,
@@ -299,6 +392,7 @@ impl Default for AutoPlaceConfig {
 }
 
 impl AutoPlaceConfig {
+    /// Clamp values to keep auto-placement stable and predictable.
     pub fn sanitized(&self) -> Self {
         let hold_activation_secs = self.hold_activation_secs.clamp(0.1, 10.0);
         let distance_min = self.distance_min.clamp(0.1, 200.0);
@@ -324,5 +418,64 @@ impl AutoPlaceConfig {
             dedup_radius,
             speed_smoothing,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct ColorWrapper {
+        color: HexColor,
+    }
+
+    #[test]
+    fn parses_hex_without_alpha_defaults_to_opaque() {
+        let wrapper: ColorWrapper = toml::from_str(r##"color = "#50C878""##).unwrap();
+        assert_eq!(
+            wrapper.color.to_color32().to_srgba_unmultiplied(),
+            [0x50, 0xC8, 0x78, 0xFF]
+        );
+    }
+
+    #[test]
+    fn parses_hex_with_alpha() {
+        let wrapper: ColorWrapper = toml::from_str(r##"color = "#C85050CC""##).unwrap();
+        assert_eq!(
+            wrapper.color.to_color32().to_srgba_unmultiplied(),
+            [0xC8, 0x50, 0x50, 0xCC]
+        );
+    }
+
+    #[test]
+    fn serializes_back_to_hex() {
+        let wrapper = ColorWrapper {
+            color: HexColor::from_rgba(0x01, 0x02, 0x03, 0x04),
+        };
+        let serialized = toml::to_string(&wrapper).unwrap();
+        assert_eq!(serialized.trim(), r##"color = "#01020304""##);
+    }
+
+    #[test]
+    fn keeps_alpha_in_color32() {
+        let color = HexColor::from_rgba(255, 0, 0, 128).to_color32();
+        assert_eq!(color.to_srgba_unmultiplied(), [255, 0, 0, 128]);
+    }
+
+    #[test]
+    fn rejects_legacy_rgb_arrays() {
+        let parsed: Result<ColorWrapper, _> = toml::from_str("color = [1, 2, 3]");
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn accepts_lowercase_hex() {
+        let wrapper: ColorWrapper = toml::from_str(r##"color = "#c85050ff""##).unwrap();
+        assert_eq!(
+            wrapper.color.to_color32().to_srgba_unmultiplied(),
+            [0xC8, 0x50, 0x50, 0xFF]
+        );
     }
 }
