@@ -549,24 +549,43 @@ impl CurcatApp {
                         painter.galley(label_pos + padding, galley, text_color);
                     }
 
-                    if let Some((icon_text, icon_color)) =
-                        self.cursor_badge(delete_down, shift_pressed, ctrl_pressed)
-                    {
-                        let icon_font = egui::FontId::proportional(15.0);
-                        let icon_galley =
-                            painter.layout_no_wrap(icon_text.to_string(), icon_font, icon_color);
-                        let icon_size = icon_galley.size();
-                        let backdrop_offset = Vec2::new(18.0, -18.0);
-                        let anchor = pos + backdrop_offset;
-                        let radius = 12.0;
-                        let icon_bg = Color32::from_rgba_unmultiplied(0, 0, 0, 160);
-                        painter.circle_filled(anchor, radius, icon_bg);
-                        let icon_pos = pos2(
-                            icon_size.x.mul_add(-0.5, anchor.x),
-                            icon_size.y.mul_add(-0.5, anchor.y),
-                        );
-                        painter.galley(icon_pos, icon_galley, icon_color);
-                    }
+                    let badge_offset = Vec2::new(18.0, -18.0);
+                    let badge_anchor = pos + badge_offset;
+                    let badge_radius = 12.0;
+                    let showed_color_badge = {
+                        if matches!(self.pick_mode, PickMode::CurveColor)
+                            && let Some(sampled) = self.sample_image_color(pixel) {
+                                let [r, g, b, _] = sampled.to_array();
+                                let badge_color = Color32::from_rgb(r, g, b);
+                                painter.circle_filled(badge_anchor, badge_radius, badge_color);
+                                painter.circle_stroke(
+                                    badge_anchor,
+                                    badge_radius,
+                                    egui::Stroke::new(1.0, Color32::from_gray(30)),
+                                );
+                                true
+                            }
+                            else{
+                                false
+                            }
+                    };
+
+                    if !showed_color_badge
+                        && let Some((icon_text, icon_color)) =
+                            self.cursor_badge(delete_down, shift_pressed, ctrl_pressed)
+                        {
+                            let icon_font = egui::FontId::proportional(15.0);
+                            let icon_galley =
+                                painter.layout_no_wrap(icon_text.to_string(), icon_font, icon_color);
+                            let icon_size = icon_galley.size();
+                            let icon_bg = Color32::from_rgba_unmultiplied(0, 0, 0, 160);
+                            painter.circle_filled(badge_anchor, badge_radius, icon_bg);
+                            let icon_pos = pos2(
+                                icon_size.x.mul_add(-0.5, badge_anchor.x),
+                                icon_size.y.mul_add(-0.5, badge_anchor.y),
+                            );
+                            painter.galley(icon_pos, icon_galley, icon_color);
+                        }
                 }
             });
         } else if self.pending_image_task.is_some() {
