@@ -8,6 +8,14 @@ impl CurcatApp {
             egui::widgets::global_theme_preference_switch(ui);
             ui.separator();
 
+            let warn_hover = |ui: &mut egui::Ui, action: &str| {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 80, 80),
+                    "⚠ Clears ALL points and calibration",
+                );
+                ui.label(action);
+            };
+
             let side_label = if self.side_open {
                 "Hide side"
             } else {
@@ -52,19 +60,33 @@ impl CurcatApp {
             if info_resp.clicked() && has_image {
                 self.info_window_open = true;
             }
+            if ui
+                .add_enabled(has_image, egui::Button::new("↺ 90°"))
+                .on_hover_ui(|ui| warn_hover(ui, "Rotate 90° counter-clockwise."))
+                .clicked()
             {
-                let resp = ui.add_enabled(has_image, egui::Button::new("↺ 90°"));
-                let resp = resp.on_hover_text("Rotate 90° counter-clockwise");
-                if resp.clicked() {
-                    self.rotate_image(false);
-                }
+                self.rotate_image(false);
             }
+            if ui
+                .add_enabled(has_image, egui::Button::new("↻ 90°"))
+                .on_hover_ui(|ui| warn_hover(ui, "Rotate 90° clockwise."))
+                .clicked()
             {
-                let resp = ui.add_enabled(has_image, egui::Button::new("↻ 90°"));
-                let resp = resp.on_hover_text("Rotate 90° clockwise");
-                if resp.clicked() {
-                    self.rotate_image(true);
-                }
+                self.rotate_image(true);
+            }
+            if ui
+                .add_enabled(has_image, egui::Button::new("⇆ Flip H"))
+                .on_hover_ui(|ui| warn_hover(ui, "Flip horizontally."))
+                .clicked()
+            {
+                self.flip_image(true);
+            }
+            if ui
+                .add_enabled(has_image, egui::Button::new("⇅ Flip V"))
+                .on_hover_ui(|ui| warn_hover(ui, "Flip vertically."))
+                .clicked()
+            {
+                self.flip_image(false);
             }
 
             ui.label("Zoom:")

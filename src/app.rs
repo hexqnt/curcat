@@ -449,6 +449,19 @@ impl CurcatApp {
         }
     }
 
+    fn flip_image(&mut self, horizontal: bool) {
+        if let Some(img) = self.image.as_mut() {
+            if horizontal {
+                img.flip_horizontal();
+                self.set_status("Flipped image horizontally.");
+            } else {
+                img.flip_vertical();
+                self.set_status("Flipped image vertically.");
+            }
+            self.reset_after_image_transform();
+        }
+    }
+
     const fn set_zoom(&mut self, zoom: f32) {
         self.image_zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
     }

@@ -6,6 +6,7 @@ use rayon::prelude::*;
 use std::io::{BufRead, Cursor, Read, Seek};
 use std::path::Path;
 
+/// Image data plus the egui texture handle that mirrors its pixels.
 pub struct LoadedImage {
     pub size: [usize; 2],
     pub texture: TextureHandle,
@@ -19,6 +20,7 @@ impl LoadedImage {
             .set(self.pixels.clone(), TextureOptions::LINEAR);
     }
 
+    /// Construct a `LoadedImage` from in-memory pixels and upload a texture.
     pub fn from_color_image(ctx: &Context, pixels: ColorImage) -> Self {
         let size = pixels.size;
         let texture = ctx.load_texture("loaded_image", pixels.clone(), TextureOptions::LINEAR);
@@ -29,6 +31,7 @@ impl LoadedImage {
         }
     }
 
+    /// Rotate the image 90 degrees clockwise, updating pixels and texture.
     pub fn rotate_90_cw(&mut self) {
         let [width, height] = self.size;
         if width == 0 || height == 0 {
@@ -51,6 +54,7 @@ impl LoadedImage {
         self.refresh_texture();
     }
 
+    /// Rotate the image 90 degrees counter-clockwise, updating pixels and texture.
     pub fn rotate_90_ccw(&mut self) {
         let [width, height] = self.size;
         if width == 0 || height == 0 {
@@ -70,6 +74,48 @@ impl LoadedImage {
             })
             .collect();
         self.pixels = ColorImage::new([height, width], rotated_pixels);
+        self.refresh_texture();
+    }
+
+    /// Mirror the image horizontally (left-right), updating pixels and texture.
+    pub fn flip_horizontal(&mut self) {
+        let [width, height] = self.size;
+        if width == 0 || height == 0 {
+            return;
+        }
+        let total_pixels = width * height;
+        let flipped_pixels: Vec<Color32> = (0..total_pixels)
+            .into_par_iter()
+            .map(|idx| {
+                let x = idx % width;
+                let y = idx / width;
+                let src_x = width - 1 - x;
+                let src_idx = y * width + src_x;
+                self.pixels.pixels[src_idx]
+            })
+            .collect();
+        self.pixels = ColorImage::new([width, height], flipped_pixels);
+        self.refresh_texture();
+    }
+
+    /// Mirror the image vertically (top-bottom), updating pixels and texture.
+    pub fn flip_vertical(&mut self) {
+        let [width, height] = self.size;
+        if width == 0 || height == 0 {
+            return;
+        }
+        let total_pixels = width * height;
+        let flipped_pixels: Vec<Color32> = (0..total_pixels)
+            .into_par_iter()
+            .map(|idx| {
+                let x = idx % width;
+                let y = idx / width;
+                let src_y = height - 1 - y;
+                let src_idx = src_y * width + x;
+                self.pixels.pixels[src_idx]
+            })
+            .collect();
+        self.pixels = ColorImage::new([width, height], flipped_pixels);
         self.refresh_texture();
     }
 }
@@ -108,6 +154,7 @@ where
     ))
 }
 
+/// Load and decode an image from a filesystem path using configured limits.
 pub fn decode_image_from_path(cfg: &AppConfig, path: &Path) -> anyhow::Result<ColorImage> {
     let reader = ImageReader::open(path)
         .with_context(|| format!("Failed to read {}", path.display()))?
@@ -116,6 +163,7 @@ pub fn decode_image_from_path(cfg: &AppConfig, path: &Path) -> anyhow::Result<Co
     decode_reader_to_color(cfg, reader)
 }
 
+/// Load and decode an image from raw bytes using configured limits.
 pub fn decode_image_from_bytes(cfg: &AppConfig, bytes: Vec<u8>) -> anyhow::Result<ColorImage> {
     let cursor = Cursor::new(bytes);
     let reader = ImageReader::new(cursor)

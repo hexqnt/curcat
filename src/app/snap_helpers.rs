@@ -5,6 +5,7 @@ use rayon::prelude::*;
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 
+/// Lightweight summary of an image's average color properties.
 #[derive(Debug, Clone, Copy)]
 pub struct ImageColorStats {
     pub avg_rgb: [f32; 3],
@@ -87,6 +88,7 @@ impl ImageColorStats {
     }
 }
 
+/// Square size (in pixels) used for the snap color swatch preview.
 pub const SNAP_SWATCH_SIZE: f32 = 22.0;
 const SNAP_COLOR_SAMPLE_TARGET: usize = 50_000;
 const SNAP_MAX_COLOR_DISTANCE: f32 = 441.67294;
@@ -256,15 +258,15 @@ impl CurcatApp {
         behavior: SnapBehavior,
     ) -> Option<Pos2> {
         self.ensure_snap_maps();
-        if self.snap_maps.is_none() {
-            if let Some(image) = &self.image {
-                let color_image = image.pixels.clone();
-                let overlay_color = self.snap_target_color;
-                let tolerance = self.snap_color_tolerance;
-                self.snap_maps = SnapMapCache::build(&color_image, overlay_color, tolerance);
-                self.pending_snap_job = None;
-                self.snap_maps_dirty = false;
-            }
+        if self.snap_maps.is_none()
+            && let Some(image) = &self.image
+        {
+            let color_image = image.pixels.clone();
+            let overlay_color = self.snap_target_color;
+            let tolerance = self.snap_color_tolerance;
+            self.snap_maps = SnapMapCache::build(&color_image, overlay_color, tolerance);
+            self.pending_snap_job = None;
+            self.snap_maps_dirty = false;
         }
         let cache = self.snap_maps.as_ref()?;
         cache.find_point(pixel_hint, self.contrast_search_radius, behavior)
