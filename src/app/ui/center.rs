@@ -31,7 +31,10 @@ impl CurcatApp {
                     let delta = (pos - last) * factor;
                     if delta.length_sq() > 0.0 {
                         let scroll_delta = if touch_style { delta } else { -delta };
-                        ui.scroll_with_delta(scroll_delta);
+                        ui.scroll_with_delta_animation(
+                            scroll_delta,
+                            egui::style::ScrollAnimation::none(),
+                        );
                     }
                 }
                 self.touch_pan_last = Some(pos);
