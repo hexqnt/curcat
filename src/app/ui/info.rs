@@ -3,9 +3,28 @@ use super::super::{
     total_pixel_count,
 };
 use crate::types::{AxisUnit, AxisValue};
-use egui::RichText;
+use egui::{Color32, RichText};
 
 impl CurcatApp {
+    pub(crate) fn ui_status_bar(&mut self, ui: &mut egui::Ui) {
+        let points_count = self.points.len();
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("Points: {points_count}"))
+                    .small()
+                    .color(Color32::from_gray(180)),
+            );
+            if let Some(msg) = &self.last_status {
+                ui.separator();
+                ui.label(
+                    RichText::new(msg.clone())
+                        .small()
+                        .color(Color32::from_gray(200)),
+                );
+            }
+        });
+    }
+
     pub(crate) fn ui_image_info_window(&mut self, ctx: &egui::Context) {
         if !self.info_window_open {
             return;

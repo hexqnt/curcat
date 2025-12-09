@@ -89,6 +89,8 @@ impl CurcatApp {
                 self.flip_image(false);
             }
 
+            let has_points = !self.points.is_empty();
+
             ui.label("Zoom:")
                 .on_hover_text("Choose a preset zoom level");
             let zoom_ir = egui::ComboBox::from_id_salt("zoom_combo")
@@ -119,13 +121,19 @@ impl CurcatApp {
             ui.separator();
 
             let resp_clear = ui
-                .add(egui::Button::new("🗑 Clear points").shortcut_text("Ctrl+Shift+D"))
+                .add_enabled(
+                    has_points,
+                    egui::Button::new("🗑 Clear points").shortcut_text("Ctrl+Shift+D"),
+                )
                 .on_hover_text("Clear all points (Ctrl+Shift+D)");
             if resp_clear.clicked() {
                 self.clear_all_points();
             }
             let resp_undo = ui
-                .add(egui::Button::new("↶ Undo").shortcut_text("Ctrl+Z"))
+                .add_enabled(
+                    has_points,
+                    egui::Button::new("↶ Undo").shortcut_text("Ctrl+Z"),
+                )
                 .on_hover_text("Undo last point (Ctrl+Z)");
             if resp_undo.clicked() {
                 self.undo_last_point();

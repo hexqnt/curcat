@@ -8,6 +8,7 @@ use egui::{
     Color32, CornerRadius, Response, RichText, StrokeKind, TextBuffer, TextEdit, Vec2,
     text::{CCursor, CCursorRange},
 };
+
 use std::any::TypeId;
 use std::ops::Range;
 
@@ -114,11 +115,6 @@ impl CurcatApp {
         });
         ui.separator();
         self.ui_export_section(ui);
-
-        if let Some(msg) = &self.last_status {
-            ui.separator();
-            ui.label(RichText::new(msg).small());
-        }
 
         let remaining = ui.available_height().max(0.0);
         if remaining > 24.0 {
@@ -254,6 +250,10 @@ impl CurcatApp {
 
     pub(crate) fn ui_export_section(&mut self, ui: &mut egui::Ui) {
         ui.heading("Export points");
+        let has_points = !self.points.is_empty();
+        let x_ready = self.cal_x.mapping().is_some();
+        let y_ready = self.cal_y.mapping().is_some();
+        let can_export = has_points && x_ready && y_ready;
         ui.horizontal(|ui| {
             ui.radio_value(
                 &mut self.export_kind,
@@ -332,21 +332,53 @@ impl CurcatApp {
         }
 
         ui.separator();
+        let csv_hint = if !has_points {
+            "Add points before exporting to CSV"
+        } else if !x_ready || !y_ready {
+            "Complete both axis calibrations before exporting to CSV"
+        } else {
+            "Export data to CSV (Ctrl+Shift+C)"
+        };
         let resp_csv = ui
-            .add(egui::Button::new("📄 Export CSV…").shortcut_text("Ctrl+Shift+C"))
-            .on_hover_text("Export data to CSV (Ctrl+Shift+C)");
+            .add_enabled(
+                can_export,
+                egui::Button::new("📄 Export CSV…").shortcut_text("Ctrl+Shift+C"),
+            )
+            .on_hover_text(csv_hint);
         if resp_csv.clicked() {
             self.start_export_csv();
         }
+
+        let json_hint = if !has_points {
+            "Add points before exporting to JSON"
+        } else if !x_ready || !y_ready {
+            "Complete both axis calibrations before exporting to JSON"
+        } else {
+            "Export data to JSON (Ctrl+Shift+J)"
+        };
         let resp_json = ui
-            .add(egui::Button::new("🧾 Export JSON…").shortcut_text("Ctrl+Shift+J"))
-            .on_hover_text("Export data to JSON (Ctrl+Shift+J)");
+            .add_enabled(
+                can_export,
+                egui::Button::new("🧾 Export JSON…").shortcut_text("Ctrl+Shift+J"),
+            )
+            .on_hover_text(json_hint);
         if resp_json.clicked() {
             self.start_export_json();
         }
+
+        let xlsx_hint = if !has_points {
+            "Add points before exporting to Excel"
+        } else if !x_ready || !y_ready {
+            "Complete both axis calibrations before exporting to Excel"
+        } else {
+            "Export data to Excel (Ctrl+Shift+E)"
+        };
         let resp_xlsx = ui
-            .add(egui::Button::new("📊 Export Excel…").shortcut_text("Ctrl+Shift+E"))
-            .on_hover_text("Export data to Excel (Ctrl+Shift+E)");
+            .add_enabled(
+                can_export,
+                egui::Button::new("📊 Export Excel…").shortcut_text("Ctrl+Shift+E"),
+            )
+            .on_hover_text(xlsx_hint);
         if resp_xlsx.clicked() {
             self.start_export_xlsx();
         }

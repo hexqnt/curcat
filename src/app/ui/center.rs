@@ -291,6 +291,10 @@ impl CurcatApp {
                             PickMode::None => {
                                 if x_mapping.is_some() && y_mapping.is_some() {
                                     self.push_curve_point(pixel);
+                                } else {
+                                    self.set_status(
+                                        "Calibration incomplete: set both X and Y axes before picking points.",
+                                    );
                                 }
                             }
                             PickMode::X1 => {
@@ -567,7 +571,11 @@ impl CurcatApp {
             });
         } else if self.pending_image_task.is_some() {
             ui.centered_and_justified(|ui| {
-                ui.label("Loading image…");
+                if let Some(task) = self.pending_image_task.as_ref() {
+                    ui.label(format!("Loading image: {}…", task.meta.description()));
+                } else {
+                    ui.label("Loading image…");
+                }
             });
         } else {
             ui.centered_and_justified(|ui| {
