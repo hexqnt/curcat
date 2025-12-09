@@ -545,33 +545,23 @@ impl CurcatApp {
                         painter.galley(label_pos + padding, galley, text_color);
                     }
 
-                    if let Some(icon) = if self.auto_place_state.active {
-                        Some("✚")
-                    } else if matches!(self.pick_mode, PickMode::CurveColor) {
-                        Some("🧪")
-                    } else if delete_down {
-                        Some("🗑")
-                    } else if shift_pressed {
-                        Some("✋")
-                    } else if ctrl_pressed {
-                        Some("🔍")
-                    } else {
-                        None
-                    } {
-                        let icon_font = egui::FontId::proportional(24.0);
+                    if let Some((icon_text, icon_color)) =
+                        self.cursor_badge(delete_down, shift_pressed, ctrl_pressed)
+                    {
+                        let icon_font = egui::FontId::proportional(15.0);
                         let icon_galley =
-                            painter.layout_no_wrap(icon.to_string(), icon_font, Color32::WHITE);
+                            painter.layout_no_wrap(icon_text.to_string(), icon_font, icon_color);
                         let icon_size = icon_galley.size();
-                        let backdrop_offset = Vec2::new(22.0, -22.0);
+                        let backdrop_offset = Vec2::new(18.0, -18.0);
                         let anchor = pos + backdrop_offset;
-                        let radius = (icon_size.x.max(icon_size.y) * 0.6).max(14.0);
+                        let radius = 12.0;
                         let icon_bg = Color32::from_rgba_unmultiplied(0, 0, 0, 160);
                         painter.circle_filled(anchor, radius, icon_bg);
                         let icon_pos = pos2(
                             icon_size.x.mul_add(-0.5, anchor.x),
                             icon_size.y.mul_add(-0.5, anchor.y),
                         );
-                        painter.galley(icon_pos, icon_galley, Color32::WHITE);
+                        painter.galley(icon_pos, icon_galley, icon_color);
                     }
                 }
             });
@@ -583,6 +573,45 @@ impl CurcatApp {
             ui.centered_and_justified(|ui| {
                 ui.label("Drop an image here, open a file, or paste from clipboard (Ctrl+V).");
             });
+        }
+    }
+}
+
+impl CurcatApp {
+    const fn cursor_badge(
+        &self,
+        delete_down: bool,
+        shift_pressed: bool,
+        ctrl_pressed: bool,
+    ) -> Option<(&'static str, Color32)> {
+        if let Some(badge) = self.calibration_cursor_badge() {
+            return Some(badge);
+        }
+        if self.auto_place_state.active {
+            return Some(("✚", Color32::WHITE));
+        }
+        if matches!(self.pick_mode, PickMode::CurveColor) {
+            return Some(("🧪", Color32::WHITE));
+        }
+        if delete_down {
+            return Some(("🗑", Color32::WHITE));
+        }
+        if shift_pressed {
+            return Some(("✋", Color32::WHITE));
+        }
+        if ctrl_pressed {
+            return Some(("🔍", Color32::WHITE));
+        }
+        None
+    }
+
+    const fn calibration_cursor_badge(&self) -> Option<(&'static str, Color32)> {
+        match self.pick_mode {
+            PickMode::X1 => Some(("X1", Color32::from_rgb(190, 225, 255))),
+            PickMode::X2 => Some(("X2", Color32::from_rgb(190, 225, 255))),
+            PickMode::Y1 => Some(("Y1", Color32::from_rgb(200, 255, 200))),
+            PickMode::Y2 => Some(("Y2", Color32::from_rgb(200, 255, 200))),
+            _ => None,
         }
     }
 }
