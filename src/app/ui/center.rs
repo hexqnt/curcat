@@ -111,7 +111,10 @@ impl CurcatApp {
             let mut y_mapping = self.cal_y.mapping();
             // Take a snapshot of the texture handle and size to avoid borrowing self.image in the UI closure
             let (tex_id, img_size) = (img.texture.id(), img.size);
-            egui::ScrollArea::both().show(ui, |ui| {
+            let scroll_out = egui::ScrollArea::both()
+                .id_salt("image_scroll")
+                .scroll_offset(self.image_pan)
+                .show(ui, |ui| {
                 let base_size = egui::vec2(
                     safe_usize_to_f32(img_size[0]),
                     safe_usize_to_f32(img_size[1]),
@@ -591,6 +594,7 @@ impl CurcatApp {
                         }
                 }
             });
+            self.image_pan = scroll_out.state.offset;
         } else if self.pending_image_task.is_some() {
             ui.centered_and_justified(|ui| {
                 if let Some(task) = self.pending_image_task.as_ref() {

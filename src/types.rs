@@ -1,5 +1,6 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use egui::Pos2;
+use serde::{Deserialize, Serialize};
 
 const NANOS_PER_SEC: f64 = 1_000_000_000.0;
 const NANOS_I64: i64 = 1_000_000_000;
@@ -29,18 +30,21 @@ const DATETIME_FORMATS: [&str; 12] = [
 
 const DATE_FORMATS: [&str; 5] = ["%Y-%m-%d", "%Y/%m/%d", "%d.%m.%Y", "%d/%m/%Y", "%m/%d/%Y"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Scale type for an axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScaleKind {
     Linear,
     Log10,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Units used for axis values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AxisUnit {
     Float,
     DateTime,
 }
 
+/// Axis value (floating-point number or timestamp).
 #[derive(Debug, Clone, PartialEq)]
 pub enum AxisValue {
     Float(f64),
@@ -48,6 +52,7 @@ pub enum AxisValue {
 }
 
 impl AxisValue {
+    /// Convert to scalar seconds for interpolation and sorting.
     pub fn to_scalar_seconds(&self) -> f64 {
         match self {
             Self::Float(v) => *v,
@@ -142,6 +147,7 @@ fn format_datetime(dt: &NaiveDateTime) -> String {
     }
 }
 
+/// Parse a string into an axis value using the given unit.
 pub fn parse_axis_value(input: &str, unit: AxisUnit) -> Option<AxisValue> {
     match unit {
         AxisUnit::Float => input.trim().parse::<f64>().ok().map(AxisValue::Float),
@@ -175,17 +181,25 @@ fn parse_datetime(input: &str) -> Option<NaiveDateTime> {
     None
 }
 
+/// Mapping between two calibration points and their axis values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AxisMapping {
+    /// First calibration point in pixels.
     pub p1: Pos2,
+    /// Second calibration point in pixels.
     pub p2: Pos2,
+    /// Value at the first calibration point.
     pub v1: AxisValue,
+    /// Value at the second calibration point.
     pub v2: AxisValue,
+    /// Scale kind for the axis.
     pub scale: ScaleKind,
+    /// Units for the axis.
     pub unit: AxisUnit,
 }
 
 impl AxisMapping {
+    /// Parameter t of the point along the calibration segment (0..1).
     pub fn t_of_point(&self, p: Pos2) -> f64 {
         let d = self.p2 - self.p1;
         let v = p - self.p1;
@@ -197,11 +211,13 @@ impl AxisMapping {
         }
     }
 
+    /// Numeric axis value for a pixel position.
     pub fn numeric_at(&self, p: Pos2) -> Option<f64> {
         let t = self.t_of_point(p);
         self.numeric_at_t(t)
     }
 
+    /// Numeric value along the axis at parameter t (0..1).
     pub fn numeric_at_t(&self, t: f64) -> Option<f64> {
         let s1 = self.v1.to_scalar_seconds();
         let s2 = self.v2.to_scalar_seconds();
@@ -219,6 +235,7 @@ impl AxisMapping {
         }
     }
 
+    /// Full axis value (with unit) for a pixel position.
     pub fn value_at(&self, p: Pos2) -> Option<AxisValue> {
         self.numeric_at(p)
             .map(|s| AxisValue::from_scalar_seconds(self.unit, s))

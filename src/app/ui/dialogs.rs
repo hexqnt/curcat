@@ -9,6 +9,34 @@ impl CurcatApp {
         self.active_dialog = Some(NativeDialog::Open(dialog));
     }
 
+    pub(crate) fn open_project_dialog(&mut self) {
+        let mut dialog = FileDialog::new()
+            .title("Open project")
+            .add_file_filter_extensions("Curcat project", vec!["curcat"])
+            .default_file_filter("Curcat project");
+        if let Some(dir) = self.last_project_dir.as_deref() {
+            dialog = dialog.initial_directory(dir.to_path_buf());
+        }
+        dialog.pick_file();
+        self.active_dialog = Some(NativeDialog::OpenProject(dialog));
+    }
+
+    pub(crate) fn save_project_dialog(&mut self) {
+        let default_name = self
+            .last_project_path
+            .as_ref()
+            .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "project.curcat".to_string());
+        let mut dialog = Self::make_save_dialog(
+            "Save project",
+            &default_name,
+            &["curcat"],
+            self.last_project_dir.as_deref(),
+        );
+        dialog.save_file();
+        self.active_dialog = Some(NativeDialog::SaveProject(dialog));
+    }
+
     pub(crate) fn start_export_csv(&mut self) {
         match self.build_export_payload() {
             Ok(payload) => {

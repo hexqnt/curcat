@@ -52,11 +52,14 @@ impl CurcatApp {
         match task.rx.try_recv() {
             Ok(ImageLoadResult::Success(color)) => {
                 let meta = task.meta.into_image_meta();
+                let loaded_path = meta.path().map(Path::to_path_buf);
                 self.finish_loaded_color_image(ctx, color, meta);
+                self.apply_project_if_ready(loaded_path.as_deref());
             }
             Ok(ImageLoadResult::Error(err)) => {
                 let label = task.meta.description();
                 self.set_status(format!("Failed to load {label}: {err}"));
+                self.pending_project_apply = None;
             }
             Err(TryRecvError::Empty) => {
                 self.pending_image_task = Some(task);
@@ -64,6 +67,7 @@ impl CurcatApp {
             Err(TryRecvError::Disconnected) => {
                 let label = task.meta.description();
                 self.set_status(format!("Loading {label} failed: worker disconnected."));
+                self.pending_project_apply = None;
             }
         }
     }

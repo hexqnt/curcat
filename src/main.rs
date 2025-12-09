@@ -4,6 +4,7 @@ mod export;
 mod image_info;
 mod image_util;
 mod interp;
+mod project;
 mod snap;
 mod types;
 

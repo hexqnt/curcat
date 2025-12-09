@@ -16,6 +16,56 @@ impl CurcatApp {
                 ui.label(action);
             };
 
+            let has_image = self.image.is_some();
+            let can_save_project = self.image_meta.as_ref().and_then(|m| m.path()).is_some();
+
+            let file_menu = ui.menu_button("📂 File", |ui| {
+                if ui
+                    .add(egui::Button::new("Open image…").shortcut_text("Ctrl+O"))
+                    .on_hover_text(
+                        "Open an image (Ctrl+O). You can also drag & drop into the center.",
+                    )
+                    .clicked()
+                {
+                    self.open_image_dialog();
+                    ui.close();
+                }
+
+                if ui
+                    .add(egui::Button::new("Paste image").shortcut_text("Ctrl+V"))
+                    .on_hover_text("Paste image from clipboard (Ctrl+V)")
+                    .clicked()
+                {
+                    self.paste_image_from_clipboard(ui.ctx());
+                    ui.close();
+                }
+
+                ui.separator();
+
+                if ui
+                    .add(egui::Button::new("Load project…").shortcut_text("Ctrl+Shift+P"))
+                    .on_hover_text("Load a saved Curcat project (Ctrl+Shift+P)")
+                    .clicked()
+                {
+                    self.open_project_dialog();
+                    ui.close();
+                }
+
+                if ui
+                    .add_enabled(
+                        can_save_project,
+                        egui::Button::new("Save project").shortcut_text("Ctrl+S"),
+                    )
+                    .on_hover_text("Save the current session as a Curcat project (Ctrl+S)")
+                    .clicked()
+                {
+                    self.save_project_dialog();
+                    ui.close();
+                }
+            });
+            self.paint_attention_outline_if(ui, file_menu.response.rect, self.image.is_none());
+            ui.separator();
+
             let side_label = if self.side_open {
                 "Hide side"
             } else {
@@ -30,21 +80,6 @@ impl CurcatApp {
             }
             ui.separator();
 
-            let open_resp = ui
-                .add(egui::Button::new("📂 Open image…").shortcut_text("Ctrl+O"))
-                .on_hover_text("Open an image (Ctrl+O). You can also drag & drop into the center.");
-            self.paint_attention_outline_if(ui, open_resp.rect, self.image.is_none());
-            if open_resp.clicked() {
-                self.open_image_dialog();
-            }
-            let paste_resp = ui
-                .add(egui::Button::new("📋 Paste image").shortcut_text("Ctrl+V"))
-                .on_hover_text("Paste image from clipboard (Ctrl+V)");
-            if paste_resp.clicked() {
-                self.paste_image_from_clipboard(ui.ctx());
-            }
-
-            let has_image = self.image.is_some();
             let stats_resp = ui
                 .add(egui::Button::new("📊 Points stats"))
                 .on_hover_text("Show stats for picked points");
