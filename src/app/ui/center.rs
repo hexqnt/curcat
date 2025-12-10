@@ -521,15 +521,16 @@ impl CurcatApp {
                         let galley = painter.layout_no_wrap(text, font.clone(), text_color);
                         let size = galley.size();
                         let total = size + padding * 2.0;
-                        let mut label_pos = pos2(total.x.mul_add(-0.5, pos.x), clip.top() + 4.0);
                         let min_x = clip.left() + 2.0;
                         let max_x = clip.right() - total.x - 2.0;
-                        label_pos.x = if max_x < min_x {
-                            min_x
-                        } else {
-                            label_pos.x.clamp(min_x, max_x)
-                        };
-                        label_pos.y = clip.top() + 4.0;
+                        let label_pos = pos2(
+                            if max_x < min_x {
+                                min_x
+                            } else {
+                                total.x.mul_add(-0.5, pos.x).clamp(min_x, max_x)
+                            },
+                            clip.top() + 4.0,
+                        );
                         let bg_rect = egui::Rect::from_min_size(label_pos, total);
                         painter.rect_filled(bg_rect, 3.0, bg_color);
                         painter.galley(label_pos + padding, galley, text_color);
@@ -541,15 +542,16 @@ impl CurcatApp {
                         let galley = painter.layout_no_wrap(text, font, text_color);
                         let size = galley.size();
                         let total = size + padding * 2.0;
-                        let mut label_pos = pos2(clip.left() + 4.0, total.y.mul_add(-0.5, pos.y));
                         let min_y = clip.top() + 2.0;
                         let max_y = clip.bottom() - total.y - 2.0;
-                        label_pos.x = clip.left() + 4.0;
-                        label_pos.y = if max_y < min_y {
-                            min_y
-                        } else {
-                            label_pos.y.clamp(min_y, max_y)
-                        };
+                        let label_pos = pos2(
+                            clip.left() + 4.0,
+                            if max_y < min_y {
+                                min_y
+                            } else {
+                                total.y.mul_add(-0.5, pos.y).clamp(min_y, max_y)
+                            },
+                        );
                         let bg_rect = egui::Rect::from_min_size(label_pos, total);
                         painter.rect_filled(bg_rect, 3.0, bg_color);
                         painter.galley(label_pos + padding, galley, text_color);
@@ -735,15 +737,15 @@ impl CurcatApp {
             let dist = (pixel - prev).length();
             let inst_speed = dist / dt;
             let alpha = self.auto_place_cfg.speed_smoothing.clamp(0.0, 1.0);
-            self.auto_place_state.speed_ewma =
-                if alpha <= f32::EPSILON || !self.auto_place_state.speed_ewma.is_finite() {
-                    inst_speed
-                } else if self.auto_place_state.speed_ewma <= f32::EPSILON {
-                    inst_speed
-                } else {
-                    self.auto_place_state.speed_ewma
-                        + alpha * (inst_speed - self.auto_place_state.speed_ewma)
-                };
+            let prev_speed = self.auto_place_state.speed_ewma;
+            self.auto_place_state.speed_ewma = if alpha <= f32::EPSILON
+                || !prev_speed.is_finite()
+                || prev_speed <= f32::EPSILON
+            {
+                inst_speed
+            } else {
+                prev_speed + alpha * (inst_speed - prev_speed)
+            };
         } else {
             self.auto_place_state.speed_ewma = 0.0;
         }

@@ -2,7 +2,7 @@ use super::super::{AxisCalUi, CurcatApp, rounded_u8};
 use egui::{Color32, CornerRadius, StrokeKind, pos2};
 
 impl CurcatApp {
-    pub(crate) fn attention_color(&self, ctx: &egui::Context, base: Color32) -> Color32 {
+    pub(crate) fn attention_color(ctx: &egui::Context, base: Color32) -> Color32 {
         let [r, g, b, a] = base.to_array();
         let base_alpha = f32::from(a) / 255.0;
         let time = ctx.input(|i| i.time) as f32;
@@ -24,7 +24,7 @@ impl CurcatApp {
             return;
         }
         let mut stroke = self.config.attention_highlight.stroke();
-        stroke.color = self.attention_color(ui.ctx(), stroke.color);
+        stroke.color = Self::attention_color(ui.ctx(), stroke.color);
         ui.painter().rect_stroke(
             rect.expand(super::super::ATTENTION_OUTLINE_PAD),
             CornerRadius::ZERO,

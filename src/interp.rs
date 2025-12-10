@@ -11,6 +11,9 @@ pub enum InterpAlgorithm {
     NaturalCubic,
 }
 
+const MIN_REF_SAMPLES: usize = 16;
+const MIN_ABS_TOLERANCE: f64 = 1.0e-9;
+
 impl InterpAlgorithm {
     pub const ALL: [Self; 3] = [Self::Linear, Self::StepHold, Self::NaturalCubic];
 
@@ -70,10 +73,7 @@ pub fn auto_sample_count(
 
     // Build a "reference" curve at relatively high resolution that
     // represents the underlying interpolation as closely as we need.
-    const MIN_REF_SAMPLES: usize = 16;
-    const MIN_ABS_TOLERANCE: f64 = 1.0e-9;
-
-    let ref_tolerance = rel_tolerance.clamp(1.0e-6, 1.0);
+    let clamped_rel_tolerance = rel_tolerance.clamp(1.0e-6, 1.0);
 
     let ref_samples = ref_target_samples
         .max(MIN_REF_SAMPLES)
@@ -110,7 +110,7 @@ pub fn auto_sample_count(
         return min_samples;
     }
 
-    let abs_tolerance = (y_range * ref_tolerance).max(MIN_ABS_TOLERANCE);
+    let abs_tolerance = (y_range * clamped_rel_tolerance).max(MIN_ABS_TOLERANCE);
 
     // Clamp min_samples so that it is not larger than max_samples.
     if min_samples > max_samples {

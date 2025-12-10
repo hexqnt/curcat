@@ -6,7 +6,7 @@ use crate::types::{AxisUnit, AxisValue};
 use egui::{Color32, RichText};
 
 impl CurcatApp {
-    pub(crate) fn ui_status_bar(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn ui_status_bar(&self, ui: &mut egui::Ui) {
         let points_count = self.points.len();
         ui.horizontal(|ui| {
             ui.label(
@@ -17,7 +17,7 @@ impl CurcatApp {
             if let Some(msg) = &self.last_status {
                 ui.separator();
                 ui.label(
-                    RichText::new(msg.clone())
+                    RichText::new(msg.as_str())
                         .small()
                         .color(Color32::from_gray(200)),
                 );
@@ -153,7 +153,7 @@ struct RangeF64 {
 }
 
 impl RangeF64 {
-    const fn span(&self) -> f64 {
+    const fn span(self) -> f64 {
         self.max - self.min
     }
 }
@@ -165,7 +165,7 @@ struct RangeF32 {
 }
 
 impl RangeF32 {
-    const fn span(&self) -> f32 {
+    const fn span(self) -> f32 {
         self.max - self.min
     }
 }

@@ -575,7 +575,7 @@ impl CurcatApp {
         else {
             anyhow::bail!("Cannot save project: image was not loaded from a file");
         };
-        let absolute_image_path = std::fs::canonicalize(&image_path).unwrap_or(image_path.clone());
+        let absolute_image_path = std::fs::canonicalize(&image_path).unwrap_or(image_path);
         let image_crc32 = project::compute_image_crc32(&absolute_image_path)?;
         let relative_image_path =
             project::make_relative_image_path(target_path, &absolute_image_path)
@@ -616,11 +616,11 @@ impl CurcatApp {
         })
     }
 
-    fn handle_project_save(&mut self, path: PathBuf) {
-        self.last_project_path = Some(path.clone());
+    fn handle_project_save(&mut self, path: &Path) {
+        self.last_project_path = Some(path.to_path_buf());
         self.last_project_dir = path.parent().map(Path::to_path_buf);
-        match self.build_project_payload(&path) {
-            Ok(payload) => match project::save_project(&path, &payload) {
+        match self.build_project_payload(path) {
+            Ok(payload) => match project::save_project(path, &payload) {
                 Ok(()) => {
                     self.set_status("Project saved.");
                 }
@@ -662,30 +662,28 @@ impl CurcatApp {
     fn begin_applying_project(&mut self, plan: ProjectApplyPlan) {
         let image_path = plan.image.path.clone();
         self.project_prompt = None;
-        self.pending_project_apply = Some(plan);
-        let status = if let Some(active_plan) = self.pending_project_apply.as_ref() {
-            let source_label = match active_plan.image.source {
+        let status = {
+            let source_label = match plan.image.source {
                 project::ImagePathSource::Absolute => "absolute path",
                 project::ImagePathSource::Relative => "relative path",
             };
-            if !active_plan.image.checksum_matches {
-                let expected = active_plan.payload.image_crc32;
-                let actual = active_plan
+            if plan.image.checksum_matches {
+                format!(
+                    "Loading project v{} image from {source_label}…",
+                    plan.version
+                )
+            } else {
+                let expected = plan.payload.image_crc32;
+                let actual = plan
                     .image
                     .actual_checksum
                     .map_or_else(|| "unknown".to_string(), |v| format!("{v:#010x}"));
                 format!(
                     "Image checksum mismatch (expected {expected:#010x}, got {actual}). Loading from {source_label}…"
                 )
-            } else {
-                format!(
-                    "Loading project v{} image from {source_label}…",
-                    active_plan.version
-                )
             }
-        } else {
-            "Loading project image…".to_string()
         };
+        self.pending_project_apply = Some(plan);
         self.set_status(status);
         self.start_loading_image_from_path(image_path);
     }
@@ -719,8 +717,9 @@ impl CurcatApp {
 
         self.image_zoom = plan.payload.zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         self.image_pan = Vec2::new(plan.payload.pan[0], plan.payload.pan[1]);
-        self.project_title = plan.payload.title.clone();
-        self.project_description = plan.payload.description.clone();
+        self.project_title.clone_from(&plan.payload.title);
+        self.project_description
+            .clone_from(&plan.payload.description);
 
         self.cal_x = Self::axis_from_record(&plan.payload.calibration.x);
         self.cal_y = Self::axis_from_record(&plan.payload.calibration.y);
@@ -930,7 +929,7 @@ impl eframe::App for CurcatApp {
                 NativeDialog::SaveProject(dialog) => {
                     dialog.update(ctx);
                     if let Some(path) = dialog.take_picked() {
-                        self.handle_project_save(path);
+                        self.handle_project_save(&path);
                         close_dialog = true;
                     } else {
                         match dialog.state() {
