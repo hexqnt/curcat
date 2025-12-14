@@ -54,6 +54,7 @@ impl CurcatApp {
 
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_central_image(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui) {
+        self.last_viewport_size = Some(ui.available_size());
         // Handle drag & drop regardless of whether an image is already loaded
         let (hovered_files, dropped_files) =
             ui.input(|i| (i.raw.hovered_files.clone(), i.raw.dropped_files.clone()));
@@ -271,26 +272,20 @@ impl CurcatApp {
                     if !shift_pressed || !primary_down {
                         self.dragging_handle = None;
                     }
+                } else if response.clicked_by(PointerButton::Secondary)
+                    && matches!(self.pick_mode, PickMode::None)
+                    && let Some(pos) = pointer_pos
+                {
+                    let image_origin = rect.min;
+                    self.remove_point_near_screen(pos, image_origin);
                 } else if response.clicked_by(PointerButton::Primary)
                     && !suppress_primary_click
                     && !shift_pressed
                     && let Some(pos) = pointer_pos
                 {
                     if delete_down {
-                        let mut best: Option<(usize, f32)> = None;
-                        for (idx, point) in self.points.iter().enumerate() {
-                            let screen = rect.min + point.pixel.to_vec2() * self.image_zoom;
-                            let dist = pos.distance(screen);
-                            if dist <= super::super::POINT_HIT_RADIUS
-                                && best.as_ref().is_none_or(|(_, best_dist)| dist < *best_dist)
-                            {
-                                best = Some((idx, dist));
-                            }
-                        }
-                        if let Some((idx, _)) = best {
-                            self.points.remove(idx);
-                            self.mark_points_dirty();
-                        }
+                        let image_origin = rect.min;
+                        self.remove_point_near_screen(pos, image_origin);
                     } else {
                         let pixel = to_pixel(pos);
                         match self.pick_mode {
@@ -311,6 +306,7 @@ impl CurcatApp {
                                 self.pick_mode = PickMode::None;
                                 x_mapping = self.cal_x.mapping();
                                 self.queue_value_focus(AxisValueField::X1);
+                                self.set_status("Picked X1.");
                             }
                             PickMode::X2 => {
                                 let snapped = self.snap_pixel_if_requested(pixel);
@@ -320,6 +316,7 @@ impl CurcatApp {
                                 self.pick_mode = PickMode::None;
                                 x_mapping = self.cal_x.mapping();
                                 self.queue_value_focus(AxisValueField::X2);
+                                self.set_status("Picked X2.");
                             }
                             PickMode::Y1 => {
                                 let snapped = self.snap_pixel_if_requested(pixel);
@@ -329,6 +326,7 @@ impl CurcatApp {
                                 self.pick_mode = PickMode::None;
                                 y_mapping = self.cal_y.mapping();
                                 self.queue_value_focus(AxisValueField::Y1);
+                                self.set_status("Picked Y1.");
                             }
                             PickMode::Y2 => {
                                 let snapped = self.snap_pixel_if_requested(pixel);
@@ -338,6 +336,7 @@ impl CurcatApp {
                                 self.pick_mode = PickMode::None;
                                 y_mapping = self.cal_y.mapping();
                                 self.queue_value_focus(AxisValueField::Y2);
+                                self.set_status("Picked Y2.");
                             }
                             PickMode::CurveColor => {
                                 self.pick_curve_color_at(pixel);
@@ -597,6 +596,7 @@ impl CurcatApp {
                 }
             });
             self.image_pan = scroll_out.state.offset;
+            self.last_viewport_size = Some(scroll_out.inner_rect.size());
         } else if self.pending_image_task.is_some() {
             ui.centered_and_justified(|ui| {
                 if let Some(task) = self.pending_image_task.as_ref() {
@@ -648,6 +648,27 @@ impl CurcatApp {
             PickMode::Y1 => Some(("Y1", Color32::from_rgb(200, 255, 200))),
             PickMode::Y2 => Some(("Y2", Color32::from_rgb(200, 255, 200))),
             _ => None,
+        }
+    }
+
+    fn remove_point_near_screen(&mut self, pointer: Pos2, image_origin: Pos2) -> bool {
+        let mut best: Option<(usize, f32)> = None;
+        for (idx, point) in self.points.iter().enumerate() {
+            let screen = image_origin + point.pixel.to_vec2() * self.image_zoom;
+            let dist = pointer.distance(screen);
+            if dist <= super::super::POINT_HIT_RADIUS
+                && best.as_ref().is_none_or(|(_, best_dist)| dist < *best_dist)
+            {
+                best = Some((idx, dist));
+            }
+        }
+        if let Some((idx, _)) = best {
+            self.points.remove(idx);
+            self.mark_points_dirty();
+            self.set_status("Point removed.");
+            true
+        } else {
+            false
         }
     }
 }
@@ -738,14 +759,12 @@ impl CurcatApp {
             let inst_speed = dist / dt;
             let alpha = self.auto_place_cfg.speed_smoothing.clamp(0.0, 1.0);
             let prev_speed = self.auto_place_state.speed_ewma;
-            self.auto_place_state.speed_ewma = if alpha <= f32::EPSILON
-                || !prev_speed.is_finite()
-                || prev_speed <= f32::EPSILON
-            {
-                inst_speed
-            } else {
-                prev_speed + alpha * (inst_speed - prev_speed)
-            };
+            self.auto_place_state.speed_ewma =
+                if alpha <= f32::EPSILON || !prev_speed.is_finite() || prev_speed <= f32::EPSILON {
+                    inst_speed
+                } else {
+                    prev_speed + alpha * (inst_speed - prev_speed)
+                };
         } else {
             self.auto_place_state.speed_ewma = 0.0;
         }

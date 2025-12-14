@@ -16,6 +16,9 @@ pub fn sanitize_axis_text(value: &mut String, unit: AxisUnit) {
     if value.is_empty() {
         return;
     }
+    if matches!(unit, AxisUnit::Float) && value.contains(',') {
+        *value = value.replace(',', ".");
+    }
     value.retain(|ch| axis_char_allowed(unit, ch));
 }
 
@@ -24,7 +27,7 @@ const fn axis_char_allowed(unit: AxisUnit, ch: char) -> bool {
         AxisUnit::Float => {
             ch.is_ascii_digit()
                 || ch.is_ascii_whitespace()
-                || matches!(ch, '+' | '-' | '.')
+                || matches!(ch, '+' | '-' | '.' | ',')
                 || matches!(ch, 'e' | 'E')
                 || matches!(ch, 'n' | 'N' | 'a' | 'A' | 'i' | 'I' | 'f' | 'F')
         }
@@ -61,7 +64,17 @@ impl TextBuffer for AxisFilteredText<'_> {
     fn insert_text(&mut self, text: &str, char_index: usize) -> usize {
         let filtered: String = text
             .chars()
-            .filter(|ch| axis_char_allowed(self.unit, *ch))
+            .filter_map(|ch| {
+                if !axis_char_allowed(self.unit, ch) {
+                    return None;
+                }
+                let mapped = if matches!(self.unit, AxisUnit::Float) && ch == ',' {
+                    '.'
+                } else {
+                    ch
+                };
+                Some(mapped)
+            })
             .collect();
         if filtered.is_empty() {
             return 0;
@@ -397,6 +410,7 @@ impl CurcatApp {
                 ui.push_id(label, |ui| {
                     let mut highlight_jobs: Vec<(egui::Rect, bool)> = Vec::new();
                     let mut pending_focus = self.pending_value_focus;
+                    let mut pending_pick: Option<PickMode> = None;
                     let mapping_ready;
                     {
                         let cal = if is_x {
@@ -500,7 +514,7 @@ impl CurcatApp {
                                         "Click, then pick the {p1_name} point on the image"
                                     ));
                             if pick_resp.clicked() {
-                                self.pick_mode = p1_mode;
+                                pending_pick = Some(p1_mode);
                             }
                             pick_p1_rect = Some(pick_resp.rect);
                             if let Some(p) = cal.p1 {
@@ -540,7 +554,7 @@ impl CurcatApp {
                                         "Click, then pick the {p2_name} point on the image"
                                     ));
                             if pick_resp.clicked() {
-                                self.pick_mode = p2_mode;
+                                pending_pick = Some(p2_mode);
                             }
                             pick_p2_rect = Some(pick_resp.rect);
                             if let Some(p) = cal.p2 {
@@ -563,6 +577,9 @@ impl CurcatApp {
                         }
 
                         mapping_ready = cal.mapping().is_some();
+                    }
+                    if let Some(mode) = pending_pick {
+                        self.begin_pick_mode(mode);
                     }
                     self.pending_value_focus = pending_focus;
 
@@ -641,8 +658,7 @@ impl CurcatApp {
                 .on_hover_text("Click, then select a pixel on the image")
                 .clicked()
             {
-                self.pick_mode = PickMode::CurveColor;
-                self.set_status("Click on the image to sample the curve color.");
+                self.begin_pick_mode(PickMode::CurveColor);
             }
         });
         let tol_resp = ui

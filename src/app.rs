@@ -274,6 +274,7 @@ pub struct CurcatApp {
     image_meta: Option<ImageMeta>,
     image_transform: ImageTransformRecord,
     image_pan: Vec2,
+    last_viewport_size: Option<Vec2>,
     pending_image_task: Option<PendingImageTask>,
     pending_project_apply: Option<ProjectApplyPlan>,
     project_prompt: Option<ProjectLoadPrompt>,
@@ -345,6 +346,7 @@ impl Default for CurcatApp {
             image_meta: None,
             image_transform: ImageTransformRecord::identity(),
             image_pan: Vec2::ZERO,
+            last_viewport_size: None,
             pending_image_task: None,
             pending_project_apply: None,
             project_prompt: None,
@@ -436,6 +438,31 @@ impl CurcatApp {
         self.last_status = Some(msg.into());
     }
 
+    fn begin_pick_mode(&mut self, mode: PickMode) {
+        self.pick_mode = mode;
+        if let Some(label) = Self::pick_mode_label(mode) {
+            self.set_status(format!("{label}… (Esc to cancel)"));
+        }
+    }
+
+    fn cancel_pick_mode(&mut self) {
+        if self.pick_mode != PickMode::None {
+            self.pick_mode = PickMode::None;
+            self.set_status("Picking canceled.");
+        }
+    }
+
+    const fn pick_mode_label(mode: PickMode) -> Option<&'static str> {
+        match mode {
+            PickMode::X1 => Some("Picking X1"),
+            PickMode::X2 => Some("Picking X2"),
+            PickMode::Y1 => Some("Picking Y1"),
+            PickMode::Y2 => Some("Picking Y2"),
+            PickMode::CurveColor => Some("Pick curve color"),
+            PickMode::None => None,
+        }
+    }
+
     fn reset_calibrations(&mut self) {
         self.cal_x.p1 = None;
         self.cal_x.p2 = None;
@@ -521,6 +548,38 @@ impl CurcatApp {
 
     const fn set_zoom(&mut self, zoom: f32) {
         self.image_zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+    }
+
+    fn reset_view(&mut self) {
+        self.set_zoom(1.0);
+        self.image_pan = Vec2::ZERO;
+        self.set_status("View reset to 100%.");
+    }
+
+    fn fit_image_to_viewport(&mut self) {
+        let Some(image) = self.image.as_ref() else {
+            self.set_status("Load an image before fitting the view.");
+            return;
+        };
+        let Some(viewport) = self.last_viewport_size else {
+            self.set_status("Fit view unavailable: viewport size not ready yet.");
+            return;
+        };
+        let [w, h] = image.size;
+        if w == 0 || h == 0 {
+            self.set_status("Cannot fit an empty image.");
+            return;
+        }
+        let vw = viewport.x.max(1.0);
+        let vh = viewport.y.max(1.0);
+        let img_w = safe_usize_to_f32(w);
+        let img_h = safe_usize_to_f32(h);
+        let margin = 0.98;
+        let fit_zoom = (vw / img_w).min(vh / img_h) * margin;
+        let clamped = fit_zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        self.set_zoom(clamped);
+        self.image_pan = Vec2::ZERO;
+        self.set_status(format!("Fit view: {:.0}%", clamped * 100.0));
     }
 
     fn format_zoom(zoom: f32) -> String {
@@ -865,10 +924,23 @@ impl eframe::App for CurcatApp {
             if self.image.is_some() && ctx.input(|i| i.key_pressed(Key::I) && i.modifiers.command) {
                 self.info_window_open = true;
             }
+            // Ctrl/Cmd + F: fit view to viewport
+            if self.image.is_some() && ctx.input(|i| i.key_pressed(Key::F) && i.modifiers.command) {
+                self.fit_image_to_viewport();
+            }
+            // Ctrl/Cmd + R: reset view (zoom 100%, pan origin)
+            if self.image.is_some() && ctx.input(|i| i.key_pressed(Key::R) && i.modifiers.command) {
+                self.reset_view();
+            }
             // Ctrl/Cmd + Z: undo
             if ctx.input(|i| i.key_pressed(Key::Z) && i.modifiers.command) {
                 self.undo_last_point();
             }
+        }
+
+        // Esc: cancel active pick mode
+        if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            self.cancel_pick_mode();
         }
 
         let needs_open_hint = self.image.is_none();

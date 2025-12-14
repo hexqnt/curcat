@@ -140,6 +140,20 @@ impl CurcatApp {
                     }
                 });
             zoom_ir.response.on_hover_text("Zoom presets (percent)");
+            if ui
+                .add(egui::Button::new("📐 Fit").shortcut_text("Ctrl+F"))
+                .on_hover_text("Fit the image into the viewport (Ctrl+F)")
+                .clicked()
+            {
+                self.fit_image_to_viewport();
+            }
+            if ui
+                .add(egui::Button::new("⟳ Reset view").shortcut_text("Ctrl+R"))
+                .on_hover_text("Reset zoom to 100% and pan to origin (Ctrl+R)")
+                .clicked()
+            {
+                self.reset_view();
+            }
 
             ui.separator();
 
