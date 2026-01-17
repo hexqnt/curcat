@@ -6,13 +6,13 @@
 
 </div>
 
----
-
 ![Alt text](images/curcat_screenshot.png "Optional title text")
+
+[![CI](https://github.com/hexqnt/curcat/actions/workflows/ci.yml/badge.svg)](https://github.com/hexqnt/curcat/actions/workflows/ci.yml)
 
 ## 🚀 Установка и запуск
 
-Требования: Rust (1.88+).
+Требования: Rust (1.90+).
 
 ```bash
 cargo run --release

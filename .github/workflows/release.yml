@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+          - os: macos-latest
+            target: macos-aarch64
+          - os: windows-latest
+            target: windows-x86_64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.os }}
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            zip \
+            libx11-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libxcb1-dev \
+            libxrandr-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Package (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          VERSION="${{ github.ref_name }}"
+          ARCHIVE="curcat-${VERSION}-${{ matrix.target }}.zip"
+          rm -f "$ARCHIVE"
+          if [ -f Readme.md ]; then
+            zip -j "$ARCHIVE" target/release/curcat Readme.md
+          else
+            zip -j "$ARCHIVE" target/release/curcat
+          fi
+
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          $archive = "curcat-$version-${{ matrix.target }}.zip"
+          if (Test-Path $archive) { Remove-Item $archive }
+          $files = @("target/release/curcat.exe")
+          if (Test-Path "Readme.md") { $files += "Readme.md" }
+          Compress-Archive -Path $files -DestinationPath $archive -Force
+
+      - name: Package (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          VERSION="${{ github.ref_name }}"
+          ARCHIVE="curcat-${VERSION}-${{ matrix.target }}.zip"
+          rm -f "$ARCHIVE"
+          if [ -f Readme.md ]; then
+            zip -j "$ARCHIVE" target/release/curcat Readme.md
+          else
+            zip -j "$ARCHIVE" target/release/curcat
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: curcat-${{ github.ref_name }}-${{ matrix.target }}
+          path: curcat-${{ github.ref_name }}-${{ matrix.target }}.zip
+
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: curcat-*
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
