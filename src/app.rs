@@ -15,7 +15,7 @@ use egui_file_dialog::{DialogState, FileDialog};
 use std::{
     convert::TryFrom,
     path::{Path, PathBuf},
-    sync::mpsc::Receiver,
+    sync::mpsc::{self, Receiver, TryRecvError},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -56,6 +56,28 @@ struct PendingImageTask {
 
 enum ImageLoadResult {
     Success(ColorImage),
+    Error(String),
+}
+
+#[derive(Debug)]
+struct ProjectSaveRequest {
+    target_path: PathBuf,
+    image_path: PathBuf,
+    transform: ImageTransformRecord,
+    calibration: project::CalibrationRecord,
+    points: Vec<project::PointRecord>,
+    zoom: f32,
+    pan: [f32; 2],
+    title: Option<String>,
+    description: Option<String>,
+}
+
+struct PendingProjectSave {
+    rx: Receiver<ProjectSaveResult>,
+}
+
+enum ProjectSaveResult {
+    Success,
     Error(String),
 }
 
@@ -146,6 +168,38 @@ fn rounded_u8(value: f32) -> u8 {
     {
         value.round().clamp(0.0, f32::from(u8::MAX)) as u8
     }
+}
+
+fn perform_project_save(request: ProjectSaveRequest) -> Result<(), String> {
+    let ProjectSaveRequest {
+        target_path,
+        image_path,
+        transform,
+        calibration,
+        points,
+        zoom,
+        pan,
+        title,
+        description,
+    } = request;
+    let absolute_image_path = std::fs::canonicalize(&image_path).unwrap_or(image_path);
+    let image_crc32 =
+        project::compute_image_crc32(&absolute_image_path).map_err(|err| err.to_string())?;
+    let relative_image_path = project::make_relative_image_path(&target_path, &absolute_image_path)
+        .or_else(|| absolute_image_path.file_name().map(PathBuf::from));
+    let payload = project::ProjectPayload {
+        absolute_image_path,
+        relative_image_path,
+        image_crc32,
+        transform,
+        calibration,
+        points,
+        zoom,
+        pan,
+        title,
+        description,
+    };
+    project::save_project(&target_path, &payload).map_err(|err| err.to_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,6 +331,7 @@ pub struct CurcatApp {
     last_viewport_size: Option<Vec2>,
     pending_image_task: Option<PendingImageTask>,
     pending_project_apply: Option<ProjectApplyPlan>,
+    pending_project_save: Option<PendingProjectSave>,
     project_prompt: Option<ProjectLoadPrompt>,
     project_title: Option<String>,
     project_description: Option<String>,
@@ -349,6 +404,7 @@ impl Default for CurcatApp {
             last_viewport_size: None,
             pending_image_task: None,
             pending_project_apply: None,
+            pending_project_save: None,
             project_prompt: None,
             project_title: None,
             project_description: None,
@@ -623,10 +679,10 @@ impl CurcatApp {
         }
     }
 
-    fn build_project_payload(
+    fn build_project_save_request(
         &mut self,
         target_path: &Path,
-    ) -> anyhow::Result<project::ProjectPayload> {
+    ) -> anyhow::Result<ProjectSaveRequest> {
         let Some(image_path) = self
             .image_meta
             .as_ref()
@@ -634,11 +690,6 @@ impl CurcatApp {
         else {
             anyhow::bail!("Cannot save project: image was not loaded from a file");
         };
-        let absolute_image_path = std::fs::canonicalize(&image_path).unwrap_or(image_path);
-        let image_crc32 = project::compute_image_crc32(&absolute_image_path)?;
-        let relative_image_path =
-            project::make_relative_image_path(target_path, &absolute_image_path)
-                .or_else(|| absolute_image_path.file_name().map(PathBuf::from));
 
         let x_mapping = self.cal_x.mapping();
         let y_mapping = self.cal_y.mapping();
@@ -661,10 +712,9 @@ impl CurcatApp {
             show_calibration_segments: self.show_calibration_segments,
         };
 
-        Ok(project::ProjectPayload {
-            absolute_image_path,
-            relative_image_path,
-            image_crc32,
+        Ok(ProjectSaveRequest {
+            target_path: target_path.to_path_buf(),
+            image_path,
             transform: self.image_transform,
             calibration,
             points,
@@ -676,16 +726,48 @@ impl CurcatApp {
     }
 
     fn handle_project_save(&mut self, path: &Path) {
+        if self.pending_project_save.is_some() {
+            self.set_status("Project save already in progress.");
+            return;
+        }
         self.last_project_path = Some(path.to_path_buf());
         self.last_project_dir = path.parent().map(Path::to_path_buf);
-        match self.build_project_payload(path) {
-            Ok(payload) => match project::save_project(path, &payload) {
-                Ok(()) => {
-                    self.set_status("Project saved.");
-                }
-                Err(err) => self.set_status(format!("Project save failed: {err}")),
-            },
+        match self.build_project_save_request(path) {
+            Ok(request) => self.start_project_save_job(request),
             Err(err) => self.set_status(format!("Project save failed: {err}")),
+        }
+    }
+
+    fn start_project_save_job(&mut self, request: ProjectSaveRequest) {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = match perform_project_save(request) {
+                Ok(()) => ProjectSaveResult::Success,
+                Err(err) => ProjectSaveResult::Error(err),
+            };
+            let _ = tx.send(result);
+        });
+        self.pending_project_save = Some(PendingProjectSave { rx });
+        self.set_status("Saving project…");
+    }
+
+    fn poll_project_save_job(&mut self) {
+        let Some(job) = self.pending_project_save.take() else {
+            return;
+        };
+        match job.rx.try_recv() {
+            Ok(ProjectSaveResult::Success) => {
+                self.set_status("Project saved.");
+            }
+            Ok(ProjectSaveResult::Error(err)) => {
+                self.set_status(format!("Project save failed: {err}"));
+            }
+            Err(TryRecvError::Empty) => {
+                self.pending_project_save = Some(job);
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.set_status("Project save failed: worker disconnected.");
+            }
         }
     }
 
@@ -867,6 +949,7 @@ impl CurcatApp {
 impl eframe::App for CurcatApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.poll_image_loader(ctx);
+        self.poll_project_save_job();
         self.poll_snap_build_job();
         // Global hotkeys (ignored while typing in text fields)
         let wants_kb = ctx.wants_keyboard_input();

@@ -5,7 +5,7 @@ use lz4_flex::block::{compress_prepend_size, decompress_size_prepended};
 use pathdiff::diff_paths;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -255,6 +255,31 @@ fn build_temp_path(target: &Path) -> PathBuf {
     candidate
 }
 
+fn replace_file(tmp_path: &Path, target: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        match fs::rename(tmp_path, target) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::AlreadyExists | io::ErrorKind::PermissionDenied
+                ) && target.exists()
+                {
+                    let _ = fs::remove_file(target);
+                    fs::rename(tmp_path, target)
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(tmp_path, target)
+    }
+}
+
 fn write_atomic(path: &Path, data: &[u8]) -> anyhow::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
@@ -270,7 +295,7 @@ fn write_atomic(path: &Path, data: &[u8]) -> anyhow::Result<()> {
         file.sync_all()
             .with_context(|| format!("Failed to sync {}", tmp_path.display()))?;
     }
-    let rename_result = fs::rename(&tmp_path, path)
+    let rename_result = replace_file(&tmp_path, path)
         .with_context(|| format!("Failed to replace {} with temp file", path.display()));
     if rename_result.is_err() {
         let _ = fs::remove_file(&tmp_path);
