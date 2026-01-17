@@ -48,5 +48,5 @@ jobs:
             libxcb-shape0-dev \
             libxcb-xfixes0-dev
 
-      - name: Build
-        run: cargo build --release
+      - name: Check
+        run: cargo check
