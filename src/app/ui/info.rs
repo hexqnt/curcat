@@ -183,11 +183,9 @@ impl CurcatApp {
 
         if let (Some(range), Some(map)) = (numeric_range, mapping) {
             let min = AxisValue::from_scalar_seconds(map.unit, range.min)
-                .map(|v| v.format())
-                .unwrap_or_else(|| "out of range".to_string());
+                .map_or_else(|| "out of range".to_string(), |v| v.format());
             let max = AxisValue::from_scalar_seconds(map.unit, range.max)
-                .map(|v| v.format())
-                .unwrap_or_else(|| "out of range".to_string());
+                .map_or_else(|| "out of range".to_string(), |v| v.format());
             let span = format_span(map.unit, range.span());
             ui.label(format!("{label}: {min} … {max} (Δ {span})"));
             if let Some(pix) = pixel_range {
@@ -354,8 +352,7 @@ fn axis_length(cal: &AxisCalUi) -> Option<f32> {
 fn format_span(unit: AxisUnit, span: f64) -> String {
     match unit {
         AxisUnit::Float => AxisValue::from_scalar_seconds(AxisUnit::Float, span)
-            .map(|v| v.format())
-            .unwrap_or_else(|| format!("{span:.6}")),
+            .map_or_else(|| format!("{span:.6}"), |v| v.format()),
         AxisUnit::DateTime => format_duration(span),
     }
 }

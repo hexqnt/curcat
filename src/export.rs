@@ -79,7 +79,7 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
     let sheet_count = if total_rows == 0 {
         1
     } else {
-        (total_rows + max_rows_per_sheet - 1) / max_rows_per_sheet
+        total_rows.div_ceil(max_rows_per_sheet)
     };
 
     // Keep parity with CSV/JSON (6 fractional digits).
@@ -121,10 +121,14 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
                     worksheet.write_number_with_format(row, 0, p.x, &num_format)?;
                 }
                 AxisUnit::DateTime => {
-                    let xv =
-                        axis_value_from_scalar_for_xlsx(payload.x_unit, p.x, "x")?;
+                    let xv = axis_value_from_scalar_for_xlsx(payload.x_unit, p.x, "x")?;
                     if let Some(excel_dt) = axis_value_to_excel_datetime(&xv) {
-                        worksheet.write_datetime_with_format(row, 0, &excel_dt, &datetime_format)?;
+                        worksheet.write_datetime_with_format(
+                            row,
+                            0,
+                            &excel_dt,
+                            &datetime_format,
+                        )?;
                     } else {
                         worksheet.write_string(row, 0, xv.format())?;
                     }
@@ -142,10 +146,14 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
                     worksheet.write_number_with_format(row, 1, p.y, &num_format)?;
                 }
                 AxisUnit::DateTime => {
-                    let yv =
-                        axis_value_from_scalar_for_xlsx(payload.y_unit, p.y, "y")?;
+                    let yv = axis_value_from_scalar_for_xlsx(payload.y_unit, p.y, "y")?;
                     if let Some(excel_dt) = axis_value_to_excel_datetime(&yv) {
-                        worksheet.write_datetime_with_format(row, 1, &excel_dt, &datetime_format)?;
+                        worksheet.write_datetime_with_format(
+                            row,
+                            1,
+                            &excel_dt,
+                            &datetime_format,
+                        )?;
                     } else {
                         worksheet.write_string(row, 1, yv.format())?;
                     }
