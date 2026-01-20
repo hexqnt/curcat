@@ -347,3 +347,59 @@ const fn usize_to_f64(value: usize) -> f64 {
         value as f64
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn approx_eq(a: f64, b: f64, eps: f64) -> bool {
+        (a - b).abs() <= eps
+    }
+
+    #[test]
+    fn interpolate_linear_basic() {
+        let points = vec![
+            XYPoint { x: 0.0, y: 0.0 },
+            XYPoint { x: 10.0, y: 10.0 },
+        ];
+        let out = interpolate_sorted(&points, 3, InterpAlgorithm::Linear);
+        assert_eq!(out.len(), 3);
+        assert!(approx_eq(out[0].y, 0.0, 1.0e-9));
+        assert!(approx_eq(out[1].y, 5.0, 1.0e-9));
+        assert!(approx_eq(out[2].y, 10.0, 1.0e-9));
+    }
+
+    #[test]
+    fn interpolate_step_basic() {
+        let points = vec![
+            XYPoint { x: 0.0, y: 0.0 },
+            XYPoint { x: 10.0, y: 10.0 },
+        ];
+        let out = interpolate_sorted(&points, 3, InterpAlgorithm::StepHold);
+        assert_eq!(out.len(), 3);
+        assert!(approx_eq(out[0].y, 0.0, 1.0e-9));
+        assert!(approx_eq(out[1].y, 0.0, 1.0e-9));
+        assert!(approx_eq(out[2].y, 10.0, 1.0e-9));
+    }
+
+    #[test]
+    fn auto_sample_count_linear_returns_min() {
+        let points = vec![
+            XYPoint { x: 0.0, y: 0.0 },
+            XYPoint { x: 10.0, y: 10.0 },
+        ];
+        let min_samples = 10;
+        let max_samples = 100;
+        let rel_tol = 1.0e-3;
+        let ref_samples = 128;
+        let out = auto_sample_count(
+            &points,
+            InterpAlgorithm::Linear,
+            min_samples,
+            max_samples,
+            rel_tol,
+            ref_samples,
+        );
+        assert_eq!(out, min_samples);
+    }
+}
