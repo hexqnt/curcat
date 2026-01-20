@@ -282,6 +282,10 @@ impl AxisCalUi {
     fn values_are_valid(scale: ScaleKind, unit: AxisUnit, v1: &AxisValue, v2: &AxisValue) -> bool {
         match (unit, v1, v2) {
             (AxisUnit::Float, AxisValue::Float(a), AxisValue::Float(b)) => {
+                let finite = a.is_finite() && b.is_finite();
+                if !finite {
+                    return false;
+                }
                 let distinct = (*a - *b).abs() > f64::EPSILON;
                 let positive = scale != ScaleKind::Log10 || (*a > 0.0 && *b > 0.0);
                 distinct && positive

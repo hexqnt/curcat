@@ -64,13 +64,16 @@ impl AxisValue {
         }
     }
 
-    pub fn from_scalar_seconds(unit: AxisUnit, s: f64) -> Self {
+    pub fn from_scalar_seconds(unit: AxisUnit, s: f64) -> Option<Self> {
+        if !s.is_finite() {
+            return None;
+        }
         match unit {
-            AxisUnit::Float => Self::Float(s),
+            AxisUnit::Float => Some(Self::Float(s)),
             AxisUnit::DateTime => {
                 let secs_floor = s.floor();
-                let mut secs = float_to_i64(secs_floor);
-                let mut nanos = float_to_i64(((s - secs_floor) * NANOS_PER_SEC).round());
+                let mut secs = f64_to_i64_checked(secs_floor)?;
+                let mut nanos = f64_to_i64_checked(((s - secs_floor) * NANOS_PER_SEC).round())?;
                 if nanos >= NANOS_I64 {
                     nanos -= NANOS_I64;
                     secs = secs.saturating_add(1);
@@ -79,11 +82,8 @@ impl AxisValue {
                     secs = secs.saturating_sub(1);
                 }
                 let nanos = non_negative_i64_to_u32(nanos.clamp(0, NANOS_I64 - 1));
-                let base = DateTime::<Utc>::from_timestamp(secs, nanos).map_or_else(
-                    || DateTime::<Utc>::UNIX_EPOCH.naive_utc(),
-                    |dt| dt.naive_utc(),
-                );
-                Self::DateTime(base)
+                DateTime::<Utc>::from_timestamp(secs, nanos)
+                    .map(|dt| Self::DateTime(dt.naive_utc()))
             }
         }
     }
@@ -119,10 +119,16 @@ const fn int_to_f64(value: i64) -> f64 {
     }
 }
 
-const fn float_to_i64(value: f64) -> i64 {
+fn f64_to_i64_checked(value: f64) -> Option<i64> {
+    if !value.is_finite() {
+        return None;
+    }
+    if value < i64::MIN as f64 || value > i64::MAX as f64 {
+        return None;
+    }
     #[allow(clippy::cast_possible_truncation)]
     {
-        value as i64
+        Some(value as i64)
     }
 }
 
@@ -238,6 +244,6 @@ impl AxisMapping {
     /// Full axis value (with unit) for a pixel position.
     pub fn value_at(&self, p: Pos2) -> Option<AxisValue> {
         self.numeric_at(p)
-            .map(|s| AxisValue::from_scalar_seconds(self.unit, s))
+            .and_then(|s| AxisValue::from_scalar_seconds(self.unit, s))
     }
 }
