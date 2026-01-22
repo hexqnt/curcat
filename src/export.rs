@@ -1,3 +1,5 @@
+//! Export helpers for writing picked points to CSV, JSON, and XLSX formats.
+
 use crate::interp::XYPoint;
 use crate::types::{AxisUnit, AxisValue};
 use chrono::{Datelike, Duration, Timelike};
@@ -5,6 +7,7 @@ use rust_xlsxwriter::{ExcelDateTime, Format, Workbook, XlsxError};
 use serde_json::{Map, Number, Value, json};
 use std::io::BufWriter;
 
+/// Export-ready dataset plus axis units and optional computed columns.
 #[derive(Debug, Clone)]
 pub struct ExportPayload {
     pub points: Vec<XYPoint>,
@@ -13,6 +16,7 @@ pub struct ExportPayload {
     pub extra_columns: Vec<ExportExtraColumn>,
 }
 
+/// Optional per-row numeric column aligned with the exported points.
 #[derive(Debug, Clone)]
 pub struct ExportExtraColumn {
     pub header: String,
@@ -20,6 +24,7 @@ pub struct ExportExtraColumn {
 }
 
 impl ExportExtraColumn {
+    /// Create a new extra column with a header and row-aligned values.
     pub fn new(header: impl Into<String>, values: Vec<Option<f64>>) -> Self {
         Self {
             header: header.into(),
@@ -37,6 +42,10 @@ impl ExportPayload {
 const XLSX_MAX_ROWS: u32 = 1_048_576;
 const XLSX_MAX_COLS: u16 = 16_384;
 
+/// Write the payload to CSV at the provided path.
+///
+/// Floats are formatted with 6 fractional digits; DateTime values are emitted
+/// as formatted strings. Returns an error if any value is not representable.
 pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
     let mut wtr = csv::Writer::from_path(path)?;
     let mut headers = vec!["x".to_string(), "y".to_string()];
@@ -63,6 +72,10 @@ pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
     Ok(())
 }
 
+/// Write the payload to an Excel XLSX workbook at the provided path.
+///
+/// The export respects Excel row/column limits, splitting data across sheets
+/// when needed. Non-finite numbers and unrepresentable datetimes return errors.
 pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result<(), XlsxError> {
     let mut workbook = Workbook::new();
     let total_columns = payload.extra_columns.len().saturating_add(2);
@@ -184,6 +197,10 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
     workbook.save(path)
 }
 
+/// Write the payload to JSON at the provided path.
+///
+/// The output contains `x_unit`, `y_unit`, and a `points` array. Floats are
+/// rounded to 6 fractional digits; DateTime values are emitted as strings.
 pub fn export_to_json(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
     let mut points = Vec::with_capacity(payload.row_count());
     for row_idx in 0..payload.row_count() {

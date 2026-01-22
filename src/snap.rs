@@ -1,6 +1,9 @@
+//! Multi-scale snapping helpers for locating curve pixels near a cursor.
+
 use egui::{Color32, ColorImage, Pos2, pos2};
 use rayon::prelude::*;
 
+/// Image feature source used to score candidate pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapFeatureSource {
     LumaGradient,
@@ -9,8 +12,10 @@ pub enum SnapFeatureSource {
 }
 
 impl SnapFeatureSource {
+    /// Ordered list of feature sources exposed in the UI.
     pub const ALL: [Self; 3] = [Self::LumaGradient, Self::ColorMatch, Self::Hybrid];
 
+    /// Human-friendly label for UI display.
     pub const fn label(self) -> &'static str {
         match self {
             Self::LumaGradient => "Luma gradient",
@@ -20,6 +25,7 @@ impl SnapFeatureSource {
     }
 }
 
+/// Threshold interpretation when accepting snap candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapThresholdKind {
     Gradient,
@@ -27,6 +33,7 @@ pub enum SnapThresholdKind {
 }
 
 impl SnapThresholdKind {
+    /// Human-friendly label for UI display.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Gradient => "Gradient only",
@@ -43,12 +50,16 @@ struct SnapMapLevel {
     color_similarity: Vec<f32>,
 }
 
+/// Cached multi-resolution maps for fast snapping searches.
 #[derive(Debug, Clone)]
 pub struct SnapMapCache {
     levels: Vec<SnapMapLevel>,
 }
 
 impl SnapMapCache {
+    /// Build a multi-scale cache for the given image and target color.
+    ///
+    /// Returns `None` when the image is empty.
     pub fn build(image: &ColorImage, target: Color32, tolerance: f32) -> Option<Self> {
         if image.size[0] == 0 || image.size[1] == 0 {
             return None;
@@ -68,6 +79,10 @@ impl SnapMapCache {
         Some(Self { levels })
     }
 
+    /// Find the best snap candidate near `pixel_hint` within `radius`.
+    ///
+    /// The search is done on a coarse level first and refined on the base
+    /// level to produce a stable, precise position.
     pub fn find_point(
         &self,
         pixel_hint: Pos2,
@@ -220,6 +235,7 @@ impl SnapMapLevel {
     }
 }
 
+/// Behavior configuration for snapping (contrast or centerline).
 #[derive(Debug, Clone, Copy)]
 pub enum SnapBehavior {
     Contrast {

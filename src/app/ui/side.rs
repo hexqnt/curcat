@@ -1,3 +1,5 @@
+//! Side panel UI: calibration, snapping, and export controls.
+
 use super::super::snap_helpers::SNAP_SWATCH_SIZE;
 use super::super::{AxisUnit, AxisValueField, CurcatApp, ExportKind, PickMode, PointInputMode};
 use super::common::toggle_switch;
@@ -12,6 +14,7 @@ use egui::{
 use std::any::TypeId;
 use std::ops::Range;
 
+/// Normalize axis input text by removing invalid characters and fixing decimals.
 pub fn sanitize_axis_text(value: &mut String, unit: AxisUnit) {
     if value.is_empty() {
         return;

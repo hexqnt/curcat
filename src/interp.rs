@@ -1,9 +1,13 @@
+//! Interpolation utilities for resampling picked points.
+
+/// A 2D point in numeric axis space.
 #[derive(Debug, Clone)]
 pub struct XYPoint {
     pub x: f64,
     pub y: f64,
 }
 
+/// Supported interpolation algorithms for curve export.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterpAlgorithm {
     Linear,
@@ -15,8 +19,10 @@ const MIN_REF_SAMPLES: usize = 16;
 const MIN_ABS_TOLERANCE: f64 = 1.0e-9;
 
 impl InterpAlgorithm {
+    /// Ordered list of algorithms exposed in the UI.
     pub const ALL: [Self; 3] = [Self::Linear, Self::StepHold, Self::NaturalCubic];
 
+    /// Human-friendly label for UI display.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Linear => "Linear",
@@ -26,6 +32,10 @@ impl InterpAlgorithm {
     }
 }
 
+/// Resample already-sorted points into `samples` using the chosen algorithm.
+///
+/// The input is expected to be sorted by `x`. When there is fewer than two
+/// points or `samples <= 1`, the original points are returned.
 pub fn interpolate_sorted(
     points: &[XYPoint],
     samples: usize,

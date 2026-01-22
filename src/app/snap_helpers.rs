@@ -1,3 +1,5 @@
+//! Helpers for snap-map creation, color analysis, and snapping workflow.
+
 use super::{CurcatApp, PointInputMode, SnapBuildJob, rounded_u8, safe_usize_to_f32};
 use crate::snap::{SnapBehavior, SnapMapCache};
 use egui::{Color32, ColorImage, Pos2, Vec2};

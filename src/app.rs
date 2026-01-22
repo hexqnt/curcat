@@ -1,3 +1,5 @@
+//! Main egui/eframe application state and UI orchestration.
+
 use crate::config::{AppConfig, AutoPlaceConfig};
 use crate::export::{self, ExportPayload};
 use crate::image_info::{
@@ -326,6 +328,7 @@ impl PickedPoint {
     }
 }
 
+/// Top-level application state for the Curcat UI.
 #[allow(clippy::struct_excessive_bools)]
 pub struct CurcatApp {
     image: Option<LoadedImage>,
@@ -481,6 +484,7 @@ impl Default for CurcatApp {
 }
 
 impl CurcatApp {
+    /// Create a new app and optionally queue an initial image load.
     pub fn new_with_initial_path(_ctx: &Context, initial_path: Option<&Path>) -> Self {
         let mut app = Self::default();
         if let Some(p) = initial_path {

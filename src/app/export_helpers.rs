@@ -1,8 +1,11 @@
+//! Helpers for formatting and preparing export payloads.
+
 use super::CurcatApp;
 use crate::export::{ExportExtraColumn, ExportPayload};
 use crate::interp::{XYPoint, auto_sample_count, interpolate_sorted};
 use crate::types::AxisValue;
 
+/// Format an axis value for the on-canvas overlay.
 pub fn format_overlay_value(value: &AxisValue) -> String {
     match value {
         AxisValue::Float(v) => format!("{v:.3}"),

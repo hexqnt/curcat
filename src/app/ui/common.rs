@@ -1,7 +1,10 @@
+//! Shared UI helpers used across panels.
+
 use super::super::{AxisCalUi, CurcatApp, rounded_u8};
 use egui::{Color32, CornerRadius, StrokeKind, pos2};
 
 impl CurcatApp {
+    /// Compute a pulsing highlight color based on the UI time.
     pub(crate) fn attention_color(ctx: &egui::Context, base: Color32) -> Color32 {
         let [r, g, b, a] = base.to_array();
         let base_alpha = f32::from(a) / 255.0;
@@ -19,6 +22,7 @@ impl CurcatApp {
         Color32::from_rgba_unmultiplied(r, g, b, alpha)
     }
 
+    /// Paint a blinking outline when an element needs attention.
     pub(crate) fn paint_attention_outline_if(&self, ui: &egui::Ui, rect: egui::Rect, active: bool) {
         if !active || !ui.is_rect_visible(rect) {
             return;
@@ -34,11 +38,13 @@ impl CurcatApp {
     }
 }
 
+/// Return true when calibration inputs are missing or invalid.
 pub fn axis_needs_attention(cal: &AxisCalUi) -> bool {
     let (v1_invalid, v2_invalid) = cal.value_invalid_flags();
     v1_invalid || v2_invalid || cal.p1.is_none() || cal.p2.is_none()
 }
 
+/// Draw a compact toggle switch and return its response.
 pub fn toggle_switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
     let desired_size = egui::vec2(
         ui.spacing().interact_size.y * 1.8,

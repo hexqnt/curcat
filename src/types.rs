@@ -64,6 +64,7 @@ impl AxisValue {
         }
     }
 
+    /// Recreate an `AxisValue` from scalar seconds using the requested unit.
     pub fn from_scalar_seconds(unit: AxisUnit, s: f64) -> Option<Self> {
         if !s.is_finite() {
             return None;
@@ -88,6 +89,7 @@ impl AxisValue {
         }
     }
 
+    /// Format the value for display or export.
     pub fn format(&self) -> String {
         match self {
             Self::Float(v) => format_float(*v),
