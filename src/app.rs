@@ -95,6 +95,14 @@ struct AutoPlaceState {
 }
 
 #[derive(Debug)]
+struct PrimaryPressInfo {
+    pos: Pos2,
+    time: Instant,
+    in_rect: bool,
+    shift_down: bool,
+}
+
+#[derive(Debug)]
 struct ProjectApplyPlan {
     payload: project::ProjectPayload,
     image: project::ResolvedImage,
@@ -380,6 +388,7 @@ pub struct CurcatApp {
     config: AppConfig,
     auto_place_cfg: AutoPlaceConfig,
     auto_place_state: AutoPlaceState,
+    primary_press: Option<PrimaryPressInfo>,
     image_zoom: f32,
     dragging_handle: Option<DragTarget>,
     middle_pan_enabled: bool,
@@ -479,6 +488,7 @@ impl Default for CurcatApp {
             raw_include_distances: false,
             raw_include_angles: false,
             auto_place_state: AutoPlaceState::default(),
+            primary_press: None,
         }
     }
 }
@@ -552,6 +562,7 @@ impl CurcatApp {
         self.mark_snap_maps_dirty();
         self.refresh_snap_overlay_palette();
         self.auto_place_state = AutoPlaceState::default();
+        self.primary_press = None;
     }
 
     fn set_loaded_image(&mut self, image: LoadedImage, meta: Option<ImageMeta>) {

@@ -1,12 +1,15 @@
 use super::super::export_helpers::format_overlay_value;
 use super::super::{
     AutoPlaceState, AxisValueField, CurcatApp, DragTarget, PickMode, PointInputMode,
-    safe_usize_to_f32,
+    PrimaryPressInfo, safe_usize_to_f32,
 };
 
 use crate::types::AxisMapping;
 use egui::{Color32, Key, PointerButton, Pos2, Sense, Vec2, pos2};
 use std::time::{Duration, Instant};
+
+const LIGHT_DRAG_CLICK_DIST: f32 = 20.0;
+const LIGHT_DRAG_CLICK_MAX_DURATION: Duration = Duration::from_millis(400);
 
 impl CurcatApp {
     pub(crate) fn handle_middle_pan(&mut self, response: &egui::Response, ui: &egui::Ui) {
@@ -155,20 +158,69 @@ impl CurcatApp {
                 };
 
                 let pointer_pos = response.interact_pointer_pos();
-                let hover_pos = response
-                    .hover_pos()
-                    .or_else(|| ui.ctx().input(|i| i.pointer.latest_pos()));
-                let (shift_pressed, primary_down, primary_pressed, delete_down, ctrl_pressed) =
-                    ui.ctx().input(|i| {
-                        (
-                            i.modifiers.shift,
-                            i.pointer.button_down(PointerButton::Primary),
-                            i.pointer.button_pressed(PointerButton::Primary),
-                            i.key_down(Key::Delete),
-                            i.modifiers.ctrl,
-                        )
-                    });
+                let (
+                    shift_pressed,
+                    primary_down,
+                    primary_pressed,
+                    primary_released,
+                    delete_down,
+                    ctrl_pressed,
+                    press_origin,
+                    latest_pos,
+                ) = ui.ctx().input(|i| {
+                    (
+                        i.modifiers.shift,
+                        i.pointer.button_down(PointerButton::Primary),
+                        i.pointer.button_pressed(PointerButton::Primary),
+                        i.pointer.button_released(PointerButton::Primary),
+                        i.key_down(Key::Delete),
+                        i.modifiers.ctrl,
+                        i.pointer.press_origin(),
+                        i.pointer.latest_pos(),
+                    )
+                });
+                let hover_pos = response.hover_pos().or(latest_pos);
                 let pointer_pixel = hover_pos.map(&to_pixel);
+                let mut soft_primary_click = false;
+                if primary_pressed {
+                    if let Some(pos) = press_origin.or(latest_pos) {
+                        self.primary_press = Some(PrimaryPressInfo {
+                            pos,
+                            time: Instant::now(),
+                            in_rect: rect.contains(pos),
+                            shift_down: shift_pressed,
+                        });
+                    } else {
+                        self.primary_press = None;
+                    }
+                }
+                if primary_released {
+                    if let Some(info) = self.primary_press.take()
+                        && !info.shift_down
+                            && info.in_rect
+                            && let Some(release_pos) = latest_pos
+                            && rect.contains(release_pos)
+                        {
+                            let dist = info.pos.distance(release_pos);
+                            let elapsed = info.time.elapsed();
+                            if dist <= LIGHT_DRAG_CLICK_DIST
+                                && elapsed <= LIGHT_DRAG_CLICK_MAX_DURATION
+                            {
+                                soft_primary_click = true;
+                            }
+                        }
+                } else if !primary_down {
+                    self.primary_press = None;
+                }
+                let response_clicked = response.clicked_by(PointerButton::Primary);
+                let primary_clicked = response_clicked || soft_primary_click;
+                let click_pos = if response_clicked {
+                    pointer_pos.or(hover_pos)
+                } else if soft_primary_click {
+                    latest_pos.or(pointer_pos)
+                } else {
+                    None
+                };
                 let snap_preview = if !matches!(self.point_input_mode, PointInputMode::Free)
                     && !matches!(self.pick_mode, PickMode::CurveColor)
                     && let Some(pixel) = pointer_pixel
@@ -278,10 +330,10 @@ impl CurcatApp {
                 {
                     let image_origin = rect.min;
                     self.remove_point_near_screen(pos, image_origin);
-                } else if response.clicked_by(PointerButton::Primary)
+                } else if primary_clicked
                     && !suppress_primary_click
                     && !shift_pressed
-                    && let Some(pos) = pointer_pos
+                    && let Some(pos) = click_pos
                 {
                     if delete_down {
                         let image_origin = rect.min;
