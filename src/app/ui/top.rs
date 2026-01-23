@@ -1,5 +1,6 @@
 use super::super::CurcatApp;
 use super::common::toggle_switch;
+use super::icons;
 
 impl CurcatApp {
     pub(crate) fn ui_top(&mut self, ui: &mut egui::Ui) {
@@ -11,7 +12,7 @@ impl CurcatApp {
             let warn_hover = |ui: &mut egui::Ui, action: &str| {
                 ui.colored_label(
                     egui::Color32::from_rgb(220, 80, 80),
-                    "⚠ Clears ALL points and calibration",
+                    format!("{} Clears ALL points and calibration", icons::ICON_WARN),
                 );
                 ui.label(action);
             };
@@ -19,7 +20,7 @@ impl CurcatApp {
             let has_image = self.image.is_some();
             let can_save_project = self.image_meta.as_ref().and_then(|m| m.path()).is_some();
 
-            let file_menu = ui.menu_button("📂 File", |ui| {
+            let file_menu = ui.menu_button(format!("{} File", icons::ICON_MENU), |ui| {
                 if ui
                     .add(egui::Button::new("Open image…").shortcut_text("Ctrl+O"))
                     .on_hover_text(
@@ -72,7 +73,10 @@ impl CurcatApp {
                 "Show side"
             };
             if ui
-                .add(egui::Button::new(format!("⟷ {side_label}")).shortcut_text("Ctrl+B"))
+                .add(
+                    egui::Button::new(format!("{} {side_label}", icons::ICON_SIDE_TOGGLE))
+                        .shortcut_text("Ctrl+B"),
+                )
                 .on_hover_text("Toggle side panel (Ctrl+B)")
                 .clicked()
             {
@@ -81,7 +85,7 @@ impl CurcatApp {
             ui.separator();
 
             let stats_resp = ui
-                .add(egui::Button::new("📊 Points stats"))
+                .add(egui::Button::new(format!("{} Points stats", icons::ICON_STATS)))
                 .on_hover_text("Show stats for picked points");
             if stats_resp.clicked() {
                 self.points_info_window_open = true;
@@ -89,35 +93,48 @@ impl CurcatApp {
             let info_resp = ui
                 .add_enabled(
                     has_image,
-                    egui::Button::new("ℹ Image info").shortcut_text("Ctrl+I"),
+                    egui::Button::new(format!("{} Image info", icons::ICON_INFO))
+                        .shortcut_text("Ctrl+I"),
                 )
                 .on_hover_text("Show file & image details (Ctrl+I)");
             if info_resp.clicked() && has_image {
                 self.info_window_open = true;
             }
             if ui
-                .add_enabled(has_image, egui::Button::new("↺ 90°"))
+                .add_enabled(
+                    has_image,
+                    egui::Button::new(format!("{} 90°", icons::ICON_ROTATE_CCW)),
+                )
                 .on_hover_ui(|ui| warn_hover(ui, "Rotate 90° counter-clockwise."))
                 .clicked()
             {
                 self.rotate_image(false);
             }
             if ui
-                .add_enabled(has_image, egui::Button::new("↻ 90°"))
+                .add_enabled(
+                    has_image,
+                    egui::Button::new(format!("{} 90°", icons::ICON_ROTATE_CW)),
+                )
                 .on_hover_ui(|ui| warn_hover(ui, "Rotate 90° clockwise."))
                 .clicked()
             {
                 self.rotate_image(true);
             }
             if ui
-                .add_enabled(has_image, egui::Button::new("⇆ Flip H"))
+                .add_enabled(
+                    has_image,
+                    egui::Button::new(format!("{} Flip H", icons::ICON_FLIP_H)),
+                )
                 .on_hover_ui(|ui| warn_hover(ui, "Flip horizontally."))
                 .clicked()
             {
                 self.flip_image(true);
             }
             if ui
-                .add_enabled(has_image, egui::Button::new("⇅ Flip V"))
+                .add_enabled(
+                    has_image,
+                    egui::Button::new(format!("{} Flip V", icons::ICON_FLIP_V)),
+                )
                 .on_hover_ui(|ui| warn_hover(ui, "Flip vertically."))
                 .clicked()
             {
@@ -141,14 +158,20 @@ impl CurcatApp {
                 });
             zoom_ir.response.on_hover_text("Zoom presets (percent)");
             if ui
-                .add(egui::Button::new("📐 Fit").shortcut_text("Ctrl+F"))
+                .add(
+                    egui::Button::new(format!("{} Fit", icons::ICON_FIT))
+                        .shortcut_text("Ctrl+F"),
+                )
                 .on_hover_text("Fit the image into the viewport (Ctrl+F)")
                 .clicked()
             {
                 self.fit_image_to_viewport();
             }
             if ui
-                .add(egui::Button::new("⟳ Reset view").shortcut_text("Ctrl+R"))
+                .add(
+                    egui::Button::new(format!("{} Reset view", icons::ICON_RESET_VIEW))
+                        .shortcut_text("Ctrl+R"),
+                )
                 .on_hover_text("Reset zoom to 100% and pan to origin (Ctrl+R)")
                 .clicked()
             {
@@ -172,7 +195,8 @@ impl CurcatApp {
             let resp_clear = ui
                 .add_enabled(
                     has_points,
-                    egui::Button::new("🗑 Clear points").shortcut_text("Ctrl+Shift+D"),
+                    egui::Button::new(format!("{} Clear points", icons::ICON_CLEAR))
+                        .shortcut_text("Ctrl+Shift+D"),
                 )
                 .on_hover_text("Clear all points (Ctrl+Shift+D)");
             if resp_clear.clicked() {
@@ -181,7 +205,8 @@ impl CurcatApp {
             let resp_undo = ui
                 .add_enabled(
                     has_points,
-                    egui::Button::new("↶ Undo").shortcut_text("Ctrl+Z"),
+                    egui::Button::new(format!("{} Undo", icons::ICON_UNDO))
+                        .shortcut_text("Ctrl+Z"),
                 )
                 .on_hover_text("Undo last point (Ctrl+Z)");
             if resp_undo.clicked() {

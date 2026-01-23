@@ -3,6 +3,7 @@
 use super::super::snap_helpers::SNAP_SWATCH_SIZE;
 use super::super::{AxisUnit, AxisValueField, CurcatApp, ExportKind, PickMode, PointInputMode};
 use super::common::toggle_switch;
+use super::icons;
 use crate::interp::InterpAlgorithm;
 use crate::snap::{SnapFeatureSource, SnapThresholdKind};
 use crate::types::ScaleKind;
@@ -368,7 +369,8 @@ impl CurcatApp {
         let resp_csv = ui
             .add_enabled(
                 can_export,
-                egui::Button::new("📄 Export CSV…").shortcut_text("Ctrl+Shift+C"),
+                egui::Button::new(format!("{} Export CSV…", icons::ICON_EXPORT_CSV))
+                    .shortcut_text("Ctrl+Shift+C"),
             )
             .on_hover_text(csv_hint);
         if resp_csv.clicked() {
@@ -385,7 +387,8 @@ impl CurcatApp {
         let resp_json = ui
             .add_enabled(
                 can_export,
-                egui::Button::new("🧾 Export JSON…").shortcut_text("Ctrl+Shift+J"),
+                egui::Button::new(format!("{} Export JSON…", icons::ICON_EXPORT_JSON))
+                    .shortcut_text("Ctrl+Shift+J"),
             )
             .on_hover_text(json_hint);
         if resp_json.clicked() {
@@ -402,7 +405,8 @@ impl CurcatApp {
         let resp_xlsx = ui
             .add_enabled(
                 can_export,
-                egui::Button::new("📊 Export Excel…").shortcut_text("Ctrl+Shift+E"),
+                egui::Button::new(format!("{} Export Excel…", icons::ICON_EXPORT_XLSX))
+                    .shortcut_text("Ctrl+Shift+E"),
             )
             .on_hover_text(xlsx_hint);
         if resp_xlsx.clicked() {
@@ -521,11 +525,11 @@ impl CurcatApp {
                                 &cal.v1_text,
                             );
                             p1_value_rect = Some(p1_resp.rect);
-                            let pick_resp =
-                                ui.button(format!("📍 Pick {p1_name}"))
-                                    .on_hover_text(format!(
-                                        "Click, then pick the {p1_name} point on the image"
-                                    ));
+                            let pick_resp = ui
+                                .button(format!("{} Pick {p1_name}", icons::ICON_PICK_POINT))
+                                .on_hover_text(format!(
+                                    "Click, then pick the {p1_name} point on the image"
+                                ));
                             if pick_resp.clicked() {
                                 pending_pick = Some(p1_mode);
                             }
@@ -561,11 +565,11 @@ impl CurcatApp {
                                 &cal.v2_text,
                             );
                             p2_value_rect = Some(p2_resp.rect);
-                            let pick_resp =
-                                ui.button(format!("📍 Pick {p2_name}"))
-                                    .on_hover_text(format!(
-                                        "Click, then pick the {p2_name} point on the image"
-                                    ));
+                            let pick_resp = ui
+                                .button(format!("{} Pick {p2_name}", icons::ICON_PICK_POINT))
+                                .on_hover_text(format!(
+                                    "Click, then pick the {p2_name} point on the image"
+                                ));
                             if pick_resp.clicked() {
                                 pending_pick = Some(p2_mode);
                             }

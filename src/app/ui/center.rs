@@ -3,6 +3,7 @@ use super::super::{
     AutoPlaceState, AxisValueField, CurcatApp, DragTarget, PickMode, PointInputMode,
     PrimaryPressInfo, safe_usize_to_f32,
 };
+use super::icons;
 
 use crate::types::AxisMapping;
 use egui::{Color32, Key, PointerButton, Pos2, Sense, Vec2, pos2};
@@ -728,19 +729,19 @@ impl CurcatApp {
             return Some(badge);
         }
         if self.auto_place_state.active {
-            return Some(("✚", Color32::WHITE));
+            return Some((icons::ICON_AUTO_PLACE, Color32::WHITE));
         }
         if matches!(self.pick_mode, PickMode::CurveColor) {
-            return Some(("🧪", Color32::WHITE));
+            return Some((icons::ICON_PICK_COLOR, Color32::WHITE));
         }
         if delete_down {
-            return Some(("🗑", Color32::WHITE));
+            return Some((icons::ICON_DELETE_POINT, Color32::WHITE));
         }
         if shift_pressed {
-            return Some(("✋", Color32::WHITE));
+            return Some((icons::ICON_PAN, Color32::WHITE));
         }
         if ctrl_pressed {
-            return Some(("🔍", Color32::WHITE));
+            return Some((icons::ICON_ZOOM, Color32::WHITE));
         }
         None
     }
