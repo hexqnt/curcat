@@ -116,11 +116,16 @@ impl CurcatApp {
             let mut x_mapping = self.cal_x.mapping();
             let mut y_mapping = self.cal_y.mapping();
             let mut pending_zoom: Option<f32> = None;
+            let mut pending_zoom_anchor: Option<Pos2> = None;
             // Take a snapshot of the texture handle and size to avoid borrowing self.image in the UI closure
             let (tex_id, img_size) = (img.texture.id(), img.size);
             let scroll_out = egui::ScrollArea::both()
                 .id_salt("image_scroll")
                 .scroll_offset(self.image_pan)
+                .scroll_source(egui::scroll_area::ScrollSource {
+                    mouse_wheel: false,
+                    ..egui::scroll_area::ScrollSource::ALL
+                })
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                 .show(ui, |ui| {
                 let base_size = egui::vec2(
@@ -164,17 +169,18 @@ impl CurcatApp {
 
                 if response.hovered() {
                     let mut scroll = 0.0_f32;
-                    let mut ctrl = false;
+                    let mut hover_pos: Option<Pos2> = None;
                     ui.ctx().input(|i| {
                         scroll = i.raw_scroll_delta.y;
-                        ctrl = i.modifiers.ctrl;
+                        hover_pos = i.pointer.latest_pos();
                     });
-                    if ctrl && scroll.abs() > f32::EPSILON {
-                            let steps = (scroll / 40.0).round();
+                    if scroll.abs() > f32::EPSILON {
+                        let steps = (scroll / 40.0).round();
                         if steps.abs() > f32::EPSILON {
                             let base: f32 = if steps > 0.0 { 1.1 } else { 0.9 };
                             let factor = base.powf(steps.abs());
                             pending_zoom = Some(self.image_zoom * factor);
+                            pending_zoom_anchor = response.hover_pos().or(hover_pos);
                         }
                     }
                 }
@@ -687,8 +693,14 @@ impl CurcatApp {
             }
             self.last_viewport_size = Some(scroll_out.inner_rect.size());
             if let Some(next_zoom) = pending_zoom {
-                self.set_zoom_about_viewport_center(next_zoom);
+                if let Some(anchor_screen) = pending_zoom_anchor {
+                    let anchor = anchor_screen - scroll_out.inner_rect.min;
+                    self.set_zoom_about_viewport_pos(next_zoom, pos2(anchor.x, anchor.y));
+                } else {
+                    self.set_zoom_about_viewport_center(next_zoom);
+                }
             }
+            self.step_zoom_animation(ui.ctx());
         } else if self.pending_image_task.is_some() {
             ui.centered_and_justified(|ui| {
                 if let Some(task) = self.pending_image_task.as_ref() {

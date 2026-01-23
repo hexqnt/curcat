@@ -243,6 +243,7 @@ pub struct AppConfig {
     pub curve_line: StrokeStyle,
     pub curve_points: PointStyle,
     pub pan_speed: f32,
+    pub smooth_zoom: bool,
     pub crosshair: CrosshairStyle,
     pub image_limits: ImageLimits,
     pub attention_highlight: StrokeStyle,
@@ -256,6 +257,7 @@ impl Default for AppConfig {
             curve_line: StrokeStyle::default(),
             curve_points: PointStyle::default(),
             pan_speed: 1.0,
+            smooth_zoom: true,
             crosshair: CrosshairStyle::default(),
             image_limits: ImageLimits::default(),
             attention_highlight: StrokeStyle {

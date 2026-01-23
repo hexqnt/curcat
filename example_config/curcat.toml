@@ -8,6 +8,8 @@ radius = 3.0
 
 # Pan speed while holding the middle mouse button
 pan_speed = 1.0
+# Smooth zoom transitions (true) or instant zoom (false)
+smooth_zoom = true
 
 [crosshair]
 color = "#C8C8C8CC"

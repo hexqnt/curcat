@@ -46,6 +46,18 @@ enum AxisValueField {
     Y2,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ZoomAnchor {
+    ViewportCenter,
+    ViewportPos(Pos2),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ZoomIntent {
+    Anchor(ZoomAnchor),
+    TargetPan(Vec2),
+}
+
 enum ImageLoadRequest {
     Path(PathBuf),
     Bytes(Vec<u8>),
@@ -221,6 +233,9 @@ enum ExportKind {
 const ZOOM_PRESETS: &[f32] = &[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0];
 const MIN_ZOOM: f32 = 0.25;
 const MAX_ZOOM: f32 = 8.0;
+const ZOOM_SMOOTH_RESPONSE: f32 = 0.10;
+const ZOOM_SNAP_EPS: f32 = 0.0005;
+const PAN_SNAP_EPS: f32 = 0.5;
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const POINT_HIT_RADIUS: f32 = 12.0;
 const SAMPLE_COUNT_MIN: usize = 10;
@@ -393,6 +408,8 @@ pub struct CurcatApp {
     auto_place_state: AutoPlaceState,
     primary_press: Option<PrimaryPressInfo>,
     image_zoom: f32,
+    zoom_target: f32,
+    zoom_intent: ZoomIntent,
     dragging_handle: Option<DragTarget>,
     middle_pan_enabled: bool,
     touch_pan_active: bool,
@@ -482,8 +499,10 @@ impl Default for CurcatApp {
             config,
             auto_place_cfg,
             image_zoom: 1.0,
+            zoom_target: 1.0,
+            zoom_intent: ZoomIntent::Anchor(ZoomAnchor::ViewportCenter),
             dragging_handle: None,
-            middle_pan_enabled: true,
+            middle_pan_enabled: false,
             touch_pan_active: false,
             touch_pan_last: None,
             side_open: true,
@@ -569,6 +588,8 @@ impl CurcatApp {
         self.refresh_snap_overlay_palette();
         self.auto_place_state = AutoPlaceState::default();
         self.primary_press = None;
+        self.zoom_target = self.image_zoom;
+        self.zoom_intent = ZoomIntent::TargetPan(self.image_pan);
     }
 
     fn set_loaded_image(&mut self, image: LoadedImage, meta: Option<ImageMeta>) {
@@ -579,6 +600,8 @@ impl CurcatApp {
         self.project_title = None;
         self.project_description = None;
         self.image_zoom = 1.0;
+        self.zoom_target = 1.0;
+        self.zoom_intent = ZoomIntent::TargetPan(self.image_pan);
         self.reset_after_image_transform();
     }
 
@@ -632,6 +655,41 @@ impl CurcatApp {
     }
 
     fn set_zoom_about_viewport_center(&mut self, zoom: f32) {
+        self.request_zoom(zoom, ZoomIntent::Anchor(ZoomAnchor::ViewportCenter));
+    }
+
+    fn set_zoom_about_viewport_pos(&mut self, zoom: f32, anchor: Pos2) {
+        self.request_zoom(zoom, ZoomIntent::Anchor(ZoomAnchor::ViewportPos(anchor)));
+    }
+
+    fn set_zoom_to_pan_target(&mut self, zoom: f32, pan: Vec2) {
+        self.request_zoom(zoom, ZoomIntent::TargetPan(pan));
+    }
+
+    fn request_zoom(&mut self, zoom: f32, intent: ZoomIntent) {
+        let clamped = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        if !self.config.smooth_zoom {
+            self.apply_zoom_instant(clamped, intent);
+            self.zoom_target = self.image_zoom;
+            self.zoom_intent = intent;
+            return;
+        }
+        self.zoom_target = clamped;
+        self.zoom_intent = intent;
+    }
+
+    fn apply_zoom_instant(&mut self, zoom: f32, intent: ZoomIntent) {
+        match intent {
+            ZoomIntent::Anchor(anchor) => self.set_zoom_about_anchor(zoom, anchor),
+            ZoomIntent::TargetPan(pan) => {
+                self.set_zoom(zoom);
+                self.image_pan = pan;
+                self.skip_pan_sync_once = true;
+            }
+        }
+    }
+
+    fn set_zoom_about_anchor(&mut self, zoom: f32, anchor: ZoomAnchor) {
         let clamped = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         if (clamped - self.image_zoom).abs() <= f32::EPSILON {
             return;
@@ -654,16 +712,63 @@ impl CurcatApp {
         let new_display = base_size * clamped;
         let pad_old = Self::center_padding(viewport, old_display);
         let pad_new = Self::center_padding(viewport, new_display);
-        let center = viewport * 0.5;
+        let anchor = Self::zoom_anchor_pos(anchor, viewport);
         let zoom_ratio = clamped / self.image_zoom;
-        self.image_pan = (self.image_pan + center - pad_old) * zoom_ratio - center + pad_new;
+        self.image_pan = (self.image_pan + anchor - pad_old) * zoom_ratio - anchor + pad_new;
         self.image_zoom = clamped;
         self.skip_pan_sync_once = true;
     }
 
+    fn zoom_anchor_pos(anchor: ZoomAnchor, viewport: Vec2) -> Vec2 {
+        let anchor = match anchor {
+            ZoomAnchor::ViewportCenter => viewport * 0.5,
+            ZoomAnchor::ViewportPos(pos) => pos.to_vec2(),
+        };
+        Vec2::new(
+            anchor.x.clamp(0.0, viewport.x),
+            anchor.y.clamp(0.0, viewport.y),
+        )
+    }
+
+    fn step_zoom_animation(&mut self, ctx: &Context) {
+        if !self.config.smooth_zoom {
+            return;
+        }
+        let target = self.zoom_target.clamp(MIN_ZOOM, MAX_ZOOM);
+        let zoom_delta = target - self.image_zoom;
+        let zoom_done = zoom_delta.abs() <= ZOOM_SNAP_EPS;
+        let pan_done = match self.zoom_intent {
+            ZoomIntent::TargetPan(pan) => (self.image_pan - pan).length() <= PAN_SNAP_EPS,
+            ZoomIntent::Anchor(_) => true,
+        };
+        if zoom_done && pan_done {
+            match self.zoom_intent {
+                ZoomIntent::Anchor(anchor) => self.set_zoom_about_anchor(target, anchor),
+                ZoomIntent::TargetPan(pan) => {
+                    self.set_zoom(target);
+                    self.image_pan = pan;
+                    self.skip_pan_sync_once = true;
+                }
+            }
+            return;
+        }
+
+        let dt = ctx.input(|i| i.stable_dt).min(0.1);
+        let alpha = egui::emath::exponential_smooth_factor(0.90, ZOOM_SMOOTH_RESPONSE, dt);
+        let next_zoom = zoom_delta.mul_add(alpha, self.image_zoom);
+        match self.zoom_intent {
+            ZoomIntent::Anchor(anchor) => self.set_zoom_about_anchor(next_zoom, anchor),
+            ZoomIntent::TargetPan(pan) => {
+                self.set_zoom(next_zoom);
+                self.image_pan = self.image_pan + (pan - self.image_pan) * alpha;
+                self.skip_pan_sync_once = true;
+            }
+        }
+        ctx.request_repaint();
+    }
+
     fn reset_view(&mut self) {
-        self.set_zoom(1.0);
-        self.image_pan = Vec2::ZERO;
+        self.set_zoom_to_pan_target(1.0, Vec2::ZERO);
         self.set_status("View reset to 100%.");
     }
 
@@ -705,8 +810,7 @@ impl CurcatApp {
         let margin = 0.98;
         let fit_zoom = (vw / img_w).min(vh / img_h) * margin;
         let clamped = fit_zoom.clamp(MIN_ZOOM, MAX_ZOOM);
-        self.set_zoom(clamped);
-        self.image_pan = Vec2::ZERO;
+        self.set_zoom_to_pan_target(clamped, Vec2::ZERO);
         if report_status {
             self.set_status(format!("Fit view: {:.0}%", clamped * 100.0));
         }
@@ -942,6 +1046,8 @@ impl CurcatApp {
 
         self.image_zoom = plan.payload.zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         self.image_pan = Vec2::new(plan.payload.pan[0], plan.payload.pan[1]);
+        self.zoom_target = self.image_zoom;
+        self.zoom_intent = ZoomIntent::TargetPan(self.image_pan);
         self.project_title.clone_from(&plan.payload.title);
         self.project_description
             .clone_from(&plan.payload.description);
