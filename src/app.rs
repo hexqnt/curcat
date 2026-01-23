@@ -344,6 +344,7 @@ pub struct CurcatApp {
     image_transform: ImageTransformRecord,
     image_pan: Vec2,
     last_viewport_size: Option<Vec2>,
+    skip_pan_sync_once: bool,
     pending_fit_on_load: bool,
     pending_image_task: Option<PendingImageTask>,
     pending_project_apply: Option<ProjectApplyPlan>,
@@ -420,6 +421,7 @@ impl Default for CurcatApp {
             image_transform: ImageTransformRecord::identity(),
             image_pan: Vec2::ZERO,
             last_viewport_size: None,
+            skip_pan_sync_once: false,
             pending_fit_on_load: false,
             pending_image_task: None,
             pending_project_apply: None,
@@ -629,6 +631,36 @@ impl CurcatApp {
         self.image_zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
+    fn set_zoom_about_viewport_center(&mut self, zoom: f32) {
+        let clamped = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        if (clamped - self.image_zoom).abs() <= f32::EPSILON {
+            return;
+        }
+        let Some(viewport) = self.last_viewport_size else {
+            self.image_zoom = clamped;
+            return;
+        };
+        let Some(image) = self.image.as_ref() else {
+            self.image_zoom = clamped;
+            return;
+        };
+        let [w, h] = image.size;
+        if w == 0 || h == 0 {
+            self.image_zoom = clamped;
+            return;
+        }
+        let base_size = Vec2::new(safe_usize_to_f32(w), safe_usize_to_f32(h));
+        let old_display = base_size * self.image_zoom;
+        let new_display = base_size * clamped;
+        let pad_old = Self::center_padding(viewport, old_display);
+        let pad_new = Self::center_padding(viewport, new_display);
+        let center = viewport * 0.5;
+        let zoom_ratio = clamped / self.image_zoom;
+        self.image_pan = (self.image_pan + center - pad_old) * zoom_ratio - center + pad_new;
+        self.image_zoom = clamped;
+        self.skip_pan_sync_once = true;
+    }
+
     fn reset_view(&mut self) {
         self.set_zoom(1.0);
         self.image_pan = Vec2::ZERO;
@@ -637,6 +669,13 @@ impl CurcatApp {
 
     fn fit_image_to_viewport(&mut self) {
         self.fit_image_to_viewport_with_status(true);
+    }
+
+    fn center_padding(viewport: Vec2, display_size: Vec2) -> Vec2 {
+        Vec2::new(
+            ((viewport.x - display_size.x) * 0.5).max(0.0),
+            ((viewport.y - display_size.y) * 0.5).max(0.0),
+        )
     }
 
     fn fit_image_to_viewport_with_status(&mut self, report_status: bool) -> bool {

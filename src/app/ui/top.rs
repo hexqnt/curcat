@@ -135,7 +135,7 @@ impl CurcatApp {
                         let label = Self::format_zoom(preset);
                         let selected = (self.image_zoom - preset).abs() < 0.0001;
                         if ui.selectable_label(selected, label).clicked() {
-                            self.set_zoom(preset);
+                            self.set_zoom_about_viewport_center(preset);
                         }
                     }
                 });

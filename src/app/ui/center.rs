@@ -115,11 +115,13 @@ impl CurcatApp {
         if let Some(img) = self.image.as_ref() {
             let mut x_mapping = self.cal_x.mapping();
             let mut y_mapping = self.cal_y.mapping();
+            let mut pending_zoom: Option<f32> = None;
             // Take a snapshot of the texture handle and size to avoid borrowing self.image in the UI closure
             let (tex_id, img_size) = (img.texture.id(), img.size);
             let scroll_out = egui::ScrollArea::both()
                 .id_salt("image_scroll")
                 .scroll_offset(self.image_pan)
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                 .show(ui, |ui| {
                 let base_size = egui::vec2(
                     safe_usize_to_f32(img_size[0]),
@@ -127,7 +129,34 @@ impl CurcatApp {
                 );
                 let display_size = base_size * self.image_zoom;
                 let image = egui::Image::new((tex_id, display_size));
-                let response = ui.add(image.sense(Sense::click_and_drag()));
+                let viewport = ui.available_size();
+                let pad = Self::center_padding(viewport, display_size);
+                let response = if pad.x > 0.0 || pad.y > 0.0 {
+                    ui.vertical(|ui| {
+                        if pad.y > 0.0 {
+                            ui.add_space(pad.y);
+                        }
+                        let response = ui
+                            .horizontal(|ui| {
+                                if pad.x > 0.0 {
+                                    ui.add_space(pad.x);
+                                }
+                                let response = ui.add(image.sense(Sense::click_and_drag()));
+                                if pad.x > 0.0 {
+                                    ui.add_space(pad.x);
+                                }
+                                response
+                            })
+                            .inner;
+                        if pad.y > 0.0 {
+                            ui.add_space(pad.y);
+                        }
+                        response
+                    })
+                    .inner
+                } else {
+                    ui.add(image.sense(Sense::click_and_drag()))
+                };
                 let rect = response.rect;
                 let painter = ui.painter_at(rect);
 
@@ -141,11 +170,11 @@ impl CurcatApp {
                         ctrl = i.modifiers.ctrl;
                     });
                     if ctrl && scroll.abs() > f32::EPSILON {
-                        let steps = (scroll / 40.0).round();
+                            let steps = (scroll / 40.0).round();
                         if steps.abs() > f32::EPSILON {
                             let base: f32 = if steps > 0.0 { 1.1 } else { 0.9 };
                             let factor = base.powf(steps.abs());
-                            self.set_zoom(self.image_zoom * factor);
+                            pending_zoom = Some(self.image_zoom * factor);
                         }
                     }
                 }
@@ -651,8 +680,15 @@ impl CurcatApp {
                         }
                 }
             });
-            self.image_pan = scroll_out.state.offset;
+            if self.skip_pan_sync_once {
+                self.skip_pan_sync_once = false;
+            } else {
+                self.image_pan = scroll_out.state.offset;
+            }
             self.last_viewport_size = Some(scroll_out.inner_rect.size());
+            if let Some(next_zoom) = pending_zoom {
+                self.set_zoom_about_viewport_center(next_zoom);
+            }
         } else if self.pending_image_task.is_some() {
             ui.centered_and_justified(|ui| {
                 if let Some(task) = self.pending_image_task.as_ref() {
