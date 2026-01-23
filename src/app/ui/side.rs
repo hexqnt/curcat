@@ -262,6 +262,16 @@ impl CurcatApp {
                 );
             });
         }
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            toggle_switch(ui, &mut self.show_curve_segments).on_hover_text(
+                "Show or hide the lines that connect picked points (sorted by X value).",
+            );
+            ui.add_space(4.0);
+            ui.label("Show point connections").on_hover_text(
+                "Show or hide the lines between picked points (not calibration lines).",
+            );
+        });
     }
 
     pub(crate) fn ui_export_section(&mut self, ui: &mut egui::Ui) {

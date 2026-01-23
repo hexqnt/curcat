@@ -533,14 +533,16 @@ impl CurcatApp {
                 }
 
                 // Draw interpolation preview: connect points sorted by X numeric
-                let stroke_curve = self.config.curve_line.stroke();
-                let zoom = self.image_zoom;
-                let preview_segments = self.sorted_preview_segments();
-                if preview_segments.len() >= 2 {
-                    for win in preview_segments.windows(2) {
-                        let a = rect.min + win[0].1.to_vec2() * zoom;
-                        let b = rect.min + win[1].1.to_vec2() * zoom;
-                        painter.line_segment([a, b], stroke_curve);
+                if self.show_curve_segments {
+                    let stroke_curve = self.config.curve_line.stroke();
+                    let zoom = self.image_zoom;
+                    let preview_segments = self.sorted_preview_segments();
+                    if preview_segments.len() >= 2 {
+                        for win in preview_segments.windows(2) {
+                            let a = rect.min + win[0].1.to_vec2() * zoom;
+                            let b = rect.min + win[1].1.to_vec2() * zoom;
+                            painter.line_segment([a, b], stroke_curve);
+                        }
                     }
                 }
 
