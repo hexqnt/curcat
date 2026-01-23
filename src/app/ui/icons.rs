@@ -24,3 +24,5 @@ pub const ICON_PICK_COLOR: &str = "⚗";
 pub const ICON_DELETE_POINT: &str = "✖";
 pub const ICON_PAN: &str = "✋";
 pub const ICON_ZOOM: &str = "⊕";
+pub const ICON_PRESET_UNIT: &str = "Ⅰ";
+pub const ICON_PRESET_PIXELS: &str = "▦";
