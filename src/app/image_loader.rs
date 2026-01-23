@@ -82,6 +82,7 @@ impl CurcatApp {
         let loaded = LoadedImage::from_color_image(ctx, color);
         self.set_loaded_image(loaded, Some(meta));
         self.set_status(format!("Loaded {name}"));
+        self.pending_fit_on_load = self.pending_project_apply.is_none();
     }
 
     pub(crate) fn remember_image_dir_from_path(&mut self, path: &Path) {

@@ -492,10 +492,12 @@ mod tests {
         fs::write(&image_path, b"modified").expect("modify image");
         let outcome = load_project(&project_path).expect("load project");
         assert!(!outcome.chosen_image.checksum_matches);
-        assert!(outcome
-            .warnings
-            .iter()
-            .any(|w| matches!(w, ProjectWarning::ChecksumMismatch { .. })));
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| matches!(w, ProjectWarning::ChecksumMismatch { .. }))
+        );
     }
 
     #[test]

@@ -58,6 +58,7 @@ impl CurcatApp {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_central_image(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui) {
         self.last_viewport_size = Some(ui.available_size());
+        self.apply_pending_fit_on_load();
         // Handle drag & drop regardless of whether an image is already loaded
         let (hovered_files, dropped_files) =
             ui.input(|i| (i.raw.hovered_files.clone(), i.raw.dropped_files.clone()));
@@ -78,6 +79,7 @@ impl CurcatApp {
                 );
             }
         }
+
         if !dropped_files.is_empty() {
             let mut loaded = false;
             for f in &dropped_files {

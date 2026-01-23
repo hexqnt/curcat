@@ -344,6 +344,7 @@ pub struct CurcatApp {
     image_transform: ImageTransformRecord,
     image_pan: Vec2,
     last_viewport_size: Option<Vec2>,
+    pending_fit_on_load: bool,
     pending_image_task: Option<PendingImageTask>,
     pending_project_apply: Option<ProjectApplyPlan>,
     pending_project_save: Option<PendingProjectSave>,
@@ -419,6 +420,7 @@ impl Default for CurcatApp {
             image_transform: ImageTransformRecord::identity(),
             image_pan: Vec2::ZERO,
             last_viewport_size: None,
+            pending_fit_on_load: false,
             pending_image_task: None,
             pending_project_apply: None,
             pending_project_save: None,
@@ -634,18 +636,28 @@ impl CurcatApp {
     }
 
     fn fit_image_to_viewport(&mut self) {
+        self.fit_image_to_viewport_with_status(true);
+    }
+
+    fn fit_image_to_viewport_with_status(&mut self, report_status: bool) -> bool {
         let Some(image) = self.image.as_ref() else {
-            self.set_status("Load an image before fitting the view.");
-            return;
+            if report_status {
+                self.set_status("Load an image before fitting the view.");
+            }
+            return false;
         };
         let Some(viewport) = self.last_viewport_size else {
-            self.set_status("Fit view unavailable: viewport size not ready yet.");
-            return;
+            if report_status {
+                self.set_status("Fit view unavailable: viewport size not ready yet.");
+            }
+            return false;
         };
         let [w, h] = image.size;
         if w == 0 || h == 0 {
-            self.set_status("Cannot fit an empty image.");
-            return;
+            if report_status {
+                self.set_status("Cannot fit an empty image.");
+            }
+            return false;
         }
         let vw = viewport.x.max(1.0);
         let vh = viewport.y.max(1.0);
@@ -656,7 +668,19 @@ impl CurcatApp {
         let clamped = fit_zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         self.set_zoom(clamped);
         self.image_pan = Vec2::ZERO;
-        self.set_status(format!("Fit view: {:.0}%", clamped * 100.0));
+        if report_status {
+            self.set_status(format!("Fit view: {:.0}%", clamped * 100.0));
+        }
+        true
+    }
+
+    fn apply_pending_fit_on_load(&mut self) {
+        if !self.pending_fit_on_load {
+            return;
+        }
+        if self.fit_image_to_viewport_with_status(false) {
+            self.pending_fit_on_load = false;
+        }
     }
 
     fn format_zoom(zoom: f32) -> String {
@@ -942,6 +966,7 @@ impl CurcatApp {
             project::ImagePathSource::Absolute => "Absolute path",
             project::ImagePathSource::Relative => "Relative path",
         };
+
         match warn {
             project::ProjectWarning::MissingImage {
                 path,
