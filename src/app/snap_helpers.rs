@@ -68,9 +68,11 @@ impl ImageColorStats {
                         },
                     )
             };
+
         if samples == 0 {
             return None;
         }
+
         let sample_count = samples as f32;
         let avg_r = sum_r / sample_count;
         let avg_g = sum_g / sample_count;

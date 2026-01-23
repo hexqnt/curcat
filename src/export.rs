@@ -44,7 +44,7 @@ const XLSX_MAX_COLS: u16 = 16_384;
 
 /// Write the payload to CSV at the provided path.
 ///
-/// Floats are formatted with 6 fractional digits; DateTime values are emitted
+/// Floats are formatted with 6 fractional digits; `DateTime` values are emitted
 /// as formatted strings. Returns an error if any value is not representable.
 pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
     let mut wtr = csv::Writer::from_path(path)?;
@@ -200,7 +200,7 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
 /// Write the payload to JSON at the provided path.
 ///
 /// The output contains `x_unit`, `y_unit`, and a `points` array. Floats are
-/// rounded to 6 fractional digits; DateTime values are emitted as strings.
+/// rounded to 6 fractional digits; `DateTime` values are emitted as strings.
 pub fn export_to_json(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
     let mut points = Vec::with_capacity(payload.row_count());
     for row_idx in 0..payload.row_count() {

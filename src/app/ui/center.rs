@@ -12,6 +12,87 @@ use std::time::{Duration, Instant};
 const LIGHT_DRAG_CLICK_DIST: f32 = 20.0;
 const LIGHT_DRAG_CLICK_MAX_DURATION: Duration = Duration::from_millis(400);
 
+#[derive(Clone, Copy)]
+struct PointerState {
+    shift_pressed: bool,
+    primary_down: bool,
+    primary_pressed: bool,
+    primary_released: bool,
+    delete_down: bool,
+    ctrl_pressed: bool,
+    press_origin: Option<Pos2>,
+    latest_pos: Option<Pos2>,
+}
+
+impl PointerState {
+    fn read(ctx: &egui::Context) -> Self {
+        ctx.input(|i| Self {
+            shift_pressed: i.modifiers.shift,
+            primary_down: i.pointer.button_down(PointerButton::Primary),
+            primary_pressed: i.pointer.button_pressed(PointerButton::Primary),
+            primary_released: i.pointer.button_released(PointerButton::Primary),
+            delete_down: i.key_down(Key::Delete),
+            ctrl_pressed: i.modifiers.ctrl,
+            press_origin: i.pointer.press_origin(),
+            latest_pos: i.pointer.latest_pos(),
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CalTarget {
+    X1,
+    X2,
+    Y1,
+    Y2,
+}
+
+impl CalTarget {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::X1 => "X1",
+            Self::X2 => "X2",
+            Self::Y1 => "Y1",
+            Self::Y2 => "Y2",
+        }
+    }
+
+    const fn value_field(self) -> AxisValueField {
+        match self {
+            Self::X1 => AxisValueField::X1,
+            Self::X2 => AxisValueField::X2,
+            Self::Y1 => AxisValueField::Y1,
+            Self::Y2 => AxisValueField::Y2,
+        }
+    }
+
+    const fn from_drag(target: DragTarget) -> Option<Self> {
+        match target {
+            DragTarget::CalX1 => Some(Self::X1),
+            DragTarget::CalX2 => Some(Self::X2),
+            DragTarget::CalY1 => Some(Self::Y1),
+            DragTarget::CalY2 => Some(Self::Y2),
+            _ => None,
+        }
+    }
+
+    const fn from_pick_mode(mode: PickMode) -> Option<Self> {
+        match mode {
+            PickMode::X1 => Some(Self::X1),
+            PickMode::X2 => Some(Self::X2),
+            PickMode::Y1 => Some(Self::Y1),
+            PickMode::Y2 => Some(Self::Y2),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CalUpdateMode {
+    Drag,
+    Pick,
+}
+
 impl CurcatApp {
     pub(crate) fn handle_middle_pan(&mut self, response: &egui::Response, ui: &egui::Ui) {
         // When the MMB pan toggle is off, treat middle drag like direct touch pan.
@@ -56,10 +137,7 @@ impl CurcatApp {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn ui_central_image(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui) {
-        self.last_viewport_size = Some(ui.available_size());
-        self.apply_pending_fit_on_load();
+    fn handle_drag_and_drop(&mut self, ui: &egui::Ui) {
         // Handle drag & drop regardless of whether an image is already loaded
         let (hovered_files, dropped_files) =
             ui.input(|i| (i.raw.hovered_files.clone(), i.raw.dropped_files.clone()));
@@ -81,37 +159,527 @@ impl CurcatApp {
             }
         }
 
-        if !dropped_files.is_empty() {
-            let mut loaded = false;
-            for f in &dropped_files {
-                if let Some(path) = &f.path {
-                    self.start_loading_image_from_path(path.clone());
-                    loaded = true;
-                    if cfg!(debug_assertions) {
-                        eprintln!("[DnD] Loading from path: {}", path.display());
-                    }
-                    break;
-                }
-                if let Some(bytes) = &f.bytes {
-                    self.start_loading_image_from_bytes(
-                        (!f.name.is_empty()).then(|| f.name.clone()),
-                        bytes.to_vec(),
-                        f.last_modified,
-                    );
-                    loaded = true;
-                    if cfg!(debug_assertions) {
-                        eprintln!("[DnD] Loading from dropped bytes: name='{}'", f.name);
-                    }
-                    break;
-                }
-            }
-            if !loaded {
-                self.set_status("Drop failed: no readable bytes/path");
+        if dropped_files.is_empty() {
+            return;
+        }
+
+        let mut loaded = false;
+        for f in &dropped_files {
+            if let Some(path) = &f.path {
+                self.start_loading_image_from_path(path.clone());
+                loaded = true;
                 if cfg!(debug_assertions) {
-                    eprintln!("[DnD] Drop failed: no readable bytes/path");
+                    eprintln!("[DnD] Loading from path: {}", path.display());
                 }
+                break;
+            }
+            if let Some(bytes) = &f.bytes {
+                self.start_loading_image_from_bytes(
+                    (!f.name.is_empty()).then(|| f.name.clone()),
+                    bytes.to_vec(),
+                    f.last_modified,
+                );
+                loaded = true;
+                if cfg!(debug_assertions) {
+                    eprintln!("[DnD] Loading from dropped bytes: name='{}'", f.name);
+                }
+                break;
             }
         }
+        if !loaded {
+            self.set_status("Drop failed: no readable bytes/path");
+            if cfg!(debug_assertions) {
+                eprintln!("[DnD] Drop failed: no readable bytes/path");
+            }
+        }
+    }
+
+    fn add_centered_image(
+        &self,
+        ui: &mut egui::Ui,
+        image: egui::Image,
+        display_size: Vec2,
+    ) -> egui::Response {
+        let viewport = ui.available_size();
+        let pad = Self::center_padding(viewport, display_size);
+        if pad.x > 0.0 || pad.y > 0.0 {
+            ui.vertical(|ui| {
+                if pad.y > 0.0 {
+                    ui.add_space(pad.y);
+                }
+                let response = ui
+                    .horizontal(|ui| {
+                        if pad.x > 0.0 {
+                            ui.add_space(pad.x);
+                        }
+                        let response = ui.add(image.sense(Sense::click_and_drag()));
+                        if pad.x > 0.0 {
+                            ui.add_space(pad.x);
+                        }
+                        response
+                    })
+                    .inner;
+                if pad.y > 0.0 {
+                    ui.add_space(pad.y);
+                }
+                response
+            })
+            .inner
+        } else {
+            ui.add(image.sense(Sense::click_and_drag()))
+        }
+    }
+
+    fn compute_scroll_zoom(
+        &self,
+        response: &egui::Response,
+        ui: &egui::Ui,
+    ) -> Option<(f32, Option<Pos2>)> {
+        if !response.hovered() {
+            return None;
+        }
+        let mut scroll = 0.0_f32;
+        let mut hover_pos: Option<Pos2> = None;
+        ui.ctx().input(|i| {
+            scroll = i.raw_scroll_delta.y;
+            hover_pos = i.pointer.latest_pos();
+        });
+        if scroll.abs() <= f32::EPSILON {
+            return None;
+        }
+        let steps = (scroll / 40.0).round();
+        if steps.abs() <= f32::EPSILON {
+            return None;
+        }
+        let base: f32 = if steps > 0.0 { 1.1 } else { 0.9 };
+        let factor = base.powf(steps.abs());
+        Some((self.image_zoom * factor, response.hover_pos().or(hover_pos)))
+    }
+
+    fn resolve_primary_click(
+        &mut self,
+        response: &egui::Response,
+        rect: egui::Rect,
+        pointer: PointerState,
+        pointer_pos: Option<Pos2>,
+        hover_pos: Option<Pos2>,
+    ) -> (bool, Option<Pos2>) {
+        let mut soft_primary_click = false;
+        if pointer.primary_pressed {
+            if let Some(pos) = pointer.press_origin.or(pointer.latest_pos) {
+                self.primary_press = Some(PrimaryPressInfo {
+                    pos,
+                    time: Instant::now(),
+                    in_rect: rect.contains(pos),
+                    shift_down: pointer.shift_pressed,
+                });
+            } else {
+                self.primary_press = None;
+            }
+        }
+        if pointer.primary_released {
+            if let Some(info) = self.primary_press.take()
+                && !info.shift_down
+                && info.in_rect
+                && let Some(release_pos) = pointer.latest_pos
+                && rect.contains(release_pos)
+            {
+                let dist = info.pos.distance(release_pos);
+                let elapsed = info.time.elapsed();
+                if dist <= LIGHT_DRAG_CLICK_DIST && elapsed <= LIGHT_DRAG_CLICK_MAX_DURATION {
+                    soft_primary_click = true;
+                }
+            }
+        } else if !pointer.primary_down {
+            self.primary_press = None;
+        }
+        let response_clicked = response.clicked_by(PointerButton::Primary);
+        let primary_clicked = response_clicked || soft_primary_click;
+        let click_pos = if response_clicked {
+            pointer_pos.or(hover_pos)
+        } else if soft_primary_click {
+            pointer.latest_pos.or(pointer_pos)
+        } else {
+            None
+        };
+        (primary_clicked, click_pos)
+    }
+
+    fn compute_snap_preview(&mut self, pointer_pixel: Option<Pos2>) -> Option<Pos2> {
+        if !matches!(self.point_input_mode, PointInputMode::Free)
+            && !matches!(self.pick_mode, PickMode::CurveColor)
+            && let Some(pixel) = pointer_pixel
+        {
+            self.compute_snap_candidate(pixel)
+        } else {
+            None
+        }
+    }
+
+    fn apply_calibration_point(
+        &mut self,
+        target: CalTarget,
+        pixel: Pos2,
+        base_size: Vec2,
+        mode: CalUpdateMode,
+        x_mapping: &mut Option<AxisMapping>,
+        y_mapping: &mut Option<AxisMapping>,
+    ) {
+        let pixel = if mode == CalUpdateMode::Pick {
+            self.snap_pixel_if_requested(pixel)
+        } else {
+            pixel
+        };
+        let snap_ref = match target {
+            CalTarget::X1 => self.cal_x.p2,
+            CalTarget::X2 => self.cal_x.p1,
+            CalTarget::Y1 => self.cal_y.p2,
+            CalTarget::Y2 => self.cal_y.p1,
+        };
+        let snapped = self.snap_calibration_angle(pixel, snap_ref, base_size);
+
+        match target {
+            CalTarget::X1 => {
+                self.cal_x.p1 = Some(snapped);
+                *x_mapping = self.cal_x.mapping();
+            }
+            CalTarget::X2 => {
+                self.cal_x.p2 = Some(snapped);
+                *x_mapping = self.cal_x.mapping();
+            }
+            CalTarget::Y1 => {
+                self.cal_y.p1 = Some(snapped);
+                *y_mapping = self.cal_y.mapping();
+            }
+            CalTarget::Y2 => {
+                self.cal_y.p2 = Some(snapped);
+                *y_mapping = self.cal_y.mapping();
+            }
+        }
+
+        if mode == CalUpdateMode::Pick {
+            self.pick_mode = PickMode::None;
+            self.queue_value_focus(target.value_field());
+            self.set_status(format!("Picked {}.", target.label()));
+        }
+    }
+
+    fn draw_calibration_overlay(&self, painter: &egui::Painter, rect: egui::Rect) {
+        if !self.show_calibration_segments {
+            return;
+        }
+        let stroke_cal_outline = egui::Stroke {
+            width: super::super::CAL_LINE_OUTLINE_WIDTH,
+            color: Color32::from_black_alpha(super::super::CAL_OUTLINE_ALPHA),
+        };
+        let stroke_cal = egui::Stroke {
+            width: super::super::CAL_LINE_WIDTH,
+            color: Color32::LIGHT_BLUE,
+        };
+        let cal_point_color = stroke_cal.color;
+        let cal_radius = super::super::CAL_POINT_DRAW_RADIUS + super::super::CAL_POINT_OUTLINE_PAD;
+        let cal_label_shadow = Color32::from_black_alpha(160);
+        let cal_label_font = egui::FontId::monospace(11.0);
+        let cal_length_bg = Color32::from_rgba_unmultiplied(0, 0, 0, 140);
+        let cal_length_padding = Vec2::new(6.0, 3.0);
+        let label_gap_px = 6.0;
+        let default_label_offset = Vec2::new(8.0, -8.0);
+        let default_dir = {
+            let len = default_label_offset.length();
+            if len > f32::EPSILON {
+                default_label_offset / len
+            } else {
+                Vec2::new(0.0, -1.0)
+            }
+        };
+        let calc_label_normal = |a: Option<Pos2>, b: Option<Pos2>| -> Option<Vec2> {
+            let p1 = a?;
+            let p2 = b?;
+            let dir_screen = (p2 - p1) * self.image_zoom;
+            if dir_screen.length_sq() <= f32::EPSILON {
+                return None;
+            }
+            Some(Vec2::new(-dir_screen.y, dir_screen.x).normalized())
+        };
+        let x_normal = calc_label_normal(self.cal_x.p1, self.cal_x.p2);
+        let y_normal = calc_label_normal(self.cal_y.p1, self.cal_y.p2);
+        let draw_cal_point = |point: Pos2, label: &str, normal: Option<Vec2>, flip_side: bool| {
+            let screen = rect.min + point.to_vec2() * self.image_zoom;
+            let dir = normal.unwrap_or(default_dir);
+            let dir = if flip_side { -dir } else { dir };
+            let galley =
+                painter.layout_no_wrap(label.to_owned(), cal_label_font.clone(), cal_point_color);
+            let offset = galley.size().y.mul_add(0.5, cal_radius + label_gap_px);
+            let label_center = screen + dir * offset;
+            let label_pos = label_center - galley.size() * 0.5;
+            painter.circle_filled(screen, cal_radius, stroke_cal_outline.color);
+            painter.circle_filled(screen, super::super::CAL_POINT_DRAW_RADIUS, cal_point_color);
+            let shadow_pos = label_pos + Vec2::splat(1.0);
+            painter.galley(shadow_pos, galley.clone(), cal_label_shadow);
+            painter.galley(label_pos, galley, cal_point_color);
+        };
+        let draw_cal_length_label = |p1: Pos2, p2: Pos2| {
+            let len = (p2 - p1).length();
+            if len <= f32::EPSILON {
+                return;
+            }
+            let screen_p1 = rect.min + p1.to_vec2() * self.image_zoom;
+            let screen_p2 = rect.min + p2.to_vec2() * self.image_zoom;
+            let center = screen_p1 + (screen_p2 - screen_p1) * 0.5;
+            let mut angle = (screen_p2 - screen_p1).angle();
+            if angle.abs() > std::f32::consts::FRAC_PI_2 {
+                angle += std::f32::consts::PI;
+            }
+            let label = format!("{len:.1} px");
+            let galley = painter.layout_no_wrap(label, cal_label_font.clone(), cal_point_color);
+            let size = galley.size();
+            let half = size * 0.5 + cal_length_padding;
+            let rot = egui::emath::Rot2::from_angle(angle);
+            let points = vec![
+                center + rot * Vec2::new(-half.x, -half.y),
+                center + rot * Vec2::new(half.x, -half.y),
+                center + rot * Vec2::new(half.x, half.y),
+                center + rot * Vec2::new(-half.x, half.y),
+            ];
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                cal_length_bg,
+                egui::Stroke::NONE,
+            ));
+            let mut text_shape =
+                egui::epaint::TextShape::new(center - size * 0.5, galley, cal_point_color);
+            text_shape = text_shape.with_angle_and_anchor(angle, egui::Align2::CENTER_CENTER);
+            painter.add(text_shape);
+        };
+        let draw_cal_line = |p1: Pos2, p2: Pos2| {
+            let line = [
+                rect.min + p1.to_vec2() * self.image_zoom,
+                rect.min + p2.to_vec2() * self.image_zoom,
+            ];
+            painter.line_segment(line, stroke_cal_outline);
+            painter.line_segment(line, stroke_cal);
+        };
+        if let Some(p1) = self.cal_x.p1
+            && let Some(p2) = self.cal_x.p2
+        {
+            draw_cal_line(p1, p2);
+            draw_cal_length_label(p1, p2);
+        }
+        if let Some(p1) = self.cal_y.p1
+            && let Some(p2) = self.cal_y.p2
+        {
+            draw_cal_line(p1, p2);
+            draw_cal_length_label(p1, p2);
+        }
+        if let Some(p) = self.cal_x.p1 {
+            draw_cal_point(p, "X1", x_normal, false);
+        }
+        if let Some(p) = self.cal_x.p2 {
+            draw_cal_point(p, "X2", x_normal, true);
+        }
+        if let Some(p) = self.cal_y.p1 {
+            draw_cal_point(p, "Y1", y_normal, false);
+        }
+        if let Some(p) = self.cal_y.p2 {
+            draw_cal_point(p, "Y2", y_normal, true);
+        }
+    }
+
+    fn draw_points_overlay(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        point_radius: f32,
+        point_color: Color32,
+    ) {
+        for (idx, p) in self.points.iter().enumerate() {
+            let screen = rect.min + p.pixel.to_vec2() * self.image_zoom;
+            painter.circle_filled(screen, point_radius, point_color);
+            painter.text(
+                screen + Vec2::new(6.0, -6.0),
+                egui::Align2::LEFT_TOP,
+                format!("{}", idx + 1),
+                egui::FontId::monospace(10.0),
+                Color32::WHITE,
+            );
+        }
+    }
+
+    fn draw_snap_overlay(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        pointer_pixel: Option<Pos2>,
+        snap_preview: Option<Pos2>,
+        point_radius: f32,
+    ) {
+        if !matches!(
+            self.point_input_mode,
+            PointInputMode::ContrastSnap | PointInputMode::CenterlineSnap
+        ) || matches!(self.pick_mode, PickMode::CurveColor)
+        {
+            return;
+        }
+
+        if let Some(pixel) = pointer_pixel {
+            let screen = rect.min + pixel.to_vec2() * self.image_zoom;
+            let radius = (self.contrast_search_radius * self.image_zoom).max(4.0);
+            painter.circle_stroke(
+                screen,
+                radius,
+                egui::Stroke::new(1.2, self.snap_overlay_color),
+            );
+        }
+        if let Some(preview) = snap_preview {
+            let screen = rect.min + preview.to_vec2() * self.image_zoom;
+            painter.circle_stroke(
+                screen,
+                (point_radius + 4.0).max(6.0),
+                egui::Stroke::new(1.2, self.snap_overlay_color),
+            );
+            painter.circle_filled(screen, 3.0, self.snap_overlay_color);
+        }
+    }
+
+    fn draw_curve_preview(&mut self, painter: &egui::Painter, rect: egui::Rect) {
+        if !self.show_curve_segments {
+            return;
+        }
+        let stroke_curve = self.config.curve_line.stroke();
+        let zoom = self.image_zoom;
+        let preview_segments = self.sorted_preview_segments();
+        if preview_segments.len() >= 2 {
+            for win in preview_segments.windows(2) {
+                let a = rect.min + win[0].1.to_vec2() * zoom;
+                let b = rect.min + win[1].1.to_vec2() * zoom;
+                painter.line_segment([a, b], stroke_curve);
+            }
+        }
+    }
+
+    fn draw_crosshair_overlay(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        hover_pos: Option<Pos2>,
+        pointer_pixel: Option<Pos2>,
+        x_mapping: Option<&AxisMapping>,
+        y_mapping: Option<&AxisMapping>,
+        delete_down: bool,
+        shift_pressed: bool,
+        ctrl_pressed: bool,
+    ) {
+        let Some(pos) = hover_pos else {
+            return;
+        };
+        let Some(pixel) = pointer_pixel else {
+            return;
+        };
+
+        let crosshair_color = self.config.crosshair.color32();
+        let stroke = egui::Stroke::new(1.0, crosshair_color);
+        painter.line_segment(
+            [pos2(rect.left(), pos.y), pos2(rect.right(), pos.y)],
+            stroke,
+        );
+        painter.line_segment(
+            [pos2(pos.x, rect.top()), pos2(pos.x, rect.bottom())],
+            stroke,
+        );
+
+        let font = egui::FontId::proportional(12.0);
+        let text_color = Color32::BLACK;
+        let bg_color = Color32::from_rgba_unmultiplied(255, 255, 255, 200);
+        let padding = Vec2::new(4.0, 2.0);
+
+        let clip = painter.clip_rect();
+
+        if let Some(xmap) = x_mapping
+            && let Some(value) = xmap.value_at(pixel)
+        {
+            let text = format_overlay_value(&value);
+            let galley = painter.layout_no_wrap(text, font.clone(), text_color);
+            let size = galley.size();
+            let total = size + padding * 2.0;
+            let min_x = clip.left() + 2.0;
+            let max_x = clip.right() - total.x - 2.0;
+            let label_pos = pos2(
+                if max_x < min_x {
+                    min_x
+                } else {
+                    total.x.mul_add(-0.5, pos.x).clamp(min_x, max_x)
+                },
+                clip.top() + 4.0,
+            );
+            let bg_rect = egui::Rect::from_min_size(label_pos, total);
+            painter.rect_filled(bg_rect, 3.0, bg_color);
+            painter.galley(label_pos + padding, galley, text_color);
+        }
+        if let Some(ymap) = y_mapping
+            && let Some(value) = ymap.value_at(pixel)
+        {
+            let text = format_overlay_value(&value);
+            let galley = painter.layout_no_wrap(text, font, text_color);
+            let size = galley.size();
+            let total = size + padding * 2.0;
+            let min_y = clip.top() + 2.0;
+            let max_y = clip.bottom() - total.y - 2.0;
+            let label_pos = pos2(
+                clip.left() + 4.0,
+                if max_y < min_y {
+                    min_y
+                } else {
+                    total.y.mul_add(-0.5, pos.y).clamp(min_y, max_y)
+                },
+            );
+            let bg_rect = egui::Rect::from_min_size(label_pos, total);
+            painter.rect_filled(bg_rect, 3.0, bg_color);
+            painter.galley(label_pos + padding, galley, text_color);
+        }
+
+        let badge_offset = Vec2::new(18.0, -18.0);
+        let badge_anchor = pos + badge_offset;
+        let badge_radius = 12.0;
+        let showed_color_badge = {
+            if matches!(self.pick_mode, PickMode::CurveColor)
+                && let Some(sampled) = self.sample_image_color(pixel)
+            {
+                let [r, g, b, _] = sampled.to_array();
+                let badge_color = Color32::from_rgb(r, g, b);
+                painter.circle_filled(badge_anchor, badge_radius, badge_color);
+                painter.circle_stroke(
+                    badge_anchor,
+                    badge_radius,
+                    egui::Stroke::new(1.0, Color32::from_gray(30)),
+                );
+                true
+            } else {
+                false
+            }
+        };
+
+        if !showed_color_badge
+            && let Some((icon_text, icon_color)) =
+                self.cursor_badge(delete_down, shift_pressed, ctrl_pressed)
+        {
+            let icon_font = egui::FontId::proportional(15.0);
+            let icon_galley = painter.layout_no_wrap(icon_text.to_string(), icon_font, icon_color);
+            let icon_size = icon_galley.size();
+            let icon_bg = Color32::from_rgba_unmultiplied(0, 0, 0, 160);
+            painter.circle_filled(badge_anchor, badge_radius, icon_bg);
+            let icon_pos = pos2(
+                icon_size.x.mul_add(-0.5, badge_anchor.x),
+                icon_size.y.mul_add(-0.5, badge_anchor.y),
+            );
+            painter.galley(icon_pos, icon_galley, icon_color);
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn ui_central_image(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui) {
+        self.last_viewport_size = Some(ui.available_size());
+        self.apply_pending_fit_on_load();
+        self.handle_drag_and_drop(ui);
 
         if let Some(img) = self.image.as_ref() {
             let mut x_mapping = self.cal_x.mapping();
@@ -135,55 +703,15 @@ impl CurcatApp {
                 );
                 let display_size = base_size * self.image_zoom;
                 let image = egui::Image::new((tex_id, display_size));
-                let viewport = ui.available_size();
-                let pad = Self::center_padding(viewport, display_size);
-                let response = if pad.x > 0.0 || pad.y > 0.0 {
-                    ui.vertical(|ui| {
-                        if pad.y > 0.0 {
-                            ui.add_space(pad.y);
-                        }
-                        let response = ui
-                            .horizontal(|ui| {
-                                if pad.x > 0.0 {
-                                    ui.add_space(pad.x);
-                                }
-                                let response = ui.add(image.sense(Sense::click_and_drag()));
-                                if pad.x > 0.0 {
-                                    ui.add_space(pad.x);
-                                }
-                                response
-                            })
-                            .inner;
-                        if pad.y > 0.0 {
-                            ui.add_space(pad.y);
-                        }
-                        response
-                    })
-                    .inner
-                } else {
-                    ui.add(image.sense(Sense::click_and_drag()))
-                };
+                let response = self.add_centered_image(ui, image, display_size);
                 let rect = response.rect;
                 let painter = ui.painter_at(rect);
 
                 self.handle_middle_pan(&response, ui);
 
-                if response.hovered() {
-                    let mut scroll = 0.0_f32;
-                    let mut hover_pos: Option<Pos2> = None;
-                    ui.ctx().input(|i| {
-                        scroll = i.raw_scroll_delta.y;
-                        hover_pos = i.pointer.latest_pos();
-                    });
-                    if scroll.abs() > f32::EPSILON {
-                        let steps = (scroll / 40.0).round();
-                        if steps.abs() > f32::EPSILON {
-                            let base: f32 = if steps > 0.0 { 1.1 } else { 0.9 };
-                            let factor = base.powf(steps.abs());
-                            pending_zoom = Some(self.image_zoom * factor);
-                            pending_zoom_anchor = response.hover_pos().or(hover_pos);
-                        }
-                    }
+                if let Some((next_zoom, anchor)) = self.compute_scroll_zoom(&response, ui) {
+                    pending_zoom = Some(next_zoom);
+                    pending_zoom_anchor = anchor;
                 }
 
                 let zoom = self.image_zoom;
@@ -196,93 +724,30 @@ impl CurcatApp {
                 };
 
                 let pointer_pos = response.interact_pointer_pos();
-                let (
-                    shift_pressed,
-                    primary_down,
-                    primary_pressed,
-                    primary_released,
-                    delete_down,
-                    ctrl_pressed,
-                    press_origin,
-                    latest_pos,
-                ) = ui.ctx().input(|i| {
-                    (
-                        i.modifiers.shift,
-                        i.pointer.button_down(PointerButton::Primary),
-                        i.pointer.button_pressed(PointerButton::Primary),
-                        i.pointer.button_released(PointerButton::Primary),
-                        i.key_down(Key::Delete),
-                        i.modifiers.ctrl,
-                        i.pointer.press_origin(),
-                        i.pointer.latest_pos(),
-                    )
-                });
-                let hover_pos = response.hover_pos().or(latest_pos);
+                let pointer = PointerState::read(ui.ctx());
+                let hover_pos = response.hover_pos().or(pointer.latest_pos);
                 let pointer_pixel = hover_pos.map(&to_pixel);
-                let mut soft_primary_click = false;
-                if primary_pressed {
-                    if let Some(pos) = press_origin.or(latest_pos) {
-                        self.primary_press = Some(PrimaryPressInfo {
-                            pos,
-                            time: Instant::now(),
-                            in_rect: rect.contains(pos),
-                            shift_down: shift_pressed,
-                        });
-                    } else {
-                        self.primary_press = None;
-                    }
-                }
-                if primary_released {
-                    if let Some(info) = self.primary_press.take()
-                        && !info.shift_down
-                            && info.in_rect
-                            && let Some(release_pos) = latest_pos
-                            && rect.contains(release_pos)
-                        {
-                            let dist = info.pos.distance(release_pos);
-                            let elapsed = info.time.elapsed();
-                            if dist <= LIGHT_DRAG_CLICK_DIST
-                                && elapsed <= LIGHT_DRAG_CLICK_MAX_DURATION
-                            {
-                                soft_primary_click = true;
-                            }
-                        }
-                } else if !primary_down {
-                    self.primary_press = None;
-                }
-                let response_clicked = response.clicked_by(PointerButton::Primary);
-                let primary_clicked = response_clicked || soft_primary_click;
-                let click_pos = if response_clicked {
-                    pointer_pos.or(hover_pos)
-                } else if soft_primary_click {
-                    latest_pos.or(pointer_pos)
-                } else {
-                    None
-                };
-                let snap_preview = if !matches!(self.point_input_mode, PointInputMode::Free)
-                    && !matches!(self.pick_mode, PickMode::CurveColor)
-                    && let Some(pixel) = pointer_pixel
-                {
-                    self.compute_snap_candidate(pixel)
-                } else {
-                    None
-                };
+                let hover_pos_only = response.hover_pos();
+                let hover_pixel = hover_pos_only.map(&to_pixel);
+                let (primary_clicked, click_pos) =
+                    self.resolve_primary_click(&response, rect, pointer, pointer_pos, hover_pos);
+                let snap_preview = self.compute_snap_preview(pointer_pixel);
 
                 let suppress_primary_click = self.auto_place_tick(
                     pointer_pixel,
-                    primary_down,
-                    primary_pressed,
-                    shift_pressed,
-                    delete_down,
+                    pointer.primary_down,
+                    pointer.primary_pressed,
+                    pointer.shift_pressed,
+                    pointer.delete_down,
                     x_mapping.as_ref(),
                     y_mapping.as_ref(),
                 );
 
-                if primary_down {
+                if pointer.primary_down {
                     ui.ctx().request_repaint_after(Duration::from_millis(16));
                 }
 
-                if shift_pressed
+                if pointer.shift_pressed
                     && response.drag_started_by(PointerButton::Primary)
                     && let Some(pos) = pointer_pos
                 {
@@ -319,21 +784,6 @@ impl CurcatApp {
                 if let Some(target) = self.dragging_handle {
                     if let Some(pos) = pointer_pos {
                         let pixel = to_pixel(pos);
-                        let pixel = match target {
-                            DragTarget::CurvePoint(_) => pixel,
-                            DragTarget::CalX1 => {
-                                self.snap_calibration_angle(pixel, self.cal_x.p2, base_size)
-                            }
-                            DragTarget::CalX2 => {
-                                self.snap_calibration_angle(pixel, self.cal_x.p1, base_size)
-                            }
-                            DragTarget::CalY1 => {
-                                self.snap_calibration_angle(pixel, self.cal_y.p2, base_size)
-                            }
-                            DragTarget::CalY2 => {
-                                self.snap_calibration_angle(pixel, self.cal_y.p1, base_size)
-                            }
-                        };
                         match target {
                             DragTarget::CurvePoint(idx) => {
                                 if let Some(point) = self.points.get_mut(idx) {
@@ -341,25 +791,21 @@ impl CurcatApp {
                                     self.mark_points_dirty();
                                 }
                             }
-                            DragTarget::CalX1 => {
-                                self.cal_x.p1 = Some(pixel);
-                                x_mapping = self.cal_x.mapping();
-                            }
-                            DragTarget::CalX2 => {
-                                self.cal_x.p2 = Some(pixel);
-                                x_mapping = self.cal_x.mapping();
-                            }
-                            DragTarget::CalY1 => {
-                                self.cal_y.p1 = Some(pixel);
-                                y_mapping = self.cal_y.mapping();
-                            }
-                            DragTarget::CalY2 => {
-                                self.cal_y.p2 = Some(pixel);
-                                y_mapping = self.cal_y.mapping();
+                            _ => {
+                                if let Some(cal_target) = CalTarget::from_drag(target) {
+                                    self.apply_calibration_point(
+                                        cal_target,
+                                        pixel,
+                                        base_size,
+                                        CalUpdateMode::Drag,
+                                        &mut x_mapping,
+                                        &mut y_mapping,
+                                    );
+                                }
                             }
                         }
                     }
-                    if !shift_pressed || !primary_down {
+                    if !pointer.shift_pressed || !pointer.primary_down {
                         self.dragging_handle = None;
                     }
                 } else if response.clicked_by(PointerButton::Secondary)
@@ -370,15 +816,16 @@ impl CurcatApp {
                     self.remove_point_near_screen(pos, image_origin);
                 } else if primary_clicked
                     && !suppress_primary_click
-                    && !shift_pressed
+                    && !pointer.shift_pressed
                     && let Some(pos) = click_pos
                 {
-                    if delete_down {
+                    if pointer.delete_down {
                         let image_origin = rect.min;
                         self.remove_point_near_screen(pos, image_origin);
                     } else {
                         let pixel = to_pixel(pos);
-                        match self.pick_mode {
+                        let pick_mode = self.pick_mode;
+                        match pick_mode {
                             PickMode::None => {
                                 if x_mapping.is_some() && y_mapping.is_some() {
                                     self.push_curve_point(pixel);
@@ -388,304 +835,46 @@ impl CurcatApp {
                                     );
                                 }
                             }
-                            PickMode::X1 => {
-                                let snapped = self.snap_pixel_if_requested(pixel);
-                                let snapped =
-                                    self.snap_calibration_angle(snapped, self.cal_x.p2, base_size);
-                                self.cal_x.p1 = Some(snapped);
-                                self.pick_mode = PickMode::None;
-                                x_mapping = self.cal_x.mapping();
-                                self.queue_value_focus(AxisValueField::X1);
-                                self.set_status("Picked X1.");
-                            }
-                            PickMode::X2 => {
-                                let snapped = self.snap_pixel_if_requested(pixel);
-                                let snapped =
-                                    self.snap_calibration_angle(snapped, self.cal_x.p1, base_size);
-                                self.cal_x.p2 = Some(snapped);
-                                self.pick_mode = PickMode::None;
-                                x_mapping = self.cal_x.mapping();
-                                self.queue_value_focus(AxisValueField::X2);
-                                self.set_status("Picked X2.");
-                            }
-                            PickMode::Y1 => {
-                                let snapped = self.snap_pixel_if_requested(pixel);
-                                let snapped =
-                                    self.snap_calibration_angle(snapped, self.cal_y.p2, base_size);
-                                self.cal_y.p1 = Some(snapped);
-                                self.pick_mode = PickMode::None;
-                                y_mapping = self.cal_y.mapping();
-                                self.queue_value_focus(AxisValueField::Y1);
-                                self.set_status("Picked Y1.");
-                            }
-                            PickMode::Y2 => {
-                                let snapped = self.snap_pixel_if_requested(pixel);
-                                let snapped =
-                                    self.snap_calibration_angle(snapped, self.cal_y.p1, base_size);
-                                self.cal_y.p2 = Some(snapped);
-                                self.pick_mode = PickMode::None;
-                                y_mapping = self.cal_y.mapping();
-                                self.queue_value_focus(AxisValueField::Y2);
-                                self.set_status("Picked Y2.");
-                            }
                             PickMode::CurveColor => {
                                 self.pick_curve_color_at(pixel);
                                 self.pick_mode = PickMode::None;
+                            }
+                            _ => {
+                                if let Some(cal_target) = CalTarget::from_pick_mode(pick_mode) {
+                                    self.apply_calibration_point(
+                                        cal_target,
+                                        pixel,
+                                        base_size,
+                                        CalUpdateMode::Pick,
+                                        &mut x_mapping,
+                                        &mut y_mapping,
+                                    );
+                                }
                             }
                         }
                     }
                 }
 
                 self.ensure_point_numeric_cache(x_mapping.as_ref(), y_mapping.as_ref());
+                self.draw_calibration_overlay(&painter, rect);
 
-                // Draw picked calibration overlays (lines, points, labels)
-                if self.show_calibration_segments {
-                    let stroke_cal_outline = egui::Stroke {
-                        width: super::super::CAL_LINE_OUTLINE_WIDTH,
-                        color: Color32::from_black_alpha(super::super::CAL_OUTLINE_ALPHA),
-                    };
-                    let stroke_cal = egui::Stroke {
-                        width: super::super::CAL_LINE_WIDTH,
-                        color: Color32::LIGHT_BLUE,
-                    };
-                    let cal_point_color = stroke_cal.color;
-                    let cal_radius =
-                        super::super::CAL_POINT_DRAW_RADIUS + super::super::CAL_POINT_OUTLINE_PAD;
-                    let cal_label_shadow = Color32::from_black_alpha(160);
-                    let cal_label_font = egui::FontId::monospace(11.0);
-                    let label_gap_px = 6.0;
-                    let default_label_offset = Vec2::new(8.0, -8.0);
-                    let default_dir = {
-                        let len = default_label_offset.length();
-                        if len > f32::EPSILON {
-                            default_label_offset / len
-                        } else {
-                            Vec2::new(0.0, -1.0)
-                        }
-                    };
-                    let calc_label_normal = |a: Option<Pos2>, b: Option<Pos2>| -> Option<Vec2> {
-                        let p1 = a?;
-                        let p2 = b?;
-                        let dir_screen = (p2 - p1) * self.image_zoom;
-                        if dir_screen.length_sq() <= f32::EPSILON {
-                            return None;
-                        }
-                        Some(Vec2::new(-dir_screen.y, dir_screen.x).normalized())
-                    };
-                    let x_normal = calc_label_normal(self.cal_x.p1, self.cal_x.p2);
-                    let y_normal = calc_label_normal(self.cal_y.p1, self.cal_y.p2);
-                    let draw_cal_point =
-                        |point: Pos2, label: &str, normal: Option<Vec2>, flip_side: bool| {
-                            let screen = rect.min + point.to_vec2() * self.image_zoom;
-                            let dir = normal.unwrap_or(default_dir);
-                            let dir = if flip_side { -dir } else { dir };
-                            let galley = painter.layout_no_wrap(
-                                label.to_owned(),
-                                cal_label_font.clone(),
-                                cal_point_color,
-                            );
-                            let offset = galley.size().y.mul_add(0.5, cal_radius + label_gap_px);
-                            let label_center = screen + dir * offset;
-                            let label_pos = label_center - galley.size() * 0.5;
-                            painter.circle_filled(screen, cal_radius, stroke_cal_outline.color);
-                            painter.circle_filled(
-                                screen,
-                                super::super::CAL_POINT_DRAW_RADIUS,
-                                cal_point_color,
-                            );
-                            let shadow_pos = label_pos + Vec2::splat(1.0);
-                            painter.galley(shadow_pos, galley.clone(), cal_label_shadow);
-                            painter.galley(label_pos, galley, cal_point_color);
-                        };
-                    let draw_cal_line = |p1: Pos2, p2: Pos2| {
-                        let line = [
-                            rect.min + p1.to_vec2() * self.image_zoom,
-                            rect.min + p2.to_vec2() * self.image_zoom,
-                        ];
-                        painter.line_segment(line, stroke_cal_outline);
-                        painter.line_segment(line, stroke_cal);
-                    };
-                    if let Some(p1) = self.cal_x.p1
-                        && let Some(p2) = self.cal_x.p2
-                    {
-                        draw_cal_line(p1, p2);
-                    }
-                    if let Some(p1) = self.cal_y.p1
-                        && let Some(p2) = self.cal_y.p2
-                    {
-                        draw_cal_line(p1, p2);
-                    }
-                    if let Some(p) = self.cal_x.p1 {
-                        draw_cal_point(p, "X1", x_normal, false);
-                    }
-                    if let Some(p) = self.cal_x.p2 {
-                        draw_cal_point(p, "X2", x_normal, true);
-                    }
-                    if let Some(p) = self.cal_y.p1 {
-                        draw_cal_point(p, "Y1", y_normal, false);
-                    }
-                    if let Some(p) = self.cal_y.p2 {
-                        draw_cal_point(p, "Y2", y_normal, true);
-                    }
-                }
-
-                // Draw picked points
                 let point_style = &self.config.curve_points;
                 let point_color = point_style.color32();
                 let point_radius = point_style.radius();
-                for (idx, p) in self.points.iter().enumerate() {
-                    let screen = rect.min + p.pixel.to_vec2() * self.image_zoom;
-                    painter.circle_filled(screen, point_radius, point_color);
-                    painter.text(
-                        screen + Vec2::new(6.0, -6.0),
-                        egui::Align2::LEFT_TOP,
-                        format!("{}", idx + 1),
-                        egui::FontId::monospace(10.0),
-                        Color32::WHITE,
-                    );
-                }
-
-                if matches!(
-                    self.point_input_mode,
-                    PointInputMode::ContrastSnap | PointInputMode::CenterlineSnap
-                ) && !matches!(self.pick_mode, PickMode::CurveColor)
-                {
-                    if let Some(pixel) = pointer_pixel {
-                        let screen = rect.min + pixel.to_vec2() * self.image_zoom;
-                        let radius = (self.contrast_search_radius * self.image_zoom).max(4.0);
-                        painter.circle_stroke(
-                            screen,
-                            radius,
-                            egui::Stroke::new(1.2, self.snap_overlay_color),
-                        );
-                    }
-                    if let Some(preview) = snap_preview {
-                        let screen = rect.min + preview.to_vec2() * self.image_zoom;
-                        painter.circle_stroke(
-                            screen,
-                            (point_radius + 4.0).max(6.0),
-                            egui::Stroke::new(1.2, self.snap_overlay_color),
-                        );
-                        painter.circle_filled(screen, 3.0, self.snap_overlay_color);
-                    }
-                }
-
-                // Draw interpolation preview: connect points sorted by X numeric
-                if self.show_curve_segments {
-                    let stroke_curve = self.config.curve_line.stroke();
-                    let zoom = self.image_zoom;
-                    let preview_segments = self.sorted_preview_segments();
-                    if preview_segments.len() >= 2 {
-                        for win in preview_segments.windows(2) {
-                            let a = rect.min + win[0].1.to_vec2() * zoom;
-                            let b = rect.min + win[1].1.to_vec2() * zoom;
-                            painter.line_segment([a, b], stroke_curve);
-                        }
-                    }
-                }
-
-                // Hover crosshair
-                if let Some(pos) = response.hover_pos() {
-                    let crosshair_color = self.config.crosshair.color32();
-                    let stroke = egui::Stroke::new(1.0, crosshair_color);
-                    painter.line_segment(
-                        [pos2(rect.left(), pos.y), pos2(rect.right(), pos.y)],
-                        stroke,
-                    );
-                    painter.line_segment(
-                        [pos2(pos.x, rect.top()), pos2(pos.x, rect.bottom())],
-                        stroke,
-                    );
-
-                    let pixel = to_pixel(pos);
-                    let font = egui::FontId::proportional(12.0);
-                    let text_color = Color32::BLACK;
-                    let bg_color = Color32::from_rgba_unmultiplied(255, 255, 255, 200);
-                    let padding = Vec2::new(4.0, 2.0);
-
-                    let clip = painter.clip_rect();
-
-                    if let Some(xmap) = x_mapping.as_ref()
-                        && let Some(value) = xmap.value_at(pixel)
-                    {
-                        let text = format_overlay_value(&value);
-                        let galley = painter.layout_no_wrap(text, font.clone(), text_color);
-                        let size = galley.size();
-                        let total = size + padding * 2.0;
-                        let min_x = clip.left() + 2.0;
-                        let max_x = clip.right() - total.x - 2.0;
-                        let label_pos = pos2(
-                            if max_x < min_x {
-                                min_x
-                            } else {
-                                total.x.mul_add(-0.5, pos.x).clamp(min_x, max_x)
-                            },
-                            clip.top() + 4.0,
-                        );
-                        let bg_rect = egui::Rect::from_min_size(label_pos, total);
-                        painter.rect_filled(bg_rect, 3.0, bg_color);
-                        painter.galley(label_pos + padding, galley, text_color);
-                    }
-                    if let Some(ymap) = y_mapping.as_ref()
-                        && let Some(value) = ymap.value_at(pixel)
-                    {
-                        let text = format_overlay_value(&value);
-                        let galley = painter.layout_no_wrap(text, font, text_color);
-                        let size = galley.size();
-                        let total = size + padding * 2.0;
-                        let min_y = clip.top() + 2.0;
-                        let max_y = clip.bottom() - total.y - 2.0;
-                        let label_pos = pos2(
-                            clip.left() + 4.0,
-                            if max_y < min_y {
-                                min_y
-                            } else {
-                                total.y.mul_add(-0.5, pos.y).clamp(min_y, max_y)
-                            },
-                        );
-                        let bg_rect = egui::Rect::from_min_size(label_pos, total);
-                        painter.rect_filled(bg_rect, 3.0, bg_color);
-                        painter.galley(label_pos + padding, galley, text_color);
-                    }
-
-                    let badge_offset = Vec2::new(18.0, -18.0);
-                    let badge_anchor = pos + badge_offset;
-                    let badge_radius = 12.0;
-                    let showed_color_badge = {
-                        if matches!(self.pick_mode, PickMode::CurveColor)
-                            && let Some(sampled) = self.sample_image_color(pixel) {
-                                let [r, g, b, _] = sampled.to_array();
-                                let badge_color = Color32::from_rgb(r, g, b);
-                                painter.circle_filled(badge_anchor, badge_radius, badge_color);
-                                painter.circle_stroke(
-                                    badge_anchor,
-                                    badge_radius,
-                                    egui::Stroke::new(1.0, Color32::from_gray(30)),
-                                );
-                                true
-                            }
-                            else{
-                                false
-                            }
-                    };
-
-                    if !showed_color_badge
-                        && let Some((icon_text, icon_color)) =
-                            self.cursor_badge(delete_down, shift_pressed, ctrl_pressed)
-                        {
-                            let icon_font = egui::FontId::proportional(15.0);
-                            let icon_galley =
-                                painter.layout_no_wrap(icon_text.to_string(), icon_font, icon_color);
-                            let icon_size = icon_galley.size();
-                            let icon_bg = Color32::from_rgba_unmultiplied(0, 0, 0, 160);
-                            painter.circle_filled(badge_anchor, badge_radius, icon_bg);
-                            let icon_pos = pos2(
-                                icon_size.x.mul_add(-0.5, badge_anchor.x),
-                                icon_size.y.mul_add(-0.5, badge_anchor.y),
-                            );
-                            painter.galley(icon_pos, icon_galley, icon_color);
-                        }
-                }
+                self.draw_points_overlay(&painter, rect, point_radius, point_color);
+                self.draw_snap_overlay(&painter, rect, pointer_pixel, snap_preview, point_radius);
+                self.draw_curve_preview(&painter, rect);
+                self.draw_crosshair_overlay(
+                    &painter,
+                    rect,
+                    hover_pos_only,
+                    hover_pixel,
+                    x_mapping.as_ref(),
+                    y_mapping.as_ref(),
+                    pointer.delete_down,
+                    pointer.shift_pressed,
+                    pointer.ctrl_pressed,
+                );
             });
             if self.skip_pan_sync_once {
                 self.skip_pan_sync_once = false;
