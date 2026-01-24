@@ -4,9 +4,9 @@ use std::path::Path;
 
 impl CurcatApp {
     pub(crate) fn open_image_dialog(&mut self) {
-        let mut dialog = Self::make_open_dialog(self.last_image_dir.as_deref());
+        let mut dialog = Self::make_open_dialog(self.project.last_image_dir.as_deref());
         dialog.pick_file();
-        self.active_dialog = Some(NativeDialog::Open(dialog));
+        self.project.active_dialog = Some(NativeDialog::Open(dialog));
     }
 
     pub(crate) fn open_project_dialog(&mut self) {
@@ -14,15 +14,16 @@ impl CurcatApp {
             .title("Open project")
             .add_file_filter_extensions("Curcat project", vec!["curcat"])
             .default_file_filter("Curcat project");
-        if let Some(dir) = self.last_project_dir.as_deref() {
+        if let Some(dir) = self.project.last_project_dir.as_deref() {
             dialog = dialog.initial_directory(dir.to_path_buf());
         }
         dialog.pick_file();
-        self.active_dialog = Some(NativeDialog::OpenProject(dialog));
+        self.project.active_dialog = Some(NativeDialog::OpenProject(dialog));
     }
 
     pub(crate) fn save_project_dialog(&mut self) {
         let default_name = self
+            .project
             .last_project_path
             .as_ref()
             .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
@@ -31,10 +32,10 @@ impl CurcatApp {
             "Save project",
             &default_name,
             &["curcat"],
-            self.last_project_dir.as_deref(),
+            self.project.last_project_dir.as_deref(),
         );
         dialog.save_file();
-        self.active_dialog = Some(NativeDialog::SaveProject(dialog));
+        self.project.active_dialog = Some(NativeDialog::SaveProject(dialog));
     }
 
     pub(crate) fn start_export_csv(&mut self) {
@@ -44,10 +45,10 @@ impl CurcatApp {
                     "Export CSV",
                     "curve.csv",
                     &["csv"],
-                    self.last_export_dir.as_deref(),
+                    self.project.last_export_dir.as_deref(),
                 );
                 dialog.save_file();
-                self.active_dialog = Some(NativeDialog::SaveCsv { dialog, payload });
+                self.project.active_dialog = Some(NativeDialog::SaveCsv { dialog, payload });
             }
             Err(msg) => self.set_status(msg),
         }
@@ -60,10 +61,10 @@ impl CurcatApp {
                     "Export Excel",
                     "curve.xlsx",
                     &["xlsx"],
-                    self.last_export_dir.as_deref(),
+                    self.project.last_export_dir.as_deref(),
                 );
                 dialog.save_file();
-                self.active_dialog = Some(NativeDialog::SaveXlsx { dialog, payload });
+                self.project.active_dialog = Some(NativeDialog::SaveXlsx { dialog, payload });
             }
             Err(msg) => self.set_status(msg),
         }
@@ -76,10 +77,10 @@ impl CurcatApp {
                     "Export JSON",
                     "curve.json",
                     &["json"],
-                    self.last_export_dir.as_deref(),
+                    self.project.last_export_dir.as_deref(),
                 );
                 dialog.save_file();
-                self.active_dialog = Some(NativeDialog::SaveJson { dialog, payload });
+                self.project.active_dialog = Some(NativeDialog::SaveJson { dialog, payload });
             }
             Err(msg) => self.set_status(msg),
         }

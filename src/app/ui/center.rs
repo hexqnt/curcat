@@ -5,7 +5,7 @@ use super::super::{
 };
 use super::icons;
 
-use crate::types::AxisMapping;
+use crate::types::{AxisMapping, CoordSystem, PolarMapping};
 use egui::{Color32, Key, PointerButton, Pos2, Sense, Vec2, pos2};
 use std::time::{Duration, Instant};
 
@@ -45,6 +45,11 @@ enum CalTarget {
     X2,
     Y1,
     Y2,
+    Origin,
+    R1,
+    R2,
+    A1,
+    A2,
 }
 
 impl CalTarget {
@@ -54,15 +59,25 @@ impl CalTarget {
             Self::X2 => "X2",
             Self::Y1 => "Y1",
             Self::Y2 => "Y2",
+            Self::Origin => "Origin",
+            Self::R1 => "R1",
+            Self::R2 => "R2",
+            Self::A1 => "A1",
+            Self::A2 => "A2",
         }
     }
 
-    const fn value_field(self) -> AxisValueField {
+    const fn value_field(self) -> Option<AxisValueField> {
         match self {
-            Self::X1 => AxisValueField::X1,
-            Self::X2 => AxisValueField::X2,
-            Self::Y1 => AxisValueField::Y1,
-            Self::Y2 => AxisValueField::Y2,
+            Self::X1 => Some(AxisValueField::X1),
+            Self::X2 => Some(AxisValueField::X2),
+            Self::Y1 => Some(AxisValueField::Y1),
+            Self::Y2 => Some(AxisValueField::Y2),
+            Self::R1 => Some(AxisValueField::R1),
+            Self::R2 => Some(AxisValueField::R2),
+            Self::A1 => Some(AxisValueField::A1),
+            Self::A2 => Some(AxisValueField::A2),
+            Self::Origin => None,
         }
     }
 
@@ -72,6 +87,11 @@ impl CalTarget {
             DragTarget::CalX2 => Some(Self::X2),
             DragTarget::CalY1 => Some(Self::Y1),
             DragTarget::CalY2 => Some(Self::Y2),
+            DragTarget::PolarOrigin => Some(Self::Origin),
+            DragTarget::PolarR1 => Some(Self::R1),
+            DragTarget::PolarR2 => Some(Self::R2),
+            DragTarget::PolarA1 => Some(Self::A1),
+            DragTarget::PolarA2 => Some(Self::A2),
             _ => None,
         }
     }
@@ -82,6 +102,11 @@ impl CalTarget {
             PickMode::X2 => Some(Self::X2),
             PickMode::Y1 => Some(Self::Y1),
             PickMode::Y2 => Some(Self::Y2),
+            PickMode::Origin => Some(Self::Origin),
+            PickMode::R1 => Some(Self::R1),
+            PickMode::R2 => Some(Self::R2),
+            PickMode::A1 => Some(Self::A1),
+            PickMode::A2 => Some(Self::A2),
             _ => None,
         }
     }
@@ -96,7 +121,7 @@ enum CalUpdateMode {
 impl CurcatApp {
     pub(crate) fn handle_middle_pan(&mut self, response: &egui::Response, ui: &egui::Ui) {
         // When the MMB pan toggle is off, treat middle drag like direct touch pan.
-        let touch_style = !self.middle_pan_enabled;
+        let touch_style = !self.interaction.middle_pan_enabled;
         let factor = if touch_style {
             1.0
         } else {
@@ -106,13 +131,13 @@ impl CurcatApp {
         if response.drag_started_by(PointerButton::Middle)
             && let Some(pos) = response.interact_pointer_pos()
         {
-            self.touch_pan_active = true;
-            self.touch_pan_last = Some(pos);
+            self.image.touch_pan_active = true;
+            self.image.touch_pan_last = Some(pos);
         }
 
-        if self.touch_pan_active {
+        if self.image.touch_pan_active {
             if let Some(pos) = response.interact_pointer_pos() {
-                if let Some(last) = self.touch_pan_last {
+                if let Some(last) = self.image.touch_pan_last {
                     let delta = (pos - last) * factor;
                     if delta.length_sq() > 0.0 {
                         let scroll_delta = if touch_style { delta } else { -delta };
@@ -122,18 +147,18 @@ impl CurcatApp {
                         );
                     }
                 }
-                self.touch_pan_last = Some(pos);
+                self.image.touch_pan_last = Some(pos);
             }
 
             let middle_down = ui
                 .ctx()
                 .input(|i| i.pointer.button_down(PointerButton::Middle));
             if !middle_down {
-                self.touch_pan_active = false;
-                self.touch_pan_last = None;
+                self.image.touch_pan_active = false;
+                self.image.touch_pan_last = None;
             }
         } else if touch_style {
-            self.touch_pan_last = None;
+            self.image.touch_pan_last = None;
         }
     }
 
@@ -253,7 +278,7 @@ impl CurcatApp {
         }
         let base: f32 = if steps > 0.0 { 1.1 } else { 0.9 };
         let factor = base.powf(steps.abs());
-        Some((self.image_zoom * factor, response.hover_pos().or(hover_pos)))
+        Some((self.image.zoom * factor, response.hover_pos().or(hover_pos)))
     }
 
     fn resolve_primary_click(
@@ -267,18 +292,18 @@ impl CurcatApp {
         let mut soft_primary_click = false;
         if pointer.primary_pressed {
             if let Some(pos) = pointer.press_origin.or(pointer.latest_pos) {
-                self.primary_press = Some(PrimaryPressInfo {
+                self.interaction.primary_press = Some(PrimaryPressInfo {
                     pos,
                     time: Instant::now(),
                     in_rect: rect.contains(pos),
                     shift_down: pointer.shift_pressed,
                 });
             } else {
-                self.primary_press = None;
+                self.interaction.primary_press = None;
             }
         }
         if pointer.primary_released {
-            if let Some(info) = self.primary_press.take()
+            if let Some(info) = self.interaction.primary_press.take()
                 && !info.shift_down
                 && info.in_rect
                 && let Some(release_pos) = pointer.latest_pos
@@ -291,7 +316,7 @@ impl CurcatApp {
                 }
             }
         } else if !pointer.primary_down {
-            self.primary_press = None;
+            self.interaction.primary_press = None;
         }
         let response_clicked = response.clicked_by(PointerButton::Primary);
         let primary_clicked = response_clicked || soft_primary_click;
@@ -306,8 +331,8 @@ impl CurcatApp {
     }
 
     fn compute_snap_preview(&mut self, pointer_pixel: Option<Pos2>) -> Option<Pos2> {
-        if !matches!(self.point_input_mode, PointInputMode::Free)
-            && !matches!(self.pick_mode, PickMode::CurveColor)
+        if !matches!(self.snap.point_input_mode, PointInputMode::Free)
+            && !matches!(self.calibration.pick_mode, PickMode::CurveColor)
             && let Some(pixel) = pointer_pixel
         {
             self.compute_snap_candidate(pixel)
@@ -324,50 +349,88 @@ impl CurcatApp {
         mode: CalUpdateMode,
         x_mapping: &mut Option<AxisMapping>,
         y_mapping: &mut Option<AxisMapping>,
+        polar_mapping: &mut Option<PolarMapping>,
     ) {
         let pixel = if mode == CalUpdateMode::Pick {
             self.snap_pixel_if_requested(pixel)
         } else {
             pixel
         };
-        let snap_ref = match target {
-            CalTarget::X1 => self.cal_x.p2,
-            CalTarget::X2 => self.cal_x.p1,
-            CalTarget::Y1 => self.cal_y.p2,
-            CalTarget::Y2 => self.cal_y.p1,
+        let snapped = if matches!(target, CalTarget::Origin) {
+            pixel
+        } else {
+            let snap_ref = match target {
+                CalTarget::X1 => self.calibration.cal_x.p2,
+                CalTarget::X2 => self.calibration.cal_x.p1,
+                CalTarget::Y1 => self.calibration.cal_y.p2,
+                CalTarget::Y2 => self.calibration.cal_y.p1,
+                CalTarget::R1 | CalTarget::R2 | CalTarget::A1 | CalTarget::A2 => {
+                    self.calibration.polar_cal.origin
+                }
+                CalTarget::Origin => None,
+            };
+            self.snap_calibration_angle(pixel, snap_ref, base_size)
         };
-        let snapped = self.snap_calibration_angle(pixel, snap_ref, base_size);
 
         match target {
             CalTarget::X1 => {
-                self.cal_x.p1 = Some(snapped);
-                *x_mapping = self.cal_x.mapping();
+                self.calibration.cal_x.p1 = Some(snapped);
+                *x_mapping = self.calibration.cal_x.mapping();
             }
             CalTarget::X2 => {
-                self.cal_x.p2 = Some(snapped);
-                *x_mapping = self.cal_x.mapping();
+                self.calibration.cal_x.p2 = Some(snapped);
+                *x_mapping = self.calibration.cal_x.mapping();
             }
             CalTarget::Y1 => {
-                self.cal_y.p1 = Some(snapped);
-                *y_mapping = self.cal_y.mapping();
+                self.calibration.cal_y.p1 = Some(snapped);
+                *y_mapping = self.calibration.cal_y.mapping();
             }
             CalTarget::Y2 => {
-                self.cal_y.p2 = Some(snapped);
-                *y_mapping = self.cal_y.mapping();
+                self.calibration.cal_y.p2 = Some(snapped);
+                *y_mapping = self.calibration.cal_y.mapping();
+            }
+            CalTarget::Origin => {
+                self.calibration.polar_cal.origin = Some(snapped);
+                *polar_mapping = self.calibration.polar_cal.mapping();
+            }
+            CalTarget::R1 => {
+                self.calibration.polar_cal.radius.p1 = Some(snapped);
+                *polar_mapping = self.calibration.polar_cal.mapping();
+            }
+            CalTarget::R2 => {
+                self.calibration.polar_cal.radius.p2 = Some(snapped);
+                *polar_mapping = self.calibration.polar_cal.mapping();
+            }
+            CalTarget::A1 => {
+                self.calibration.polar_cal.angle.p1 = Some(snapped);
+                *polar_mapping = self.calibration.polar_cal.mapping();
+            }
+            CalTarget::A2 => {
+                self.calibration.polar_cal.angle.p2 = Some(snapped);
+                *polar_mapping = self.calibration.polar_cal.mapping();
             }
         }
 
         if mode == CalUpdateMode::Pick {
-            self.pick_mode = PickMode::None;
-            self.queue_value_focus(target.value_field());
+            self.calibration.pick_mode = PickMode::None;
+            if let Some(field) = target.value_field() {
+                self.queue_value_focus(field);
+            }
             self.set_status(format!("Picked {}.", target.label()));
         }
     }
 
     fn draw_calibration_overlay(&self, painter: &egui::Painter, rect: egui::Rect) {
-        if !self.show_calibration_segments {
+        if !self.calibration.show_calibration_segments {
             return;
         }
+        match self.calibration.coord_system {
+            CoordSystem::Cartesian => self.draw_cartesian_calibration_overlay(painter, rect),
+            CoordSystem::Polar => self.draw_polar_calibration_overlay(painter, rect),
+        }
+    }
+
+    fn draw_cartesian_calibration_overlay(&self, painter: &egui::Painter, rect: egui::Rect) {
         let stroke_cal_outline = egui::Stroke {
             width: super::super::CAL_LINE_OUTLINE_WIDTH,
             color: Color32::from_black_alpha(super::super::CAL_OUTLINE_ALPHA),
@@ -395,16 +458,16 @@ impl CurcatApp {
         let calc_label_normal = |a: Option<Pos2>, b: Option<Pos2>| -> Option<Vec2> {
             let p1 = a?;
             let p2 = b?;
-            let dir_screen = (p2 - p1) * self.image_zoom;
+            let dir_screen = (p2 - p1) * self.image.zoom;
             if dir_screen.length_sq() <= f32::EPSILON {
                 return None;
             }
             Some(Vec2::new(-dir_screen.y, dir_screen.x).normalized())
         };
-        let x_normal = calc_label_normal(self.cal_x.p1, self.cal_x.p2);
-        let y_normal = calc_label_normal(self.cal_y.p1, self.cal_y.p2);
+        let x_normal = calc_label_normal(self.calibration.cal_x.p1, self.calibration.cal_x.p2);
+        let y_normal = calc_label_normal(self.calibration.cal_y.p1, self.calibration.cal_y.p2);
         let draw_cal_point = |point: Pos2, label: &str, normal: Option<Vec2>, flip_side: bool| {
-            let screen = rect.min + point.to_vec2() * self.image_zoom;
+            let screen = rect.min + point.to_vec2() * self.image.zoom;
             let dir = normal.unwrap_or(default_dir);
             let dir = if flip_side { -dir } else { dir };
             let galley =
@@ -423,8 +486,8 @@ impl CurcatApp {
             if len <= f32::EPSILON {
                 return;
             }
-            let screen_p1 = rect.min + p1.to_vec2() * self.image_zoom;
-            let screen_p2 = rect.min + p2.to_vec2() * self.image_zoom;
+            let screen_p1 = rect.min + p1.to_vec2() * self.image.zoom;
+            let screen_p2 = rect.min + p2.to_vec2() * self.image.zoom;
             let center = screen_p1 + (screen_p2 - screen_p1) * 0.5;
             let mut angle = (screen_p2 - screen_p1).angle();
             if angle.abs() > std::f32::consts::FRAC_PI_2 {
@@ -453,35 +516,100 @@ impl CurcatApp {
         };
         let draw_cal_line = |p1: Pos2, p2: Pos2| {
             let line = [
-                rect.min + p1.to_vec2() * self.image_zoom,
-                rect.min + p2.to_vec2() * self.image_zoom,
+                rect.min + p1.to_vec2() * self.image.zoom,
+                rect.min + p2.to_vec2() * self.image.zoom,
             ];
             painter.line_segment(line, stroke_cal_outline);
             painter.line_segment(line, stroke_cal);
         };
-        if let Some(p1) = self.cal_x.p1
-            && let Some(p2) = self.cal_x.p2
+        if let Some(p1) = self.calibration.cal_x.p1
+            && let Some(p2) = self.calibration.cal_x.p2
         {
             draw_cal_line(p1, p2);
             draw_cal_length_label(p1, p2);
         }
-        if let Some(p1) = self.cal_y.p1
-            && let Some(p2) = self.cal_y.p2
+        if let Some(p1) = self.calibration.cal_y.p1
+            && let Some(p2) = self.calibration.cal_y.p2
         {
             draw_cal_line(p1, p2);
             draw_cal_length_label(p1, p2);
         }
-        if let Some(p) = self.cal_x.p1 {
+        if let Some(p) = self.calibration.cal_x.p1 {
             draw_cal_point(p, "X1", x_normal, false);
         }
-        if let Some(p) = self.cal_x.p2 {
+        if let Some(p) = self.calibration.cal_x.p2 {
             draw_cal_point(p, "X2", x_normal, true);
         }
-        if let Some(p) = self.cal_y.p1 {
+        if let Some(p) = self.calibration.cal_y.p1 {
             draw_cal_point(p, "Y1", y_normal, false);
         }
-        if let Some(p) = self.cal_y.p2 {
+        if let Some(p) = self.calibration.cal_y.p2 {
             draw_cal_point(p, "Y2", y_normal, true);
+        }
+    }
+
+    fn draw_polar_calibration_overlay(&self, painter: &egui::Painter, rect: egui::Rect) {
+        let stroke_cal_outline = egui::Stroke {
+            width: super::super::CAL_LINE_OUTLINE_WIDTH,
+            color: Color32::from_black_alpha(super::super::CAL_OUTLINE_ALPHA),
+        };
+        let stroke_cal = egui::Stroke {
+            width: super::super::CAL_LINE_WIDTH,
+            color: Color32::LIGHT_BLUE,
+        };
+        let cal_point_color = stroke_cal.color;
+        let cal_radius = super::super::CAL_POINT_DRAW_RADIUS + super::super::CAL_POINT_OUTLINE_PAD;
+        let cal_label_shadow = Color32::from_black_alpha(160);
+        let cal_label_font = egui::FontId::monospace(11.0);
+        let label_offset = Vec2::new(8.0, -8.0);
+        let draw_label = |screen: Pos2, label: &str| {
+            let galley =
+                painter.layout_no_wrap(label.to_owned(), cal_label_font.clone(), cal_point_color);
+            let label_pos = screen + label_offset;
+            let shadow_pos = label_pos + Vec2::splat(1.0);
+            painter.galley(shadow_pos, galley.clone(), cal_label_shadow);
+            painter.galley(label_pos, galley, cal_point_color);
+        };
+        let draw_point = |point: Pos2, label: &str| {
+            let screen = rect.min + point.to_vec2() * self.image.zoom;
+            painter.circle_filled(screen, cal_radius, stroke_cal_outline.color);
+            painter.circle_filled(screen, super::super::CAL_POINT_DRAW_RADIUS, cal_point_color);
+            draw_label(screen, label);
+        };
+        let draw_line = |p1: Pos2, p2: Pos2| {
+            let line = [
+                rect.min + p1.to_vec2() * self.image.zoom,
+                rect.min + p2.to_vec2() * self.image.zoom,
+            ];
+            painter.line_segment(line, stroke_cal_outline);
+            painter.line_segment(line, stroke_cal);
+        };
+
+        let Some(origin) = self.calibration.polar_cal.origin else {
+            return;
+        };
+
+        // Draw origin.
+        draw_point(origin, "O");
+
+        // Radius calibration lines and points.
+        if let Some(p) = self.calibration.polar_cal.radius.p1 {
+            draw_line(origin, p);
+            draw_point(p, "R1");
+        }
+        if let Some(p) = self.calibration.polar_cal.radius.p2 {
+            draw_line(origin, p);
+            draw_point(p, "R2");
+        }
+
+        // Angle calibration rays and points.
+        if let Some(p) = self.calibration.polar_cal.angle.p1 {
+            draw_line(origin, p);
+            draw_point(p, "A1");
+        }
+        if let Some(p) = self.calibration.polar_cal.angle.p2 {
+            draw_line(origin, p);
+            draw_point(p, "A2");
         }
     }
 
@@ -492,8 +620,8 @@ impl CurcatApp {
         point_radius: f32,
         point_color: Color32,
     ) {
-        for (idx, p) in self.points.iter().enumerate() {
-            let screen = rect.min + p.pixel.to_vec2() * self.image_zoom;
+        for (idx, p) in self.points.points.iter().enumerate() {
+            let screen = rect.min + p.pixel.to_vec2() * self.image.zoom;
             painter.circle_filled(screen, point_radius, point_color);
             painter.text(
                 screen + Vec2::new(6.0, -6.0),
@@ -514,39 +642,39 @@ impl CurcatApp {
         point_radius: f32,
     ) {
         if !matches!(
-            self.point_input_mode,
+            self.snap.point_input_mode,
             PointInputMode::ContrastSnap | PointInputMode::CenterlineSnap
-        ) || matches!(self.pick_mode, PickMode::CurveColor)
+        ) || matches!(self.calibration.pick_mode, PickMode::CurveColor)
         {
             return;
         }
 
         if let Some(pixel) = pointer_pixel {
-            let screen = rect.min + pixel.to_vec2() * self.image_zoom;
-            let radius = (self.contrast_search_radius * self.image_zoom).max(4.0);
+            let screen = rect.min + pixel.to_vec2() * self.image.zoom;
+            let radius = (self.snap.contrast_search_radius * self.image.zoom).max(4.0);
             painter.circle_stroke(
                 screen,
                 radius,
-                egui::Stroke::new(1.2, self.snap_overlay_color),
+                egui::Stroke::new(1.2, self.snap.snap_overlay_color),
             );
         }
         if let Some(preview) = snap_preview {
-            let screen = rect.min + preview.to_vec2() * self.image_zoom;
+            let screen = rect.min + preview.to_vec2() * self.image.zoom;
             painter.circle_stroke(
                 screen,
                 (point_radius + 4.0).max(6.0),
-                egui::Stroke::new(1.2, self.snap_overlay_color),
+                egui::Stroke::new(1.2, self.snap.snap_overlay_color),
             );
-            painter.circle_filled(screen, 3.0, self.snap_overlay_color);
+            painter.circle_filled(screen, 3.0, self.snap.snap_overlay_color);
         }
     }
 
     fn draw_curve_preview(&mut self, painter: &egui::Painter, rect: egui::Rect) {
-        if !self.show_curve_segments {
+        if !self.points.show_curve_segments {
             return;
         }
         let stroke_curve = self.config.curve_line.stroke();
-        let zoom = self.image_zoom;
+        let zoom = self.image.zoom;
         let preview_segments = self.sorted_preview_segments();
         if preview_segments.len() >= 2 {
             for win in preview_segments.windows(2) {
@@ -565,6 +693,7 @@ impl CurcatApp {
         pointer_pixel: Option<Pos2>,
         x_mapping: Option<&AxisMapping>,
         y_mapping: Option<&AxisMapping>,
+        polar_mapping: Option<&PolarMapping>,
         delete_down: bool,
         shift_pressed: bool,
         ctrl_pressed: bool,
@@ -578,14 +707,29 @@ impl CurcatApp {
 
         let crosshair_color = self.config.crosshair.color32();
         let stroke = egui::Stroke::new(1.0, crosshair_color);
-        painter.line_segment(
-            [pos2(rect.left(), pos.y), pos2(rect.right(), pos.y)],
-            stroke,
-        );
-        painter.line_segment(
-            [pos2(pos.x, rect.top()), pos2(pos.x, rect.bottom())],
-            stroke,
-        );
+        match self.calibration.coord_system {
+            CoordSystem::Cartesian => {
+                painter.line_segment(
+                    [pos2(rect.left(), pos.y), pos2(rect.right(), pos.y)],
+                    stroke,
+                );
+                painter.line_segment(
+                    [pos2(pos.x, rect.top()), pos2(pos.x, rect.bottom())],
+                    stroke,
+                );
+            }
+            CoordSystem::Polar => {
+                if let Some(origin) = self.calibration.polar_cal.origin {
+                    let origin_screen = rect.min + origin.to_vec2() * self.image.zoom;
+                    let pointer_screen = rect.min + pixel.to_vec2() * self.image.zoom;
+                    let radius = origin_screen.distance(pointer_screen);
+                    if radius > f32::EPSILON {
+                        painter.circle_stroke(origin_screen, radius, stroke);
+                        painter.line_segment([origin_screen, pointer_screen], stroke);
+                    }
+                }
+            }
+        }
 
         let font = egui::FontId::proportional(12.0);
         let text_color = Color32::BLACK;
@@ -593,55 +737,114 @@ impl CurcatApp {
         let padding = Vec2::new(4.0, 2.0);
 
         let clip = painter.clip_rect();
-
-        if let Some(xmap) = x_mapping
-            && let Some(value) = xmap.value_at(pixel)
-        {
-            let text = format_overlay_value(&value);
-            let galley = painter.layout_no_wrap(text, font.clone(), text_color);
+        let draw_label_centered = |center: Pos2, text: String, font: egui::FontId| {
+            let galley = painter.layout_no_wrap(text, font, text_color);
             let size = galley.size();
             let total = size + padding * 2.0;
             let min_x = clip.left() + 2.0;
             let max_x = clip.right() - total.x - 2.0;
+            let min_y = clip.top() + 2.0;
+            let max_y = clip.bottom() - total.y - 2.0;
             let label_pos = pos2(
                 if max_x < min_x {
                     min_x
                 } else {
-                    total.x.mul_add(-0.5, pos.x).clamp(min_x, max_x)
+                    total.x.mul_add(-0.5, center.x).clamp(min_x, max_x)
                 },
-                clip.top() + 4.0,
-            );
-            let bg_rect = egui::Rect::from_min_size(label_pos, total);
-            painter.rect_filled(bg_rect, 3.0, bg_color);
-            painter.galley(label_pos + padding, galley, text_color);
-        }
-        if let Some(ymap) = y_mapping
-            && let Some(value) = ymap.value_at(pixel)
-        {
-            let text = format_overlay_value(&value);
-            let galley = painter.layout_no_wrap(text, font, text_color);
-            let size = galley.size();
-            let total = size + padding * 2.0;
-            let min_y = clip.top() + 2.0;
-            let max_y = clip.bottom() - total.y - 2.0;
-            let label_pos = pos2(
-                clip.left() + 4.0,
                 if max_y < min_y {
                     min_y
                 } else {
-                    total.y.mul_add(-0.5, pos.y).clamp(min_y, max_y)
+                    total.y.mul_add(-0.5, center.y).clamp(min_y, max_y)
                 },
             );
             let bg_rect = egui::Rect::from_min_size(label_pos, total);
             painter.rect_filled(bg_rect, 3.0, bg_color);
             painter.galley(label_pos + padding, galley, text_color);
+        };
+
+        match self.calibration.coord_system {
+            CoordSystem::Cartesian => {
+                if let Some(xmap) = x_mapping
+                    && let Some(value) = xmap.value_at(pixel)
+                {
+                    let text = format_overlay_value(&value);
+                    let galley = painter.layout_no_wrap(text, font.clone(), text_color);
+                    let size = galley.size();
+                    let total = size + padding * 2.0;
+                    let min_x = clip.left() + 2.0;
+                    let max_x = clip.right() - total.x - 2.0;
+                    let label_pos = pos2(
+                        if max_x < min_x {
+                            min_x
+                        } else {
+                            total.x.mul_add(-0.5, pos.x).clamp(min_x, max_x)
+                        },
+                        clip.top() + 4.0,
+                    );
+                    let bg_rect = egui::Rect::from_min_size(label_pos, total);
+                    painter.rect_filled(bg_rect, 3.0, bg_color);
+                    painter.galley(label_pos + padding, galley, text_color);
+                }
+                if let Some(ymap) = y_mapping
+                    && let Some(value) = ymap.value_at(pixel)
+                {
+                    let text = format_overlay_value(&value);
+                    let galley = painter.layout_no_wrap(text, font, text_color);
+                    let size = galley.size();
+                    let total = size + padding * 2.0;
+                    let min_y = clip.top() + 2.0;
+                    let max_y = clip.bottom() - total.y - 2.0;
+                    let label_pos = pos2(
+                        clip.left() + 4.0,
+                        if max_y < min_y {
+                            min_y
+                        } else {
+                            total.y.mul_add(-0.5, pos.y).clamp(min_y, max_y)
+                        },
+                    );
+                    let bg_rect = egui::Rect::from_min_size(label_pos, total);
+                    painter.rect_filled(bg_rect, 3.0, bg_color);
+                    painter.galley(label_pos + padding, galley, text_color);
+                }
+            }
+            CoordSystem::Polar => {
+                if let (Some(mapping), Some(origin)) =
+                    (polar_mapping, self.calibration.polar_cal.origin)
+                {
+                    let origin_screen = rect.min + origin.to_vec2() * self.image.zoom;
+                    let pointer_screen = rect.min + pixel.to_vec2() * self.image.zoom;
+                    let radial_vec = pointer_screen - origin_screen;
+                    let radial_len = radial_vec.length();
+                    if radial_len > f32::EPSILON {
+                        let dir = radial_vec / radial_len;
+                        let angle_offset = 6.0_f32.to_radians();
+                        let signed_offset = match self.calibration.polar_cal.angle_direction {
+                            crate::types::AngleDirection::Cw => angle_offset,
+                            crate::types::AngleDirection::Ccw => -angle_offset,
+                        };
+                        let rot = egui::emath::Rot2::from_angle(signed_offset);
+                        let theta_dir = rot * dir;
+                        let theta_center = origin_screen + theta_dir * radial_len;
+                        let r_center = origin_screen + dir * (radial_len * 0.5);
+
+                        if let Some(angle) = mapping.angle_at(pixel) {
+                            let text = format!("{angle:.3}");
+                            draw_label_centered(theta_center, text, font.clone());
+                        }
+                        if let Some(radius) = mapping.radius_at(pixel) {
+                            let text = format!("{radius:.3}");
+                            draw_label_centered(r_center, text, font);
+                        }
+                    }
+                }
+            }
         }
 
         let badge_offset = Vec2::new(18.0, -18.0);
         let badge_anchor = pos + badge_offset;
         let badge_radius = 12.0;
         let showed_color_badge = {
-            if matches!(self.pick_mode, PickMode::CurveColor)
+            if matches!(self.calibration.pick_mode, PickMode::CurveColor)
                 && let Some(sampled) = self.sample_image_color(pixel)
             {
                 let [r, g, b, _] = sampled.to_array();
@@ -677,20 +880,21 @@ impl CurcatApp {
 
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_central_image(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui) {
-        self.last_viewport_size = Some(ui.available_size());
+        self.image.last_viewport_size = Some(ui.available_size());
         self.apply_pending_fit_on_load();
         self.handle_drag_and_drop(ui);
 
-        if let Some(img) = self.image.as_ref() {
-            let mut x_mapping = self.cal_x.mapping();
-            let mut y_mapping = self.cal_y.mapping();
+        if let Some(img) = self.image.image.as_ref() {
+            let mut x_mapping = self.calibration.cal_x.mapping();
+            let mut y_mapping = self.calibration.cal_y.mapping();
+            let mut polar_mapping = self.polar_mapping();
             let mut pending_zoom: Option<f32> = None;
             let mut pending_zoom_anchor: Option<Pos2> = None;
             // Take a snapshot of the texture handle and size to avoid borrowing self.image in the UI closure
             let (tex_id, img_size) = (img.texture.id(), img.size);
             let scroll_out = egui::ScrollArea::both()
                 .id_salt("image_scroll")
-                .scroll_offset(self.image_pan)
+                .scroll_offset(self.image.pan)
                 .scroll_source(egui::scroll_area::ScrollSource {
                     mouse_wheel: false,
                     ..egui::scroll_area::ScrollSource::ALL
@@ -701,7 +905,7 @@ impl CurcatApp {
                     safe_usize_to_f32(img_size[0]),
                     safe_usize_to_f32(img_size[1]),
                 );
-                let display_size = base_size * self.image_zoom;
+                let display_size = base_size * self.image.zoom;
                 let image = egui::Image::new((tex_id, display_size));
                 let response = self.add_centered_image(ui, image, display_size);
                 let rect = response.rect;
@@ -714,7 +918,7 @@ impl CurcatApp {
                     pending_zoom_anchor = anchor;
                 }
 
-                let zoom = self.image_zoom;
+                let zoom = self.image.zoom;
                 let to_pixel = |pos: Pos2| {
                     let local = pos - rect.min;
                     pos2(
@@ -732,15 +936,19 @@ impl CurcatApp {
                 let (primary_clicked, click_pos) =
                     self.resolve_primary_click(&response, rect, pointer, pointer_pos, hover_pos);
                 let snap_preview = self.compute_snap_preview(pointer_pixel);
-
+                let calibrated = match self.calibration.coord_system {
+                    CoordSystem::Cartesian => {
+                        x_mapping.is_some() && y_mapping.is_some()
+                    }
+                    CoordSystem::Polar => polar_mapping.is_some(),
+                };
                 let suppress_primary_click = self.auto_place_tick(
                     pointer_pixel,
                     pointer.primary_down,
                     pointer.primary_pressed,
                     pointer.shift_pressed,
                     pointer.delete_down,
-                    x_mapping.as_ref(),
-                    y_mapping.as_ref(),
+                    calibrated,
                 );
 
                 if pointer.primary_down {
@@ -761,32 +969,50 @@ impl CurcatApp {
                         }
                     };
 
-                    for (idx, point) in self.points.iter().enumerate() {
-                        let screen = rect.min + point.pixel.to_vec2() * self.image_zoom;
+                    for (idx, point) in self.points.points.iter().enumerate() {
+                        let screen = rect.min + point.pixel.to_vec2() * self.image.zoom;
                         consider(DragTarget::CurvePoint(idx), screen);
                     }
 
-                    for (target, maybe_pixel) in [
-                        (DragTarget::CalX1, self.cal_x.p1),
-                        (DragTarget::CalX2, self.cal_x.p2),
-                        (DragTarget::CalY1, self.cal_y.p1),
-                        (DragTarget::CalY2, self.cal_y.p2),
-                    ] {
-                        if let Some(pixel) = maybe_pixel {
-                            let screen = rect.min + pixel.to_vec2() * self.image_zoom;
-                            consider(target, screen);
+                    match self.calibration.coord_system {
+                        CoordSystem::Cartesian => {
+                            for (target, maybe_pixel) in [
+                                (DragTarget::CalX1, self.calibration.cal_x.p1),
+                                (DragTarget::CalX2, self.calibration.cal_x.p2),
+                                (DragTarget::CalY1, self.calibration.cal_y.p1),
+                                (DragTarget::CalY2, self.calibration.cal_y.p2),
+                            ] {
+                                if let Some(pixel) = maybe_pixel {
+                                    let screen = rect.min + pixel.to_vec2() * self.image.zoom;
+                                    consider(target, screen);
+                                }
+                            }
+                        }
+                        CoordSystem::Polar => {
+                            for (target, maybe_pixel) in [
+                                (DragTarget::PolarOrigin, self.calibration.polar_cal.origin),
+                                (DragTarget::PolarR1, self.calibration.polar_cal.radius.p1),
+                                (DragTarget::PolarR2, self.calibration.polar_cal.radius.p2),
+                                (DragTarget::PolarA1, self.calibration.polar_cal.angle.p1),
+                                (DragTarget::PolarA2, self.calibration.polar_cal.angle.p2),
+                            ] {
+                                if let Some(pixel) = maybe_pixel {
+                                    let screen = rect.min + pixel.to_vec2() * self.image.zoom;
+                                    consider(target, screen);
+                                }
+                            }
                         }
                     }
 
-                    self.dragging_handle = best.map(|(target, _)| target);
+                    self.calibration.dragging_handle = best.map(|(target, _)| target);
                 }
 
-                if let Some(target) = self.dragging_handle {
+                if let Some(target) = self.calibration.dragging_handle {
                     if let Some(pos) = pointer_pos {
                         let pixel = to_pixel(pos);
                         match target {
                             DragTarget::CurvePoint(idx) => {
-                                if let Some(point) = self.points.get_mut(idx) {
+                                if let Some(point) = self.points.points.get_mut(idx) {
                                     point.pixel = pixel;
                                     self.mark_points_dirty();
                                 }
@@ -800,16 +1026,17 @@ impl CurcatApp {
                                         CalUpdateMode::Drag,
                                         &mut x_mapping,
                                         &mut y_mapping,
+                                        &mut polar_mapping,
                                     );
                                 }
                             }
                         }
                     }
                     if !pointer.shift_pressed || !pointer.primary_down {
-                        self.dragging_handle = None;
+                        self.calibration.dragging_handle = None;
                     }
                 } else if response.clicked_by(PointerButton::Secondary)
-                    && matches!(self.pick_mode, PickMode::None)
+                    && matches!(self.calibration.pick_mode, PickMode::None)
                     && let Some(pos) = pointer_pos
                 {
                     let image_origin = rect.min;
@@ -824,20 +1051,25 @@ impl CurcatApp {
                         self.remove_point_near_screen(pos, image_origin);
                     } else {
                         let pixel = to_pixel(pos);
-                        let pick_mode = self.pick_mode;
+                        let pick_mode = self.calibration.pick_mode;
                         match pick_mode {
                             PickMode::None => {
-                                if x_mapping.is_some() && y_mapping.is_some() {
+                                if calibrated {
                                     self.push_curve_point(pixel);
                                 } else {
-                                    self.set_status(
-                                        "Calibration incomplete: set both X and Y axes before picking points.",
-                                    );
+                                    self.set_status(match self.calibration.coord_system {
+                                        CoordSystem::Cartesian => {
+                                            "Calibration incomplete: set both X and Y axes before picking points."
+                                        }
+                                        CoordSystem::Polar => {
+                                            "Calibration incomplete: set origin, radius, and angle before picking points."
+                                        }
+                                    });
                                 }
                             }
                             PickMode::CurveColor => {
                                 self.pick_curve_color_at(pixel);
-                                self.pick_mode = PickMode::None;
+                                self.calibration.pick_mode = PickMode::None;
                             }
                             _ => {
                                 if let Some(cal_target) = CalTarget::from_pick_mode(pick_mode) {
@@ -848,6 +1080,7 @@ impl CurcatApp {
                                         CalUpdateMode::Pick,
                                         &mut x_mapping,
                                         &mut y_mapping,
+                                        &mut polar_mapping,
                                     );
                                 }
                             }
@@ -855,7 +1088,12 @@ impl CurcatApp {
                     }
                 }
 
-                self.ensure_point_numeric_cache(x_mapping.as_ref(), y_mapping.as_ref());
+                self.ensure_point_numeric_cache(
+                    self.calibration.coord_system,
+                    x_mapping.as_ref(),
+                    y_mapping.as_ref(),
+                    polar_mapping.as_ref(),
+                );
                 self.draw_calibration_overlay(&painter, rect);
 
                 let point_style = &self.config.curve_points;
@@ -871,17 +1109,18 @@ impl CurcatApp {
                     hover_pixel,
                     x_mapping.as_ref(),
                     y_mapping.as_ref(),
+                    polar_mapping.as_ref(),
                     pointer.delete_down,
                     pointer.shift_pressed,
                     pointer.ctrl_pressed,
                 );
             });
-            if self.skip_pan_sync_once {
-                self.skip_pan_sync_once = false;
+            if self.image.skip_pan_sync_once {
+                self.image.skip_pan_sync_once = false;
             } else {
-                self.image_pan = scroll_out.state.offset;
+                self.image.pan = scroll_out.state.offset;
             }
-            self.last_viewport_size = Some(scroll_out.inner_rect.size());
+            self.image.last_viewport_size = Some(scroll_out.inner_rect.size());
             if let Some(next_zoom) = pending_zoom {
                 if let Some(anchor_screen) = pending_zoom_anchor {
                     let anchor = anchor_screen - scroll_out.inner_rect.min;
@@ -891,9 +1130,9 @@ impl CurcatApp {
                 }
             }
             self.step_zoom_animation(ui.ctx());
-        } else if self.pending_image_task.is_some() {
+        } else if self.project.pending_image_task.is_some() {
             ui.centered_and_justified(|ui| {
-                if let Some(task) = self.pending_image_task.as_ref() {
+                if let Some(task) = self.project.pending_image_task.as_ref() {
                     ui.label(format!("Loading image: {}…", task.meta.description()));
                 } else {
                     ui.label("Loading image…");
@@ -917,10 +1156,10 @@ impl CurcatApp {
         if let Some(badge) = self.calibration_cursor_badge() {
             return Some(badge);
         }
-        if self.auto_place_state.active {
+        if self.interaction.auto_place_state.active {
             return Some((icons::ICON_AUTO_PLACE, Color32::WHITE));
         }
-        if matches!(self.pick_mode, PickMode::CurveColor) {
+        if matches!(self.calibration.pick_mode, PickMode::CurveColor) {
             return Some((icons::ICON_PICK_COLOR, Color32::WHITE));
         }
         if delete_down {
@@ -936,19 +1175,24 @@ impl CurcatApp {
     }
 
     const fn calibration_cursor_badge(&self) -> Option<(&'static str, Color32)> {
-        match self.pick_mode {
+        match self.calibration.pick_mode {
             PickMode::X1 => Some(("X1", Color32::from_rgb(190, 225, 255))),
             PickMode::X2 => Some(("X2", Color32::from_rgb(190, 225, 255))),
             PickMode::Y1 => Some(("Y1", Color32::from_rgb(200, 255, 200))),
             PickMode::Y2 => Some(("Y2", Color32::from_rgb(200, 255, 200))),
+            PickMode::Origin => Some(("O", Color32::from_rgb(255, 230, 180))),
+            PickMode::R1 => Some(("R1", Color32::from_rgb(255, 210, 160))),
+            PickMode::R2 => Some(("R2", Color32::from_rgb(255, 210, 160))),
+            PickMode::A1 => Some(("A1", Color32::from_rgb(200, 210, 255))),
+            PickMode::A2 => Some(("A2", Color32::from_rgb(200, 210, 255))),
             _ => None,
         }
     }
 
     fn remove_point_near_screen(&mut self, pointer: Pos2, image_origin: Pos2) -> bool {
         let mut best: Option<(usize, f32)> = None;
-        for (idx, point) in self.points.iter().enumerate() {
-            let screen = image_origin + point.pixel.to_vec2() * self.image_zoom;
+        for (idx, point) in self.points.points.iter().enumerate() {
+            let screen = image_origin + point.pixel.to_vec2() * self.image.zoom;
             let dist = pointer.distance(screen);
             if dist <= super::super::POINT_HIT_RADIUS
                 && best.as_ref().is_none_or(|(_, best_dist)| dist < *best_dist)
@@ -957,7 +1201,7 @@ impl CurcatApp {
             }
         }
         if let Some((idx, _)) = best {
-            self.points.remove(idx);
+            self.points.points.remove(idx);
             self.mark_points_dirty();
             self.set_status("Point removed.");
             true
@@ -969,8 +1213,8 @@ impl CurcatApp {
 
 impl CurcatApp {
     fn reset_auto_place_runtime(&mut self, keep_suppress: bool) {
-        let suppress_click = self.auto_place_state.suppress_click && keep_suppress;
-        self.auto_place_state = AutoPlaceState {
+        let suppress_click = self.interaction.auto_place_state.suppress_click && keep_suppress;
+        self.interaction.auto_place_state = AutoPlaceState {
             suppress_click,
             ..AutoPlaceState::default()
         };
@@ -984,27 +1228,26 @@ impl CurcatApp {
         primary_pressed: bool,
         shift_pressed: bool,
         delete_down: bool,
-        x_mapping: Option<&AxisMapping>,
-        y_mapping: Option<&AxisMapping>,
+        calibrated: bool,
     ) -> bool {
         if primary_pressed {
             self.reset_auto_place_runtime(false);
         }
 
-        let mut suppress_click = self.auto_place_state.suppress_click;
+        let mut suppress_click = self.interaction.auto_place_state.suppress_click;
 
         if !primary_down {
-            suppress_click = self.auto_place_state.suppress_click;
+            suppress_click = self.interaction.auto_place_state.suppress_click;
             self.reset_auto_place_runtime(false);
             return suppress_click;
         }
 
-        if shift_pressed || delete_down || !matches!(self.pick_mode, PickMode::None) {
+        if shift_pressed || delete_down || !matches!(self.calibration.pick_mode, PickMode::None) {
             self.reset_auto_place_runtime(true);
             return suppress_click;
         }
 
-        if x_mapping.is_none() || y_mapping.is_none() {
+        if !calibrated {
             return suppress_click;
         }
 
@@ -1014,22 +1257,24 @@ impl CurcatApp {
         };
 
         let now = Instant::now();
-        let cfg = self.auto_place_cfg;
+        let cfg = self.interaction.auto_place_cfg;
 
-        if self.auto_place_state.hold_started_at.is_none() {
-            self.auto_place_state.hold_started_at = Some(now);
-            self.auto_place_state.last_pointer = Some((pixel, now));
-            self.auto_place_state.pause_started_at = None;
-            self.auto_place_state.speed_ewma = 0.0;
+        if self.interaction.auto_place_state.hold_started_at.is_none() {
+            self.interaction.auto_place_state.hold_started_at = Some(now);
+            self.interaction.auto_place_state.last_pointer = Some((pixel, now));
+            self.interaction.auto_place_state.pause_started_at = None;
+            self.interaction.auto_place_state.speed_ewma = 0.0;
         }
 
-        if !self.auto_place_state.active {
+        if !self.interaction.auto_place_state.active {
             let hold_elapsed = now
-                .saturating_duration_since(self.auto_place_state.hold_started_at.unwrap())
+                .saturating_duration_since(
+                    self.interaction.auto_place_state.hold_started_at.unwrap(),
+                )
                 .as_secs_f32();
             if hold_elapsed >= cfg.hold_activation_secs {
-                self.auto_place_state.active = true;
-                self.auto_place_state.suppress_click = true;
+                self.interaction.auto_place_state.active = true;
+                self.interaction.auto_place_state.suppress_click = true;
                 suppress_click = true;
                 self.update_auto_place_speed(pixel, now);
                 self.try_auto_place_point(pixel, now);
@@ -1038,36 +1283,40 @@ impl CurcatApp {
         }
 
         self.update_auto_place_speed(pixel, now);
-        self.auto_place_state.suppress_click = true;
+        self.interaction.auto_place_state.suppress_click = true;
         let _ = self.try_auto_place_point(pixel, now);
         true
     }
 
     fn update_auto_place_speed(&mut self, pixel: Pos2, now: Instant) {
-        if let Some((prev, prev_time)) = self.auto_place_state.last_pointer {
+        if let Some((prev, prev_time)) = self.interaction.auto_place_state.last_pointer {
             let dt = now
                 .saturating_duration_since(prev_time)
                 .as_secs_f32()
                 .max(f32::EPSILON);
             let dist = (pixel - prev).length();
             let inst_speed = dist / dt;
-            let alpha = self.auto_place_cfg.speed_smoothing.clamp(0.0, 1.0);
-            let prev_speed = self.auto_place_state.speed_ewma;
-            self.auto_place_state.speed_ewma =
+            let alpha = self
+                .interaction
+                .auto_place_cfg
+                .speed_smoothing
+                .clamp(0.0, 1.0);
+            let prev_speed = self.interaction.auto_place_state.speed_ewma;
+            self.interaction.auto_place_state.speed_ewma =
                 if alpha <= f32::EPSILON || !prev_speed.is_finite() || prev_speed <= f32::EPSILON {
                     inst_speed
                 } else {
                     prev_speed + alpha * (inst_speed - prev_speed)
                 };
         } else {
-            self.auto_place_state.speed_ewma = 0.0;
+            self.interaction.auto_place_state.speed_ewma = 0.0;
         }
-        self.auto_place_state.last_pointer = Some((pixel, now));
+        self.interaction.auto_place_state.last_pointer = Some((pixel, now));
     }
 
     fn try_auto_place_point(&mut self, pointer_pixel: Pos2, now: Instant) -> bool {
-        let cfg = self.auto_place_cfg;
-        let speed = self.auto_place_state.speed_ewma.max(0.0);
+        let cfg = self.interaction.auto_place_cfg;
+        let speed = self.interaction.auto_place_state.speed_ewma.max(0.0);
         let distance_threshold =
             (speed * cfg.distance_per_speed).clamp(cfg.distance_min, cfg.distance_max);
         let time_threshold = if speed <= f32::EPSILON {
@@ -1077,10 +1326,14 @@ impl CurcatApp {
         };
 
         let paused = if speed < cfg.pause_speed_threshold {
-            let start = self.auto_place_state.pause_started_at.get_or_insert(now);
+            let start = self
+                .interaction
+                .auto_place_state
+                .pause_started_at
+                .get_or_insert(now);
             now.saturating_duration_since(*start).as_millis() >= u128::from(cfg.pause_timeout_ms)
         } else {
-            self.auto_place_state.pause_started_at = None;
+            self.interaction.auto_place_state.pause_started_at = None;
             false
         };
         if paused {
@@ -1089,7 +1342,7 @@ impl CurcatApp {
 
         let snapped = self.resolve_curve_pick(pointer_pixel);
 
-        if let Some((last_pos, last_time)) = self.auto_place_state.last_snapped_point {
+        if let Some((last_pos, last_time)) = self.interaction.auto_place_state.last_snapped_point {
             let dist = (snapped - last_pos).length();
             if dist < cfg.dedup_radius {
                 return false;
@@ -1101,7 +1354,7 @@ impl CurcatApp {
         }
 
         self.push_curve_point_snapped(snapped);
-        self.auto_place_state.last_snapped_point = Some((snapped, now));
+        self.interaction.auto_place_state.last_snapped_point = Some((snapped, now));
         true
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "curcat"
-version = "0.9.7"
+version = "0.9.8"
 edition = "2024"
 license = "Apache-2.0 OR MIT"
 description = "Digitize curves from chart images; calibrate axes, interpolate, export CSV/JSON/XLSX."

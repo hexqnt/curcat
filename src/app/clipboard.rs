@@ -18,7 +18,7 @@ struct ValidatedClipboardSize {
 
 impl CurcatApp {
     pub(crate) fn paste_image_from_clipboard(&mut self, ctx: &Context) {
-        self.pending_image_task = None;
+        self.project.pending_image_task = None;
         match capture_clipboard_image(&self.config) {
             Ok(captured) => {
                 let meta = ImageMeta::from_clipboard(u64::try_from(captured.byte_len).ok());
@@ -26,7 +26,7 @@ impl CurcatApp {
                 let loaded = LoadedImage::from_color_image(ctx, captured.image);
                 self.set_loaded_image(loaded, Some(meta));
                 self.set_status(format!("Loaded {name}"));
-                self.pending_fit_on_load = self.pending_project_apply.is_none();
+                self.image.pending_fit_on_load = self.project.pending_project_apply.is_none();
             }
             Err(err) => self.set_status(err),
         }

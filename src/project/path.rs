@@ -24,8 +24,7 @@ fn build_temp_path(target: &Path) -> PathBuf {
     );
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_nanos());
     let mut candidate = parent.join(format!(".{base}.{nanos}.tmp"));
     let mut counter = 0u32;
     while candidate.exists() {

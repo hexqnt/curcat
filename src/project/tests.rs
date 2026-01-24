@@ -3,13 +3,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::types::{AxisUnit, ScaleKind};
+use crate::types::{AxisUnit, CoordSystem, ScaleKind};
 
 fn unique_temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_nanos());
     let dir = std::env::temp_dir().join(format!("curcat_{label}_{nanos}"));
     fs::create_dir_all(&dir).expect("create temp dir");
     dir
@@ -22,6 +21,7 @@ fn sample_payload(image_path: &Path, image_crc32: u32) -> ProjectPayload {
         image_crc32,
         transform: ImageTransformRecord::identity(),
         calibration: CalibrationRecord {
+            coord_system: CoordSystem::Cartesian,
             x: AxisCalibrationRecord {
                 unit: AxisUnit::Float,
                 scale: ScaleKind::Linear,
@@ -38,6 +38,7 @@ fn sample_payload(image_path: &Path, image_crc32: u32) -> ProjectPayload {
                 v1_text: "0".to_string(),
                 v2_text: "10".to_string(),
             },
+            polar: PolarCalibrationRecord::default(),
             calibration_angle_snap: false,
             show_calibration_segments: true,
         },
@@ -110,4 +111,70 @@ fn replay_operations_restores_transform() {
         rebuilt.apply(op);
     }
     assert_eq!(rebuilt, record);
+}
+
+#[test]
+fn load_v1_migrates_to_cartesian() {
+    let dir = unique_temp_dir("v1");
+    let image_path = dir.join("image.bin");
+    fs::write(&image_path, b"image-bytes").expect("write image");
+    let crc = compute_image_crc32(&image_path).expect("checksum");
+
+    let payload_v1 = super::model::ProjectPayloadV1 {
+        absolute_image_path: image_path.clone(),
+        relative_image_path: image_path.file_name().map(PathBuf::from),
+        image_crc32: crc,
+        transform: ImageTransformRecord::identity(),
+        calibration: super::model::CalibrationRecordV1 {
+            x: AxisCalibrationRecord {
+                unit: AxisUnit::Float,
+                scale: ScaleKind::Linear,
+                p1: Some([0.0, 0.0]),
+                p2: Some([10.0, 0.0]),
+                v1_text: "0".to_string(),
+                v2_text: "10".to_string(),
+            },
+            y: AxisCalibrationRecord {
+                unit: AxisUnit::Float,
+                scale: ScaleKind::Linear,
+                p1: Some([0.0, 0.0]),
+                p2: Some([0.0, 10.0]),
+                v1_text: "0".to_string(),
+                v2_text: "10".to_string(),
+            },
+            calibration_angle_snap: false,
+            show_calibration_segments: true,
+        },
+        points: vec![PointRecord {
+            pixel: [1.0, 2.0],
+            x_numeric: Some(1.0),
+            y_numeric: Some(2.0),
+        }],
+        zoom: 1.0,
+        pan: [0.0, 0.0],
+        title: Some("Legacy".to_string()),
+        description: None,
+    };
+
+    let encoded = bincode::serde::encode_to_vec(
+        &payload_v1,
+        bincode::config::standard().with_little_endian(),
+    )
+    .expect("encode v1");
+    let compressed = lz4_flex::block::compress_prepend_size(&encoded);
+    let mut buffer = Vec::with_capacity(super::io::PROJECT_MAGIC.len() + 4 + compressed.len());
+    buffer.extend_from_slice(super::io::PROJECT_MAGIC);
+    buffer.extend_from_slice(&1u32.to_le_bytes());
+    buffer.extend_from_slice(&compressed);
+
+    let project_path = dir.join("project_v1.curcat");
+    fs::write(&project_path, &buffer).expect("write v1 project");
+
+    let outcome = load_project(&project_path).expect("load v1");
+    assert_eq!(outcome.version, 1);
+    assert_eq!(
+        outcome.payload.calibration.coord_system,
+        CoordSystem::Cartesian
+    );
+    assert!(outcome.payload.calibration.polar.origin.is_none());
 }

@@ -2,7 +2,7 @@ use super::super::CurcatApp;
 
 impl CurcatApp {
     pub(crate) fn ui_project_prompt(&mut self, ctx: &egui::Context) {
-        let Some(prompt) = self.project_prompt.as_ref() else {
+        let Some(prompt) = self.project.project_prompt.as_ref() else {
             return;
         };
         let mut continue_load = false;
@@ -34,12 +34,12 @@ impl CurcatApp {
         }
 
         if continue_load {
-            if let Some(prompt) = self.project_prompt.take() {
+            if let Some(prompt) = self.project.project_prompt.take() {
                 self.begin_applying_project(prompt.plan);
             }
         } else if cancel_load {
-            self.project_prompt = None;
-            self.pending_project_apply = None;
+            self.project.project_prompt = None;
+            self.project.pending_project_apply = None;
             self.set_status("Project load canceled.");
         }
     }

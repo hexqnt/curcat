@@ -10,7 +10,10 @@ use crate::image_util::LoadedImage;
 use crate::interp::{InterpAlgorithm, XYPoint};
 use crate::project::{self, ImageTransformOp, ImageTransformRecord};
 use crate::snap::{SnapFeatureSource, SnapMapCache, SnapThresholdKind};
-use crate::types::{AxisMapping, AxisUnit, AxisValue, ScaleKind, parse_axis_value};
+use crate::types::{
+    AngleDirection, AngleUnit, AxisMapping, AxisUnit, AxisValue, CoordSystem, PolarMapping,
+    ScaleKind, parse_axis_value,
+};
 use egui::{Color32, ColorImage, Context, Key, Pos2, Vec2};
 
 use egui_file_dialog::{DialogState, FileDialog};
@@ -35,6 +38,11 @@ enum PickMode {
     X2,
     Y1,
     Y2,
+    Origin,
+    R1,
+    R2,
+    A1,
+    A2,
     CurveColor,
 }
 
@@ -44,6 +52,10 @@ enum AxisValueField {
     X2,
     Y1,
     Y2,
+    R1,
+    R2,
+    A1,
+    A2,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -126,6 +138,101 @@ struct ProjectApplyPlan {
 struct ProjectLoadPrompt {
     warnings: Vec<project::ProjectWarning>,
     plan: ProjectApplyPlan,
+}
+
+struct ImageState {
+    image: Option<LoadedImage>,
+    meta: Option<ImageMeta>,
+    transform: ImageTransformRecord,
+    pan: Vec2,
+    last_viewport_size: Option<Vec2>,
+    skip_pan_sync_once: bool,
+    pending_fit_on_load: bool,
+    zoom: f32,
+    zoom_target: f32,
+    zoom_intent: ZoomIntent,
+    touch_pan_active: bool,
+    touch_pan_last: Option<Pos2>,
+}
+
+struct ProjectState {
+    pending_image_task: Option<PendingImageTask>,
+    pending_project_apply: Option<ProjectApplyPlan>,
+    pending_project_save: Option<PendingProjectSave>,
+    project_prompt: Option<ProjectLoadPrompt>,
+    title: Option<String>,
+    description: Option<String>,
+    active_dialog: Option<NativeDialog>,
+    last_project_dir: Option<PathBuf>,
+    last_project_path: Option<PathBuf>,
+    last_image_dir: Option<PathBuf>,
+    last_export_dir: Option<PathBuf>,
+}
+
+struct CalibrationState {
+    pick_mode: PickMode,
+    pending_value_focus: Option<AxisValueField>,
+    cal_x: AxisCalUi,
+    cal_y: AxisCalUi,
+    polar_cal: PolarCalUi,
+    coord_system: CoordSystem,
+    calibration_angle_snap: bool,
+    show_calibration_segments: bool,
+    dragging_handle: Option<DragTarget>,
+}
+
+struct PointsState {
+    points: Vec<PickedPoint>,
+    points_numeric_dirty: bool,
+    cached_sorted_preview: Vec<(f64, Pos2)>,
+    cached_sorted_numeric: Vec<XYPoint>,
+    sorted_preview_dirty: bool,
+    sorted_numeric_dirty: bool,
+    last_x_mapping: Option<AxisMapping>,
+    last_y_mapping: Option<AxisMapping>,
+    last_polar_mapping: Option<PolarMapping>,
+    last_coord_system: CoordSystem,
+    show_curve_segments: bool,
+}
+
+struct SnapState {
+    point_input_mode: PointInputMode,
+    contrast_search_radius: f32,
+    contrast_threshold: f32,
+    centerline_threshold: f32,
+    snap_feature_source: SnapFeatureSource,
+    snap_threshold_kind: SnapThresholdKind,
+    snap_target_color: Color32,
+    snap_color_tolerance: f32,
+    snap_maps: Option<SnapMapCache>,
+    pending_snap_job: Option<SnapBuildJob>,
+    snap_maps_dirty: bool,
+    snap_overlay_color: Color32,
+    snap_overlay_choices: Vec<Color32>,
+    snap_overlay_choice: usize,
+}
+
+struct ExportState {
+    sample_count: usize,
+    export_kind: ExportKind,
+    interp_algorithm: InterpAlgorithm,
+    raw_include_distances: bool,
+    raw_include_angles: bool,
+    polar_export_include_cartesian: bool,
+}
+
+struct InteractionState {
+    auto_place_cfg: AutoPlaceConfig,
+    auto_place_state: AutoPlaceState,
+    primary_press: Option<PrimaryPressInfo>,
+    middle_pan_enabled: bool,
+}
+
+struct UiState {
+    side_open: bool,
+    info_window_open: bool,
+    points_info_window_open: bool,
+    last_status: Option<String>,
 }
 
 #[derive(Clone)]
@@ -335,6 +442,84 @@ impl AxisCalUi {
 }
 
 #[derive(Debug, Clone)]
+struct PolarCalUi {
+    origin: Option<Pos2>,
+    radius: AxisCalUi,
+    angle: AxisCalUi,
+    angle_unit: AngleUnit,
+    angle_direction: AngleDirection,
+}
+
+impl PolarCalUi {
+    fn mapping(&self) -> Option<PolarMapping> {
+        let origin = self.origin?;
+
+        if self.radius.unit != AxisUnit::Float || self.angle.unit != AxisUnit::Float {
+            return None;
+        }
+
+        let radius_v1 = match parse_axis_value(&self.radius.v1_text, AxisUnit::Float)? {
+            AxisValue::Float(v) => v,
+            _ => return None,
+        };
+        let radius_v2 = match parse_axis_value(&self.radius.v2_text, AxisUnit::Float)? {
+            AxisValue::Float(v) => v,
+            _ => return None,
+        };
+        if !AxisCalUi::values_are_valid(
+            self.radius.scale,
+            AxisUnit::Float,
+            &AxisValue::Float(radius_v1),
+            &AxisValue::Float(radius_v2),
+        ) {
+            return None;
+        }
+
+        let angle_v1 = match parse_axis_value(&self.angle.v1_text, AxisUnit::Float)? {
+            AxisValue::Float(v) => v,
+            _ => return None,
+        };
+        let angle_v2 = match parse_axis_value(&self.angle.v2_text, AxisUnit::Float)? {
+            AxisValue::Float(v) => v,
+            _ => return None,
+        };
+        if !AxisCalUi::values_are_valid(
+            ScaleKind::Linear,
+            AxisUnit::Float,
+            &AxisValue::Float(angle_v1),
+            &AxisValue::Float(angle_v2),
+        ) {
+            return None;
+        }
+
+        let rp1 = self.radius.p1?;
+        let rp2 = self.radius.p2?;
+        let ap1 = self.angle.p1?;
+        let ap2 = self.angle.p2?;
+
+        let d1 = f64::from((rp1 - origin).length());
+        let d2 = f64::from((rp2 - origin).length());
+        let a1 = f64::from((ap1.y - origin.y).atan2(ap1.x - origin.x));
+        let a2 = f64::from((ap2.y - origin.y).atan2(ap2.x - origin.x));
+
+        PolarMapping::new(
+            origin,
+            d1,
+            d2,
+            radius_v1,
+            radius_v2,
+            self.radius.scale,
+            a1,
+            a2,
+            angle_v1,
+            angle_v2,
+            self.angle_unit,
+            self.angle_direction,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
 struct PickedPoint {
     pixel: Pos2,
     x_numeric: Option<f64>,
@@ -354,73 +539,15 @@ impl PickedPoint {
 /// Top-level application state for the Curcat UI.
 #[allow(clippy::struct_excessive_bools)]
 pub struct CurcatApp {
-    image: Option<LoadedImage>,
-    image_meta: Option<ImageMeta>,
-    image_transform: ImageTransformRecord,
-    image_pan: Vec2,
-    last_viewport_size: Option<Vec2>,
-    skip_pan_sync_once: bool,
-    pending_fit_on_load: bool,
-    pending_image_task: Option<PendingImageTask>,
-    pending_project_apply: Option<ProjectApplyPlan>,
-    pending_project_save: Option<PendingProjectSave>,
-    project_prompt: Option<ProjectLoadPrompt>,
-    project_title: Option<String>,
-    project_description: Option<String>,
-    last_status: Option<String>,
-    pick_mode: PickMode,
-    pending_value_focus: Option<AxisValueField>,
-    cal_x: AxisCalUi,
-    cal_y: AxisCalUi,
-    points: Vec<PickedPoint>,
-    points_numeric_dirty: bool,
-    cached_sorted_preview: Vec<(f64, Pos2)>,
-    cached_sorted_numeric: Vec<XYPoint>,
-    sorted_preview_dirty: bool,
-    sorted_numeric_dirty: bool,
-    last_x_mapping: Option<AxisMapping>,
-    last_y_mapping: Option<AxisMapping>,
-    calibration_angle_snap: bool,
-    show_calibration_segments: bool,
-    show_curve_segments: bool,
-    point_input_mode: PointInputMode,
-    contrast_search_radius: f32,
-    contrast_threshold: f32,
-    centerline_threshold: f32,
-    snap_feature_source: SnapFeatureSource,
-    snap_threshold_kind: SnapThresholdKind,
-    snap_target_color: Color32,
-    snap_color_tolerance: f32,
-    snap_maps: Option<SnapMapCache>,
-    pending_snap_job: Option<SnapBuildJob>,
-    snap_maps_dirty: bool,
-    snap_overlay_color: Color32,
-    snap_overlay_choices: Vec<Color32>,
-    snap_overlay_choice: usize,
-    sample_count: usize,
-    active_dialog: Option<NativeDialog>,
-    last_project_dir: Option<PathBuf>,
-    last_project_path: Option<PathBuf>,
-    last_image_dir: Option<PathBuf>,
-    last_export_dir: Option<PathBuf>,
     config: AppConfig,
-    auto_place_cfg: AutoPlaceConfig,
-    auto_place_state: AutoPlaceState,
-    primary_press: Option<PrimaryPressInfo>,
-    image_zoom: f32,
-    zoom_target: f32,
-    zoom_intent: ZoomIntent,
-    dragging_handle: Option<DragTarget>,
-    middle_pan_enabled: bool,
-    touch_pan_active: bool,
-    touch_pan_last: Option<Pos2>,
-    side_open: bool,
-    info_window_open: bool,
-    points_info_window_open: bool,
-    export_kind: ExportKind,
-    interp_algorithm: InterpAlgorithm,
-    raw_include_distances: bool,
-    raw_include_angles: bool,
+    image: ImageState,
+    project: ProjectState,
+    calibration: CalibrationState,
+    points: PointsState,
+    snap: SnapState,
+    export: ExportState,
+    interaction: InteractionState,
+    ui: UiState,
 }
 
 impl Default for CurcatApp {
@@ -433,87 +560,128 @@ impl Default for CurcatApp {
             .copied()
             .unwrap_or(Color32::from_rgb(236, 214, 96));
         Self {
-            image: None,
-            image_meta: None,
-            image_transform: ImageTransformRecord::identity(),
-            image_pan: Vec2::ZERO,
-            last_viewport_size: None,
-            skip_pan_sync_once: false,
-            pending_fit_on_load: false,
-            pending_image_task: None,
-            pending_project_apply: None,
-            pending_project_save: None,
-            project_prompt: None,
-            project_title: None,
-            project_description: None,
-            last_status: None,
-            pick_mode: PickMode::None,
-            pending_value_focus: None,
-            cal_x: AxisCalUi {
-                unit: AxisUnit::Float,
-                scale: ScaleKind::Linear,
-                p1: None,
-                p2: None,
-                v1_text: String::new(),
-                v2_text: String::new(),
-            },
-            cal_y: AxisCalUi {
-                unit: AxisUnit::Float,
-                scale: ScaleKind::Linear,
-                p1: None,
-                p2: None,
-                v1_text: String::new(),
-                v2_text: String::new(),
-            },
-            points: Vec::new(),
-            points_numeric_dirty: true,
-            cached_sorted_preview: Vec::new(),
-            cached_sorted_numeric: Vec::new(),
-            sorted_preview_dirty: true,
-            sorted_numeric_dirty: true,
-            last_x_mapping: None,
-            last_y_mapping: None,
-            calibration_angle_snap: false,
-            show_calibration_segments: true,
-            show_curve_segments: true,
-            point_input_mode: PointInputMode::Free,
-            contrast_search_radius: 12.0,
-            contrast_threshold: 12.0,
-            centerline_threshold: 40.0,
-            snap_feature_source: SnapFeatureSource::LumaGradient,
-            snap_threshold_kind: SnapThresholdKind::Gradient,
-            snap_target_color: Color32::from_rgb(200, 60, 60),
-            snap_color_tolerance: 30.0,
-            snap_maps: None,
-            pending_snap_job: None,
-            snap_maps_dirty: true,
-            snap_overlay_color: default_overlay_color,
-            snap_overlay_choices: default_overlay_choices,
-            snap_overlay_choice: 0,
-            sample_count: 200,
-            active_dialog: None,
-            last_project_dir: None,
-            last_project_path: None,
-            last_image_dir: None,
-            last_export_dir: None,
             config,
-            auto_place_cfg,
-            image_zoom: 1.0,
-            zoom_target: 1.0,
-            zoom_intent: ZoomIntent::Anchor(ZoomAnchor::ViewportCenter),
-            dragging_handle: None,
-            middle_pan_enabled: false,
-            touch_pan_active: false,
-            touch_pan_last: None,
-            side_open: true,
-            info_window_open: false,
-            points_info_window_open: false,
-            export_kind: ExportKind::Interpolated,
-            interp_algorithm: InterpAlgorithm::Linear,
-            raw_include_distances: false,
-            raw_include_angles: false,
-            auto_place_state: AutoPlaceState::default(),
-            primary_press: None,
+            image: ImageState {
+                image: None,
+                meta: None,
+                transform: ImageTransformRecord::identity(),
+                pan: Vec2::ZERO,
+                last_viewport_size: None,
+                skip_pan_sync_once: false,
+                pending_fit_on_load: false,
+                zoom: 1.0,
+                zoom_target: 1.0,
+                zoom_intent: ZoomIntent::Anchor(ZoomAnchor::ViewportCenter),
+                touch_pan_active: false,
+                touch_pan_last: None,
+            },
+            project: ProjectState {
+                pending_image_task: None,
+                pending_project_apply: None,
+                pending_project_save: None,
+                project_prompt: None,
+                title: None,
+                description: None,
+                active_dialog: None,
+                last_project_dir: None,
+                last_project_path: None,
+                last_image_dir: None,
+                last_export_dir: None,
+            },
+            calibration: CalibrationState {
+                pick_mode: PickMode::None,
+                pending_value_focus: None,
+                cal_x: AxisCalUi {
+                    unit: AxisUnit::Float,
+                    scale: ScaleKind::Linear,
+                    p1: None,
+                    p2: None,
+                    v1_text: String::new(),
+                    v2_text: String::new(),
+                },
+                cal_y: AxisCalUi {
+                    unit: AxisUnit::Float,
+                    scale: ScaleKind::Linear,
+                    p1: None,
+                    p2: None,
+                    v1_text: String::new(),
+                    v2_text: String::new(),
+                },
+                polar_cal: PolarCalUi {
+                    origin: None,
+                    radius: AxisCalUi {
+                        unit: AxisUnit::Float,
+                        scale: ScaleKind::Linear,
+                        p1: None,
+                        p2: None,
+                        v1_text: String::new(),
+                        v2_text: String::new(),
+                    },
+                    angle: AxisCalUi {
+                        unit: AxisUnit::Float,
+                        scale: ScaleKind::Linear,
+                        p1: None,
+                        p2: None,
+                        v1_text: String::new(),
+                        v2_text: String::new(),
+                    },
+                    angle_unit: AngleUnit::Degrees,
+                    angle_direction: AngleDirection::Cw,
+                },
+                coord_system: CoordSystem::Cartesian,
+                calibration_angle_snap: false,
+                show_calibration_segments: true,
+                dragging_handle: None,
+            },
+            points: PointsState {
+                points: Vec::new(),
+                points_numeric_dirty: true,
+                cached_sorted_preview: Vec::new(),
+                cached_sorted_numeric: Vec::new(),
+                sorted_preview_dirty: true,
+                sorted_numeric_dirty: true,
+                last_x_mapping: None,
+                last_y_mapping: None,
+                last_polar_mapping: None,
+                last_coord_system: CoordSystem::Cartesian,
+                show_curve_segments: true,
+            },
+            snap: SnapState {
+                point_input_mode: PointInputMode::Free,
+                contrast_search_radius: 12.0,
+                contrast_threshold: 12.0,
+                centerline_threshold: 40.0,
+                snap_feature_source: SnapFeatureSource::LumaGradient,
+                snap_threshold_kind: SnapThresholdKind::Gradient,
+                snap_target_color: Color32::from_rgb(200, 60, 60),
+                snap_color_tolerance: 30.0,
+                snap_maps: None,
+                pending_snap_job: None,
+                snap_maps_dirty: true,
+                snap_overlay_color: default_overlay_color,
+                snap_overlay_choices: default_overlay_choices,
+                snap_overlay_choice: 0,
+            },
+            export: ExportState {
+                sample_count: 200,
+                export_kind: ExportKind::Interpolated,
+                interp_algorithm: InterpAlgorithm::Linear,
+                raw_include_distances: false,
+                raw_include_angles: false,
+                polar_export_include_cartesian: false,
+            },
+            interaction: InteractionState {
+                auto_place_cfg,
+                auto_place_state: AutoPlaceState::default(),
+                primary_press: None,
+                middle_pan_enabled: false,
+            },
+            ui: UiState {
+                side_open: true,
+                info_window_open: false,
+                points_info_window_open: false,
+                last_status: None,
+            },
         }
     }
 }
@@ -530,23 +698,23 @@ impl CurcatApp {
     }
 
     const fn queue_value_focus(&mut self, field: AxisValueField) {
-        self.pending_value_focus = Some(field);
+        self.calibration.pending_value_focus = Some(field);
     }
 
     fn set_status(&mut self, msg: impl Into<String>) {
-        self.last_status = Some(msg.into());
+        self.ui.last_status = Some(msg.into());
     }
 
     fn begin_pick_mode(&mut self, mode: PickMode) {
-        self.pick_mode = mode;
+        self.calibration.pick_mode = mode;
         if let Some(label) = Self::pick_mode_label(mode) {
             self.set_status(format!("{label}… (Esc to cancel)"));
         }
     }
 
     fn cancel_pick_mode(&mut self) {
-        if self.pick_mode != PickMode::None {
-            self.pick_mode = PickMode::None;
+        if self.calibration.pick_mode != PickMode::None {
+            self.calibration.pick_mode = PickMode::None;
             self.set_status("Picking canceled.");
         }
     }
@@ -557,56 +725,70 @@ impl CurcatApp {
             PickMode::X2 => Some("Picking X2"),
             PickMode::Y1 => Some("Picking Y1"),
             PickMode::Y2 => Some("Picking Y2"),
+            PickMode::Origin => Some("Picking origin"),
+            PickMode::R1 => Some("Picking R1"),
+            PickMode::R2 => Some("Picking R2"),
+            PickMode::A1 => Some("Picking A1"),
+            PickMode::A2 => Some("Picking A2"),
             PickMode::CurveColor => Some("Pick curve color"),
             PickMode::None => None,
         }
     }
 
     fn reset_calibrations(&mut self) {
-        self.cal_x.p1 = None;
-        self.cal_x.p2 = None;
-        self.cal_x.v1_text.clear();
-        self.cal_x.v2_text.clear();
-        self.cal_y.p1 = None;
-        self.cal_y.p2 = None;
-        self.cal_y.v1_text.clear();
-        self.cal_y.v2_text.clear();
-        self.pick_mode = PickMode::None;
-        self.pending_value_focus = None;
-        self.dragging_handle = None;
+        self.calibration.cal_x.p1 = None;
+        self.calibration.cal_x.p2 = None;
+        self.calibration.cal_x.v1_text.clear();
+        self.calibration.cal_x.v2_text.clear();
+        self.calibration.cal_y.p1 = None;
+        self.calibration.cal_y.p2 = None;
+        self.calibration.cal_y.v1_text.clear();
+        self.calibration.cal_y.v2_text.clear();
+        self.calibration.polar_cal.origin = None;
+        self.calibration.polar_cal.radius.p1 = None;
+        self.calibration.polar_cal.radius.p2 = None;
+        self.calibration.polar_cal.radius.v1_text.clear();
+        self.calibration.polar_cal.radius.v2_text.clear();
+        self.calibration.polar_cal.angle.p1 = None;
+        self.calibration.polar_cal.angle.p2 = None;
+        self.calibration.polar_cal.angle.v1_text.clear();
+        self.calibration.polar_cal.angle.v2_text.clear();
+        self.calibration.pick_mode = PickMode::None;
+        self.calibration.pending_value_focus = None;
+        self.calibration.dragging_handle = None;
     }
 
     fn reset_after_image_transform(&mut self) {
         self.reset_calibrations();
-        self.points.clear();
+        self.points.points.clear();
         self.mark_points_dirty();
-        self.dragging_handle = None;
-        self.touch_pan_active = false;
-        self.touch_pan_last = None;
-        self.image_pan = Vec2::ZERO;
+        self.calibration.dragging_handle = None;
+        self.image.touch_pan_active = false;
+        self.image.touch_pan_last = None;
+        self.image.pan = Vec2::ZERO;
         self.mark_snap_maps_dirty();
         self.refresh_snap_overlay_palette();
-        self.auto_place_state = AutoPlaceState::default();
-        self.primary_press = None;
-        self.zoom_target = self.image_zoom;
-        self.zoom_intent = ZoomIntent::TargetPan(self.image_pan);
+        self.interaction.auto_place_state = AutoPlaceState::default();
+        self.interaction.primary_press = None;
+        self.image.zoom_target = self.image.zoom;
+        self.image.zoom_intent = ZoomIntent::TargetPan(self.image.pan);
     }
 
     fn set_loaded_image(&mut self, image: LoadedImage, meta: Option<ImageMeta>) {
-        self.image = Some(image);
-        self.image_meta = meta;
-        self.image_transform = ImageTransformRecord::identity();
-        self.image_pan = Vec2::ZERO;
-        self.project_title = None;
-        self.project_description = None;
-        self.image_zoom = 1.0;
-        self.zoom_target = 1.0;
-        self.zoom_intent = ZoomIntent::TargetPan(self.image_pan);
+        self.image.image = Some(image);
+        self.image.meta = meta;
+        self.image.transform = ImageTransformRecord::identity();
+        self.image.pan = Vec2::ZERO;
+        self.project.title = None;
+        self.project.description = None;
+        self.image.zoom = 1.0;
+        self.image.zoom_target = 1.0;
+        self.image.zoom_intent = ZoomIntent::TargetPan(self.image.pan);
         self.reset_after_image_transform();
     }
 
     fn apply_image_transform(&mut self, op: ImageTransformOp, status: Option<&str>) {
-        let Some(img) = self.image.as_mut() else {
+        let Some(img) = self.image.image.as_mut() else {
             return;
         };
         match op {
@@ -615,7 +797,7 @@ impl CurcatApp {
             ImageTransformOp::FlipHorizontal => img.flip_horizontal(),
             ImageTransformOp::FlipVertical => img.flip_vertical(),
         }
-        self.image_transform.apply(op);
+        self.image.transform.apply(op);
         if let Some(msg) = status {
             self.set_status(msg);
         }
@@ -651,7 +833,7 @@ impl CurcatApp {
     }
 
     const fn set_zoom(&mut self, zoom: f32) {
-        self.image_zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        self.image.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
     fn set_zoom_about_viewport_center(&mut self, zoom: f32) {
@@ -670,12 +852,12 @@ impl CurcatApp {
         let clamped = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         if !self.config.smooth_zoom {
             self.apply_zoom_instant(clamped, intent);
-            self.zoom_target = self.image_zoom;
-            self.zoom_intent = intent;
+            self.image.zoom_target = self.image.zoom;
+            self.image.zoom_intent = intent;
             return;
         }
-        self.zoom_target = clamped;
-        self.zoom_intent = intent;
+        self.image.zoom_target = clamped;
+        self.image.zoom_intent = intent;
     }
 
     fn apply_zoom_instant(&mut self, zoom: f32, intent: ZoomIntent) {
@@ -683,40 +865,40 @@ impl CurcatApp {
             ZoomIntent::Anchor(anchor) => self.set_zoom_about_anchor(zoom, anchor),
             ZoomIntent::TargetPan(pan) => {
                 self.set_zoom(zoom);
-                self.image_pan = pan;
-                self.skip_pan_sync_once = true;
+                self.image.pan = pan;
+                self.image.skip_pan_sync_once = true;
             }
         }
     }
 
     fn set_zoom_about_anchor(&mut self, zoom: f32, anchor: ZoomAnchor) {
         let clamped = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
-        if (clamped - self.image_zoom).abs() <= f32::EPSILON {
+        if (clamped - self.image.zoom).abs() <= f32::EPSILON {
             return;
         }
-        let Some(viewport) = self.last_viewport_size else {
-            self.image_zoom = clamped;
+        let Some(viewport) = self.image.last_viewport_size else {
+            self.image.zoom = clamped;
             return;
         };
-        let Some(image) = self.image.as_ref() else {
-            self.image_zoom = clamped;
+        let Some(image) = self.image.image.as_ref() else {
+            self.image.zoom = clamped;
             return;
         };
         let [w, h] = image.size;
         if w == 0 || h == 0 {
-            self.image_zoom = clamped;
+            self.image.zoom = clamped;
             return;
         }
         let base_size = Vec2::new(safe_usize_to_f32(w), safe_usize_to_f32(h));
-        let old_display = base_size * self.image_zoom;
+        let old_display = base_size * self.image.zoom;
         let new_display = base_size * clamped;
         let pad_old = Self::center_padding(viewport, old_display);
         let pad_new = Self::center_padding(viewport, new_display);
         let anchor = Self::zoom_anchor_pos(anchor, viewport);
-        let zoom_ratio = clamped / self.image_zoom;
-        self.image_pan = (self.image_pan + anchor - pad_old) * zoom_ratio - anchor + pad_new;
-        self.image_zoom = clamped;
-        self.skip_pan_sync_once = true;
+        let zoom_ratio = clamped / self.image.zoom;
+        self.image.pan = (self.image.pan + anchor - pad_old) * zoom_ratio - anchor + pad_new;
+        self.image.zoom = clamped;
+        self.image.skip_pan_sync_once = true;
     }
 
     fn zoom_anchor_pos(anchor: ZoomAnchor, viewport: Vec2) -> Vec2 {
@@ -734,20 +916,20 @@ impl CurcatApp {
         if !self.config.smooth_zoom {
             return;
         }
-        let target = self.zoom_target.clamp(MIN_ZOOM, MAX_ZOOM);
-        let zoom_delta = target - self.image_zoom;
+        let target = self.image.zoom_target.clamp(MIN_ZOOM, MAX_ZOOM);
+        let zoom_delta = target - self.image.zoom;
         let zoom_done = zoom_delta.abs() <= ZOOM_SNAP_EPS;
-        let pan_done = match self.zoom_intent {
-            ZoomIntent::TargetPan(pan) => (self.image_pan - pan).length() <= PAN_SNAP_EPS,
+        let pan_done = match self.image.zoom_intent {
+            ZoomIntent::TargetPan(pan) => (self.image.pan - pan).length() <= PAN_SNAP_EPS,
             ZoomIntent::Anchor(_) => true,
         };
         if zoom_done && pan_done {
-            match self.zoom_intent {
+            match self.image.zoom_intent {
                 ZoomIntent::Anchor(anchor) => self.set_zoom_about_anchor(target, anchor),
                 ZoomIntent::TargetPan(pan) => {
                     self.set_zoom(target);
-                    self.image_pan = pan;
-                    self.skip_pan_sync_once = true;
+                    self.image.pan = pan;
+                    self.image.skip_pan_sync_once = true;
                 }
             }
             return;
@@ -755,13 +937,13 @@ impl CurcatApp {
 
         let dt = ctx.input(|i| i.stable_dt).min(0.1);
         let alpha = egui::emath::exponential_smooth_factor(0.90, ZOOM_SMOOTH_RESPONSE, dt);
-        let next_zoom = zoom_delta.mul_add(alpha, self.image_zoom);
-        match self.zoom_intent {
+        let next_zoom = zoom_delta.mul_add(alpha, self.image.zoom);
+        match self.image.zoom_intent {
             ZoomIntent::Anchor(anchor) => self.set_zoom_about_anchor(next_zoom, anchor),
             ZoomIntent::TargetPan(pan) => {
                 self.set_zoom(next_zoom);
-                self.image_pan = self.image_pan + (pan - self.image_pan) * alpha;
-                self.skip_pan_sync_once = true;
+                self.image.pan = self.image.pan + (pan - self.image.pan) * alpha;
+                self.image.skip_pan_sync_once = true;
             }
         }
         ctx.request_repaint();
@@ -784,13 +966,13 @@ impl CurcatApp {
     }
 
     fn fit_image_to_viewport_with_status(&mut self, report_status: bool) -> bool {
-        let Some(image) = self.image.as_ref() else {
+        let Some(image) = self.image.image.as_ref() else {
             if report_status {
                 self.set_status("Load an image before fitting the view.");
             }
             return false;
         };
-        let Some(viewport) = self.last_viewport_size else {
+        let Some(viewport) = self.image.last_viewport_size else {
             if report_status {
                 self.set_status("Fit view unavailable: viewport size not ready yet.");
             }
@@ -818,11 +1000,11 @@ impl CurcatApp {
     }
 
     fn apply_pending_fit_on_load(&mut self) {
-        if !self.pending_fit_on_load {
+        if !self.image.pending_fit_on_load {
             return;
         }
         if self.fit_image_to_viewport_with_status(false) {
-            self.pending_fit_on_load = false;
+            self.image.pending_fit_on_load = false;
         }
     }
 
@@ -831,6 +1013,52 @@ impl CurcatApp {
             "100%".to_string()
         } else {
             format!("{:.0}%", zoom * 100.0)
+        }
+    }
+
+    fn cartesian_mappings(&self) -> (Option<AxisMapping>, Option<AxisMapping>) {
+        (
+            self.calibration.cal_x.mapping(),
+            self.calibration.cal_y.mapping(),
+        )
+    }
+
+    fn polar_mapping(&self) -> Option<PolarMapping> {
+        self.calibration.polar_cal.mapping()
+    }
+
+    fn calibration_ready(&self) -> bool {
+        match self.calibration.coord_system {
+            CoordSystem::Cartesian => {
+                let (x, y) = self.cartesian_mappings();
+                x.is_some() && y.is_some()
+            }
+            CoordSystem::Polar => self.polar_mapping().is_some(),
+        }
+    }
+
+    fn polar_needs_attention(&self) -> bool {
+        let origin_missing = self.calibration.polar_cal.origin.is_none();
+        let radius = &self.calibration.polar_cal.radius;
+        let (r1_invalid, r2_invalid) = radius.value_invalid_flags();
+        let mut angle = self.calibration.polar_cal.angle.clone();
+        angle.scale = ScaleKind::Linear;
+        let (a1_invalid, a2_invalid) = angle.value_invalid_flags();
+        origin_missing
+            || radius.p1.is_none()
+            || radius.p2.is_none()
+            || r1_invalid
+            || r2_invalid
+            || angle.p1.is_none()
+            || angle.p2.is_none()
+            || a1_invalid
+            || a2_invalid
+    }
+
+    const fn axis_labels(&self) -> (&'static str, &'static str) {
+        match self.calibration.coord_system {
+            CoordSystem::Cartesian => ("x", "y"),
+            CoordSystem::Polar => ("theta", "r"),
         }
     }
 }
@@ -842,6 +1070,11 @@ enum DragTarget {
     CalX2,
     CalY1,
     CalY2,
+    PolarOrigin,
+    PolarR1,
+    PolarR2,
+    PolarA1,
+    PolarA2,
 }
 
 impl CurcatApp {
@@ -867,23 +1100,55 @@ impl CurcatApp {
         }
     }
 
+    fn polar_to_record(polar: &PolarCalUi) -> project::PolarCalibrationRecord {
+        project::PolarCalibrationRecord {
+            origin: polar.origin.map(|p| [p.x, p.y]),
+            radius: Self::axis_to_record(&polar.radius),
+            angle: Self::axis_to_record(&polar.angle),
+            angle_unit: polar.angle_unit,
+            angle_direction: polar.angle_direction,
+        }
+    }
+
+    fn polar_from_record(record: &project::PolarCalibrationRecord) -> PolarCalUi {
+        let mut radius = Self::axis_from_record(&record.radius);
+        let mut angle = Self::axis_from_record(&record.angle);
+        radius.unit = AxisUnit::Float;
+        angle.unit = AxisUnit::Float;
+        angle.scale = ScaleKind::Linear;
+        PolarCalUi {
+            origin: record.origin.map(|p| Pos2::new(p[0], p[1])),
+            radius,
+            angle,
+            angle_unit: record.angle_unit,
+            angle_direction: record.angle_direction,
+        }
+    }
+
     fn build_project_save_request(
         &mut self,
         target_path: &Path,
     ) -> anyhow::Result<ProjectSaveRequest> {
         let Some(image_path) = self
-            .image_meta
+            .image
+            .meta
             .as_ref()
             .and_then(|m| m.path().map(Path::to_path_buf))
         else {
             anyhow::bail!("Cannot save project: image was not loaded from a file");
         };
 
-        let x_mapping = self.cal_x.mapping();
-        let y_mapping = self.cal_y.mapping();
-        self.ensure_point_numeric_cache(x_mapping.as_ref(), y_mapping.as_ref());
+        let (x_mapping, y_mapping) = self.cartesian_mappings();
+        let polar_mapping = self.polar_mapping();
+        self.ensure_point_numeric_cache(
+            self.calibration.coord_system,
+            x_mapping.as_ref(),
+            y_mapping.as_ref(),
+            polar_mapping.as_ref(),
+        );
 
         let points = self
+            .points
             .points
             .iter()
             .map(|p| project::PointRecord {
@@ -894,32 +1159,34 @@ impl CurcatApp {
             .collect();
 
         let calibration = project::CalibrationRecord {
-            x: Self::axis_to_record(&self.cal_x),
-            y: Self::axis_to_record(&self.cal_y),
-            calibration_angle_snap: self.calibration_angle_snap,
-            show_calibration_segments: self.show_calibration_segments,
+            coord_system: self.calibration.coord_system,
+            x: Self::axis_to_record(&self.calibration.cal_x),
+            y: Self::axis_to_record(&self.calibration.cal_y),
+            polar: Self::polar_to_record(&self.calibration.polar_cal),
+            calibration_angle_snap: self.calibration.calibration_angle_snap,
+            show_calibration_segments: self.calibration.show_calibration_segments,
         };
 
         Ok(ProjectSaveRequest {
             target_path: target_path.to_path_buf(),
             image_path,
-            transform: self.image_transform,
+            transform: self.image.transform,
             calibration,
             points,
-            zoom: self.image_zoom,
-            pan: [self.image_pan.x, self.image_pan.y],
-            title: self.project_title.clone(),
-            description: self.project_description.clone(),
+            zoom: self.image.zoom,
+            pan: [self.image.pan.x, self.image.pan.y],
+            title: self.project.title.clone(),
+            description: self.project.description.clone(),
         })
     }
 
     fn handle_project_save(&mut self, path: &Path) {
-        if self.pending_project_save.is_some() {
+        if self.project.pending_project_save.is_some() {
             self.set_status("Project save already in progress.");
             return;
         }
-        self.last_project_path = Some(path.to_path_buf());
-        self.last_project_dir = path.parent().map(Path::to_path_buf);
+        self.project.last_project_path = Some(path.to_path_buf());
+        self.project.last_project_dir = path.parent().map(Path::to_path_buf);
         match self.build_project_save_request(path) {
             Ok(request) => self.start_project_save_job(request),
             Err(err) => self.set_status(format!("Project save failed: {err}")),
@@ -935,12 +1202,12 @@ impl CurcatApp {
             };
             let _ = tx.send(result);
         });
-        self.pending_project_save = Some(PendingProjectSave { rx });
+        self.project.pending_project_save = Some(PendingProjectSave { rx });
         self.set_status("Saving project…");
     }
 
     fn poll_project_save_job(&mut self) {
-        let Some(job) = self.pending_project_save.take() else {
+        let Some(job) = self.project.pending_project_save.take() else {
             return;
         };
         match job.rx.try_recv() {
@@ -951,7 +1218,7 @@ impl CurcatApp {
                 self.set_status(format!("Project save failed: {err}"));
             }
             Err(TryRecvError::Empty) => {
-                self.pending_project_save = Some(job);
+                self.project.pending_project_save = Some(job);
             }
             Err(TryRecvError::Disconnected) => {
                 self.set_status("Project save failed: worker disconnected.");
@@ -960,10 +1227,10 @@ impl CurcatApp {
     }
 
     fn handle_project_load(&mut self, path: PathBuf) {
-        self.project_prompt = None;
-        self.pending_project_apply = None;
-        self.last_project_dir = path.parent().map(Path::to_path_buf);
-        self.last_project_path = Some(path.clone());
+        self.project.project_prompt = None;
+        self.project.pending_project_apply = None;
+        self.project.last_project_dir = path.parent().map(Path::to_path_buf);
+        self.project.last_project_path = Some(path.clone());
         match project::load_project(&path) {
             Ok(outcome) => self.handle_loaded_project(path, outcome),
             Err(err) => self.set_status(format!("Failed to load project: {err}")),
@@ -980,7 +1247,7 @@ impl CurcatApp {
         if outcome.warnings.is_empty() {
             self.begin_applying_project(plan);
         } else {
-            self.project_prompt = Some(ProjectLoadPrompt {
+            self.project.project_prompt = Some(ProjectLoadPrompt {
                 warnings: outcome.warnings,
                 plan,
             });
@@ -990,7 +1257,7 @@ impl CurcatApp {
 
     fn begin_applying_project(&mut self, plan: ProjectApplyPlan) {
         let image_path = plan.image.path.clone();
-        self.project_prompt = None;
+        self.project.project_prompt = None;
         let status = {
             let source_label = match plan.image.source {
                 project::ImagePathSource::Absolute => "absolute path",
@@ -1012,59 +1279,65 @@ impl CurcatApp {
                 )
             }
         };
-        self.pending_project_apply = Some(plan);
+        self.project.pending_project_apply = Some(plan);
         self.set_status(status);
         self.start_loading_image_from_path(image_path);
     }
 
     fn apply_project_if_ready(&mut self, loaded_path: Option<&Path>) {
-        let Some(plan) = self.pending_project_apply.take() else {
+        let Some(plan) = self.project.pending_project_apply.take() else {
             return;
         };
         let Some(path) = loaded_path else {
-            self.pending_project_apply = Some(plan);
+            self.project.pending_project_apply = Some(plan);
             return;
         };
         if path != plan.image.path {
-            self.pending_project_apply = Some(plan);
+            self.project.pending_project_apply = Some(plan);
             return;
         }
         self.apply_project_state(plan);
     }
 
     fn apply_project_state(&mut self, plan: ProjectApplyPlan) {
-        self.project_prompt = None;
-        self.pending_project_apply = None;
+        self.project.project_prompt = None;
+        self.project.pending_project_apply = None;
 
         // Reapply transforms on freshly loaded image.
-        self.image_transform = ImageTransformRecord::identity();
+        self.image.transform = ImageTransformRecord::identity();
         let ops = plan.payload.transform.replay_operations();
         for op in ops {
             self.apply_image_transform(op, None);
         }
-        self.image_transform = plan.payload.transform;
+        self.image.transform = plan.payload.transform;
 
-        self.image_zoom = plan.payload.zoom.clamp(MIN_ZOOM, MAX_ZOOM);
-        self.image_pan = Vec2::new(plan.payload.pan[0], plan.payload.pan[1]);
-        self.zoom_target = self.image_zoom;
-        self.zoom_intent = ZoomIntent::TargetPan(self.image_pan);
-        self.project_title.clone_from(&plan.payload.title);
-        self.project_description
+        self.image.zoom = plan.payload.zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        self.image.pan = Vec2::new(plan.payload.pan[0], plan.payload.pan[1]);
+        self.image.zoom_target = self.image.zoom;
+        self.image.zoom_intent = ZoomIntent::TargetPan(self.image.pan);
+        self.project.title.clone_from(&plan.payload.title);
+        self.project
+            .description
             .clone_from(&plan.payload.description);
 
-        self.cal_x = Self::axis_from_record(&plan.payload.calibration.x);
-        self.cal_y = Self::axis_from_record(&plan.payload.calibration.y);
-        self.calibration_angle_snap = plan.payload.calibration.calibration_angle_snap;
-        self.show_calibration_segments = plan.payload.calibration.show_calibration_segments;
-        self.last_x_mapping = None;
-        self.last_y_mapping = None;
-        self.pick_mode = PickMode::None;
-        self.pending_value_focus = None;
-        self.dragging_handle = None;
-        self.touch_pan_active = false;
-        self.touch_pan_last = None;
+        self.calibration.cal_x = Self::axis_from_record(&plan.payload.calibration.x);
+        self.calibration.cal_y = Self::axis_from_record(&plan.payload.calibration.y);
+        self.calibration.polar_cal = Self::polar_from_record(&plan.payload.calibration.polar);
+        self.calibration.coord_system = plan.payload.calibration.coord_system;
+        self.calibration.calibration_angle_snap = plan.payload.calibration.calibration_angle_snap;
+        self.calibration.show_calibration_segments =
+            plan.payload.calibration.show_calibration_segments;
+        self.points.last_x_mapping = None;
+        self.points.last_y_mapping = None;
+        self.points.last_polar_mapping = None;
+        self.points.last_coord_system = self.calibration.coord_system;
+        self.calibration.pick_mode = PickMode::None;
+        self.calibration.pending_value_focus = None;
+        self.calibration.dragging_handle = None;
+        self.image.touch_pan_active = false;
+        self.image.touch_pan_last = None;
 
-        self.points = plan
+        self.points.points = plan
             .payload
             .points
             .iter()
@@ -1079,9 +1352,9 @@ impl CurcatApp {
         self.refresh_snap_overlay_palette();
 
         if let Some(parent) = plan.project_path.parent() {
-            self.last_project_dir = Some(parent.to_path_buf());
+            self.project.last_project_dir = Some(parent.to_path_buf());
         }
-        self.last_project_path = Some(plan.project_path);
+        self.project.last_project_path = Some(plan.project_path);
         self.remember_image_dir_from_path(&plan.image.path);
 
         if plan.image.checksum_matches {
@@ -1147,45 +1420,45 @@ impl eframe::App for CurcatApp {
         if !wants_kb {
             // Ctrl/Cmd + B: toggle side panel
             if ctx.input(|i| i.key_pressed(Key::B) && i.modifiers.command) {
-                self.side_open = !self.side_open;
+                self.ui.side_open = !self.ui.side_open;
             }
             // Ctrl/Cmd + O: open image
-            if self.active_dialog.is_none()
+            if self.project.active_dialog.is_none()
                 && ctx.input(|i| i.key_pressed(Key::O) && i.modifiers.command)
             {
                 self.open_image_dialog();
             }
-            if self.active_dialog.is_none()
+            if self.project.active_dialog.is_none()
                 && ctx.input(|i| i.key_pressed(Key::P) && i.modifiers.command && i.modifiers.shift)
             {
                 self.open_project_dialog();
             }
-            if self.active_dialog.is_none()
-                && self.image_meta.as_ref().and_then(|m| m.path()).is_some()
+            if self.project.active_dialog.is_none()
+                && self.image.meta.as_ref().and_then(|m| m.path()).is_some()
                 && ctx.input(|i| i.key_pressed(Key::S) && i.modifiers.command)
             {
                 self.save_project_dialog();
             }
             // Ctrl/Cmd + V: paste image from clipboard
-            if self.active_dialog.is_none()
+            if self.project.active_dialog.is_none()
                 && ctx.input(|i| i.key_pressed(Key::V) && i.modifiers.command)
             {
                 self.paste_image_from_clipboard(ctx);
             }
             // Ctrl/Cmd + Shift + C: export CSV
-            if self.active_dialog.is_none()
+            if self.project.active_dialog.is_none()
                 && ctx.input(|i| i.key_pressed(Key::C) && i.modifiers.command && i.modifiers.shift)
             {
                 self.start_export_csv();
             }
             // Ctrl/Cmd + Shift + J: export JSON
-            if self.active_dialog.is_none()
+            if self.project.active_dialog.is_none()
                 && ctx.input(|i| i.key_pressed(Key::J) && i.modifiers.command && i.modifiers.shift)
             {
                 self.start_export_json();
             }
             // Ctrl/Cmd + Shift + E: export Excel
-            if self.active_dialog.is_none()
+            if self.project.active_dialog.is_none()
                 && ctx.input(|i| i.key_pressed(Key::E) && i.modifiers.command && i.modifiers.shift)
             {
                 self.start_export_xlsx();
@@ -1195,15 +1468,21 @@ impl eframe::App for CurcatApp {
                 self.clear_all_points();
             }
             // Ctrl/Cmd + I: show image info
-            if self.image.is_some() && ctx.input(|i| i.key_pressed(Key::I) && i.modifiers.command) {
-                self.info_window_open = true;
+            if self.image.image.is_some()
+                && ctx.input(|i| i.key_pressed(Key::I) && i.modifiers.command)
+            {
+                self.ui.info_window_open = true;
             }
             // Ctrl/Cmd + F: fit view to viewport
-            if self.image.is_some() && ctx.input(|i| i.key_pressed(Key::F) && i.modifiers.command) {
+            if self.image.image.is_some()
+                && ctx.input(|i| i.key_pressed(Key::F) && i.modifiers.command)
+            {
                 self.fit_image_to_viewport();
             }
             // Ctrl/Cmd + R: reset view (zoom 100%, pan origin)
-            if self.image.is_some() && ctx.input(|i| i.key_pressed(Key::R) && i.modifiers.command) {
+            if self.image.image.is_some()
+                && ctx.input(|i| i.key_pressed(Key::R) && i.modifiers.command)
+            {
                 self.reset_view();
             }
             // Ctrl/Cmd + Z: undo
@@ -1217,9 +1496,14 @@ impl eframe::App for CurcatApp {
             self.cancel_pick_mode();
         }
 
-        let needs_open_hint = self.image.is_none();
-        let needs_cal_hint = ui::common::axis_needs_attention(&self.cal_x)
-            || ui::common::axis_needs_attention(&self.cal_y);
+        let needs_open_hint = self.image.image.is_none();
+        let needs_cal_hint = match self.calibration.coord_system {
+            CoordSystem::Cartesian => {
+                ui::common::axis_needs_attention(&self.calibration.cal_x)
+                    || ui::common::axis_needs_attention(&self.calibration.cal_y)
+            }
+            CoordSystem::Polar => self.polar_needs_attention(),
+        };
         if needs_open_hint || needs_cal_hint {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
@@ -1228,7 +1512,7 @@ impl eframe::App for CurcatApp {
         egui::SidePanel::right("side")
             .resizable(true)
             .default_width(280.0)
-            .show_animated(ctx, self.side_open, |ui| self.ui_side_calibration(ui));
+            .show_animated(ctx, self.ui.side_open, |ui| self.ui_side_calibration(ui));
         egui::CentralPanel::default().show(ctx, |ui| self.ui_central_image(ctx, ui));
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| self.ui_status_bar(ui));
         self.ui_image_info_window(ctx);
@@ -1238,7 +1522,7 @@ impl eframe::App for CurcatApp {
         let mut close_dialog = false;
         let mut picked_export_path: Option<PathBuf> = None;
 
-        if let Some(dialog_state) = self.active_dialog.as_mut() {
+        if let Some(dialog_state) = self.project.active_dialog.as_mut() {
             match dialog_state {
                 NativeDialog::Open(dialog) => {
                     dialog.update(ctx);
@@ -1356,7 +1640,7 @@ impl eframe::App for CurcatApp {
         }
 
         if close_dialog {
-            self.active_dialog = None;
+            self.project.active_dialog = None;
         }
     }
 }

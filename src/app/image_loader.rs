@@ -7,6 +7,12 @@ use std::thread;
 
 impl CurcatApp {
     pub(crate) fn start_loading_image_from_path(&mut self, path: std::path::PathBuf) {
+        if let Some(plan) = self.project.pending_project_apply.as_ref()
+            && path != plan.image.path
+        {
+            self.set_status("Project loading in progress. Wait until it finishes.");
+            return;
+        }
         self.remember_image_dir_from_path(&path);
         let meta = PendingImageMeta::Path { path: path.clone() };
         self.start_image_load(ImageLoadRequest::Path(path), meta);
@@ -18,6 +24,10 @@ impl CurcatApp {
         bytes: Vec<u8>,
         last_modified: Option<std::time::SystemTime>,
     ) {
+        if self.project.pending_project_apply.is_some() {
+            self.set_status("Project loading in progress. Wait until it finishes.");
+            return;
+        }
         let meta = PendingImageMeta::DroppedBytes {
             name,
             byte_len: bytes.len(),
@@ -41,12 +51,12 @@ impl CurcatApp {
             };
             let _ = tx.send(msg);
         });
-        self.pending_image_task = Some(PendingImageTask { rx, meta });
+        self.project.pending_image_task = Some(PendingImageTask { rx, meta });
         self.set_status(format!("Loading {description}…"));
     }
 
     pub(crate) fn poll_image_loader(&mut self, ctx: &Context) {
-        let Some(task) = self.pending_image_task.take() else {
+        let Some(task) = self.project.pending_image_task.take() else {
             return;
         };
         match task.rx.try_recv() {
@@ -59,15 +69,15 @@ impl CurcatApp {
             Ok(ImageLoadResult::Error(err)) => {
                 let label = task.meta.description();
                 self.set_status(format!("Failed to load {label}: {err}"));
-                self.pending_project_apply = None;
+                self.project.pending_project_apply = None;
             }
             Err(TryRecvError::Empty) => {
-                self.pending_image_task = Some(task);
+                self.project.pending_image_task = Some(task);
             }
             Err(TryRecvError::Disconnected) => {
                 let label = task.meta.description();
                 self.set_status(format!("Loading {label} failed: worker disconnected."));
-                self.pending_project_apply = None;
+                self.project.pending_project_apply = None;
             }
         }
     }
@@ -82,20 +92,20 @@ impl CurcatApp {
         let loaded = LoadedImage::from_color_image(ctx, color);
         self.set_loaded_image(loaded, Some(meta));
         self.set_status(format!("Loaded {name}"));
-        self.pending_fit_on_load = self.pending_project_apply.is_none();
+        self.image.pending_fit_on_load = self.project.pending_project_apply.is_none();
     }
 
     pub(crate) fn remember_image_dir_from_path(&mut self, path: &Path) {
         let dir = path
             .parent()
             .map_or_else(|| std::path::PathBuf::from("."), Path::to_path_buf);
-        self.last_image_dir = Some(dir);
+        self.project.last_image_dir = Some(dir);
     }
 
     pub(crate) fn remember_export_dir_from_path(&mut self, path: &Path) {
         let dir = path
             .parent()
             .map_or_else(|| std::path::PathBuf::from("."), Path::to_path_buf);
-        self.last_export_dir = Some(dir);
+        self.project.last_export_dir = Some(dir);
     }
 }

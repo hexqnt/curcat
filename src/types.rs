@@ -37,6 +37,45 @@ pub enum ScaleKind {
     Log10,
 }
 
+/// Coordinate system for calibration and export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CoordSystem {
+    Cartesian,
+    Polar,
+}
+
+/// Angle unit for polar calibration/export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AngleUnit {
+    Degrees,
+    Radians,
+}
+
+impl AngleUnit {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Degrees => "deg",
+            Self::Radians => "rad",
+        }
+    }
+}
+
+/// Direction of increasing polar angle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AngleDirection {
+    Ccw,
+    Cw,
+}
+
+impl AngleDirection {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Ccw => "CCW",
+            Self::Cw => "CW",
+        }
+    }
+}
+
 /// Units used for axis values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AxisUnit {
@@ -247,5 +286,189 @@ impl AxisMapping {
     pub fn value_at(&self, p: Pos2) -> Option<AxisValue> {
         self.numeric_at(p)
             .and_then(|s| AxisValue::from_scalar_seconds(self.unit, s))
+    }
+}
+
+/// Polar calibration mapping from pixels to (angle, radius).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PolarMapping {
+    pub origin: Pos2,
+    radius_d1: f64,
+    radius_d2: f64,
+    radius_v1: f64,
+    radius_v2: f64,
+    radius_scale: ScaleKind,
+    angle_a1: f64,
+    angle_span: f64,
+    angle_v1: f64,
+    angle_v2: f64,
+    angle_unit: AngleUnit,
+    angle_direction: AngleDirection,
+}
+
+impl PolarMapping {
+    pub fn new(
+        origin: Pos2,
+        radius_d1: f64,
+        radius_d2: f64,
+        radius_v1: f64,
+        radius_v2: f64,
+        radius_scale: ScaleKind,
+        angle_a1: f64,
+        angle_a2: f64,
+        angle_v1: f64,
+        angle_v2: f64,
+        angle_unit: AngleUnit,
+        angle_direction: AngleDirection,
+    ) -> Option<Self> {
+        if !radius_d1.is_finite()
+            || !radius_d2.is_finite()
+            || !radius_v1.is_finite()
+            || !radius_v2.is_finite()
+        {
+            return None;
+        }
+        if (radius_d2 - radius_d1).abs() <= f64::EPSILON {
+            return None;
+        }
+        if radius_scale == ScaleKind::Log10 && (radius_v1 <= 0.0 || radius_v2 <= 0.0) {
+            return None;
+        }
+        if !angle_a1.is_finite()
+            || !angle_a2.is_finite()
+            || !angle_v1.is_finite()
+            || !angle_v2.is_finite()
+        {
+            return None;
+        }
+        if (angle_v2 - angle_v1).abs() <= f64::EPSILON {
+            return None;
+        }
+        let a1 = normalize_angle_rad(angle_a1);
+        let a2 = normalize_angle_rad(angle_a2);
+        let span = angle_delta(a1, a2, angle_direction);
+        if span <= f64::EPSILON {
+            return None;
+        }
+        Some(Self {
+            origin,
+            radius_d1,
+            radius_d2,
+            radius_v1,
+            radius_v2,
+            radius_scale,
+            angle_a1: a1,
+            angle_span: span,
+            angle_v1,
+            angle_v2,
+            angle_unit,
+            angle_direction,
+        })
+    }
+
+    pub fn radius_at(&self, p: Pos2) -> Option<f64> {
+        let dx = f64::from(p.x - self.origin.x);
+        let dy = f64::from(p.y - self.origin.y);
+        let dist = dx.hypot(dy);
+        let t = (dist - self.radius_d1) / (self.radius_d2 - self.radius_d1);
+        numeric_at_t(self.radius_scale, self.radius_v1, self.radius_v2, t)
+    }
+
+    pub fn angle_at(&self, p: Pos2) -> Option<f64> {
+        let dx = f64::from(p.x - self.origin.x);
+        let dy = f64::from(p.y - self.origin.y);
+        if dx.abs() <= f64::EPSILON && dy.abs() <= f64::EPSILON {
+            return None;
+        }
+        let raw = normalize_angle_rad(dy.atan2(dx));
+        let delta = angle_delta(self.angle_a1, raw, self.angle_direction);
+        let t = delta / self.angle_span;
+        Some((self.angle_v2 - self.angle_v1).mul_add(t, self.angle_v1))
+    }
+
+    pub const fn angle_unit(&self) -> AngleUnit {
+        self.angle_unit
+    }
+}
+
+fn normalize_angle_rad(angle: f64) -> f64 {
+    angle.rem_euclid(std::f64::consts::TAU)
+}
+
+fn angle_delta(start: f64, end: f64, direction: AngleDirection) -> f64 {
+    match direction {
+        AngleDirection::Ccw => (end - start).rem_euclid(std::f64::consts::TAU),
+        AngleDirection::Cw => (start - end).rem_euclid(std::f64::consts::TAU),
+    }
+}
+
+fn numeric_at_t(scale: ScaleKind, v1: f64, v2: f64, t: f64) -> Option<f64> {
+    match scale {
+        ScaleKind::Linear => Some((v2 - v1).mul_add(t, v1)),
+        ScaleKind::Log10 => {
+            if v1 <= 0.0 || v2 <= 0.0 {
+                return None;
+            }
+            let l1 = v1.log10();
+            let l2 = v2.log10();
+            Some(10f64.powf((l2 - l1).mul_add(t, l1)))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn polar_mapping_linear_deg_ccw() {
+        let origin = Pos2::new(0.0, 0.0);
+        let mapping = PolarMapping::new(
+            origin,
+            1.0,
+            2.0,
+            10.0,
+            20.0,
+            ScaleKind::Linear,
+            0.0,
+            std::f64::consts::FRAC_PI_2,
+            0.0,
+            90.0,
+            AngleUnit::Degrees,
+            AngleDirection::Ccw,
+        )
+        .expect("valid mapping");
+
+        let r = mapping.radius_at(Pos2::new(1.5, 0.0)).expect("radius");
+        assert!((r - 15.0).abs() < 1.0e-6);
+
+        let theta = mapping.angle_at(Pos2::new(0.0, 1.0)).expect("angle");
+        assert!((theta - 90.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn polar_mapping_cw_wraps_angles() {
+        let origin = Pos2::new(0.0, 0.0);
+        let mapping = PolarMapping::new(
+            origin,
+            1.0,
+            2.0,
+            1.0,
+            2.0,
+            ScaleKind::Linear,
+            0.0,
+            -std::f64::consts::FRAC_PI_2,
+            0.0,
+            90.0,
+            AngleUnit::Degrees,
+            AngleDirection::Cw,
+        )
+        .expect("valid mapping");
+
+        let theta = mapping.angle_at(Pos2::new(0.0, -1.0)).expect("angle");
+        assert!((theta - 90.0).abs() < 1.0e-6);
+
+        let wrap = mapping.angle_at(Pos2::new(0.0, 1.0)).expect("angle");
+        assert!((wrap - 270.0).abs() < 1.0e-6);
     }
 }

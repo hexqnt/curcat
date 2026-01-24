@@ -1,10 +1,10 @@
 //! Export helpers for writing picked points to CSV, JSON, and XLSX formats.
 
 use crate::interp::XYPoint;
-use crate::types::{AxisUnit, AxisValue};
+use crate::types::{AngleUnit, AxisUnit, AxisValue, CoordSystem};
 use chrono::{Datelike, Duration, Timelike};
 use rust_xlsxwriter::{ExcelDateTime, Format, Workbook, XlsxError};
-use serde_json::{Map, Number, Value, json};
+use serde_json::{Map, Number, Value};
 use std::io::BufWriter;
 
 /// Export-ready dataset plus axis units and optional computed columns.
@@ -13,6 +13,10 @@ pub struct ExportPayload {
     pub points: Vec<XYPoint>,
     pub x_unit: AxisUnit,
     pub y_unit: AxisUnit,
+    pub x_label: String,
+    pub y_label: String,
+    pub coord_system: CoordSystem,
+    pub angle_unit: Option<AngleUnit>,
     pub extra_columns: Vec<ExportExtraColumn>,
 }
 
@@ -48,7 +52,7 @@ const XLSX_MAX_COLS: u16 = 16_384;
 /// as formatted strings. Returns an error if any value is not representable.
 pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
     let mut wtr = csv::Writer::from_path(path)?;
-    let mut headers = vec!["x".to_string(), "y".to_string()];
+    let mut headers = vec![payload.x_label.clone(), payload.y_label.clone()];
     headers.extend(payload.extra_columns.iter().map(|c| c.header.clone()));
     wtr.write_record(headers)?;
 
@@ -109,8 +113,8 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
         };
         worksheet.set_name(&sheet_name)?;
 
-        worksheet.write_string(0, 0, "x")?;
-        worksheet.write_string(0, 1, "y")?;
+        worksheet.write_string(0, 0, &payload.x_label)?;
+        worksheet.write_string(0, 1, &payload.y_label)?;
         for (idx, col) in payload.extra_columns.iter().enumerate() {
             let col_idx = u16::try_from(idx + 2)
                 .map_err(|_| XlsxError::ParameterError("XLSX column index overflow.".into()))?;
@@ -207,12 +211,12 @@ pub fn export_to_json(path: &std::path::Path, payload: &ExportPayload) -> anyhow
         let mut obj = Map::new();
         let p = &payload.points[row_idx];
         obj.insert(
-            "x".to_string(),
-            axis_value_to_json(payload.x_unit, p.x, "x")?,
+            payload.x_label.clone(),
+            axis_value_to_json(payload.x_unit, p.x, &payload.x_label)?,
         );
         obj.insert(
-            "y".to_string(),
-            axis_value_to_json(payload.y_unit, p.y, "y")?,
+            payload.y_label.clone(),
+            axis_value_to_json(payload.y_unit, p.y, &payload.y_label)?,
         );
         for col in &payload.extra_columns {
             debug_assert_eq!(col.values.len(), payload.row_count());
@@ -222,14 +226,37 @@ pub fn export_to_json(path: &std::path::Path, payload: &ExportPayload) -> anyhow
         points.push(Value::Object(obj));
     }
 
-    let root = json!({
-        "x_unit": axis_unit_label(payload.x_unit),
-        "y_unit": axis_unit_label(payload.y_unit),
-        "points": points
-    });
+    let mut root = Map::new();
+    root.insert(
+        "coord_system".to_string(),
+        Value::String(coord_system_label(payload.coord_system).to_string()),
+    );
+    root.insert(
+        "x_unit".to_string(),
+        Value::String(axis_unit_label(payload.x_unit).to_string()),
+    );
+    root.insert(
+        "y_unit".to_string(),
+        Value::String(axis_unit_label(payload.y_unit).to_string()),
+    );
+    root.insert(
+        "x_label".to_string(),
+        Value::String(payload.x_label.clone()),
+    );
+    root.insert(
+        "y_label".to_string(),
+        Value::String(payload.y_label.clone()),
+    );
+    if let Some(unit) = payload.angle_unit {
+        root.insert(
+            "angle_unit".to_string(),
+            Value::String(angle_unit_label(unit).to_string()),
+        );
+    }
+    root.insert("points".to_string(), Value::Array(points));
 
     let writer = BufWriter::new(std::fs::File::create(path)?);
-    serde_json::to_writer_pretty(writer, &root)?;
+    serde_json::to_writer_pretty(writer, &Value::Object(root))?;
     Ok(())
 }
 
@@ -237,6 +264,20 @@ const fn axis_unit_label(unit: AxisUnit) -> &'static str {
     match unit {
         AxisUnit::Float => "float",
         AxisUnit::DateTime => "datetime",
+    }
+}
+
+const fn coord_system_label(system: CoordSystem) -> &'static str {
+    match system {
+        CoordSystem::Cartesian => "cartesian",
+        CoordSystem::Polar => "polar",
+    }
+}
+
+const fn angle_unit_label(unit: AngleUnit) -> &'static str {
+    match unit {
+        AngleUnit::Degrees => "deg",
+        AngleUnit::Radians => "rad",
     }
 }
 

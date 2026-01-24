@@ -9,10 +9,14 @@ impl CurcatApp {
             egui::widgets::global_theme_preference_switch(ui);
             ui.separator();
 
-            let has_image = self.image.is_some();
-            let can_save_project = self.image_meta.as_ref().and_then(|m| m.path()).is_some();
+            let has_image = self.image.image.is_some();
+            let can_save_project = self.image.meta.as_ref().and_then(|m| m.path()).is_some();
             let file_menu_response = self.ui_file_menu(ui, can_save_project);
-            self.paint_attention_outline_if(ui, file_menu_response.rect, self.image.is_none());
+            self.paint_attention_outline_if(
+                ui,
+                file_menu_response.rect,
+                self.image.image.is_none(),
+            );
             ui.separator();
 
             self.ui_side_toggle(ui);
@@ -21,7 +25,7 @@ impl CurcatApp {
             self.ui_stats_info_buttons(ui, has_image);
             self.ui_transform_buttons(ui, has_image);
 
-            let has_points = !self.points.is_empty();
+            let has_points = !self.points.points.is_empty();
             self.ui_zoom_controls(ui);
             ui.separator();
 
@@ -79,7 +83,7 @@ impl CurcatApp {
     }
 
     fn ui_side_toggle(&mut self, ui: &mut egui::Ui) {
-        let side_label = if self.side_open {
+        let side_label = if self.ui.side_open {
             "Hide side"
         } else {
             "Show side"
@@ -92,7 +96,7 @@ impl CurcatApp {
             .on_hover_text("Toggle side panel (Ctrl+B)")
             .clicked()
         {
-            self.side_open = !self.side_open;
+            self.ui.side_open = !self.ui.side_open;
         }
     }
 
@@ -104,7 +108,7 @@ impl CurcatApp {
             )))
             .on_hover_text("Show stats for picked points");
         if stats_resp.clicked() {
-            self.points_info_window_open = true;
+            self.ui.points_info_window_open = true;
         }
         let info_resp = ui
             .add_enabled(
@@ -114,7 +118,7 @@ impl CurcatApp {
             )
             .on_hover_text("Show file & image details (Ctrl+I)");
         if info_resp.clicked() && has_image {
-            self.info_window_open = true;
+            self.ui.info_window_open = true;
         }
     }
 
@@ -173,11 +177,11 @@ impl CurcatApp {
         ui.label("Zoom:")
             .on_hover_text("Choose a preset zoom level");
         let zoom_ir = egui::ComboBox::from_id_salt("zoom_combo")
-            .selected_text(Self::format_zoom(self.image_zoom))
+            .selected_text(Self::format_zoom(self.image.zoom))
             .show_ui(ui, |ui| {
                 for &preset in super::super::ZOOM_PRESETS {
                     let label = Self::format_zoom(preset);
-                    let selected = (self.image_zoom - preset).abs() < 0.0001;
+                    let selected = (self.image.zoom - preset).abs() < 0.0001;
                     if ui.selectable_label(selected, label).clicked() {
                         self.set_zoom_about_viewport_center(preset);
                     }
@@ -204,14 +208,14 @@ impl CurcatApp {
     }
 
     fn ui_middle_pan_toggle(&mut self, ui: &mut egui::Ui) {
-        let toggle_response = toggle_switch(ui, &mut self.middle_pan_enabled)
+        let toggle_response = toggle_switch(ui, &mut self.interaction.middle_pan_enabled)
             .on_hover_text("Pan with middle mouse button");
         ui.add_space(4.0);
         ui.label("MMB pan")
             .on_hover_text("Enable/disable middle-button panning");
-        if toggle_response.changed() && !self.middle_pan_enabled {
-            self.touch_pan_active = false;
-            self.touch_pan_last = None;
+        if toggle_response.changed() && !self.interaction.middle_pan_enabled {
+            self.image.touch_pan_active = false;
+            self.image.touch_pan_last = None;
         }
     }
 

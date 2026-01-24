@@ -111,11 +111,12 @@ impl CurcatApp {
 
     pub(crate) fn refresh_snap_overlay_palette(&mut self) {
         let previous_choice = self
+            .snap
             .snap_overlay_choices
-            .get(self.snap_overlay_choice)
+            .get(self.snap.snap_overlay_choice)
             .copied()
-            .or(Some(self.snap_overlay_color));
-        let analyzed = self.image.as_ref().map_or_else(Vec::new, |img| {
+            .or(Some(self.snap.snap_overlay_color));
+        let analyzed = self.image.image.as_ref().map_or_else(Vec::new, |img| {
             Self::analyze_image_for_snap_colors(&img.pixels)
         });
         let derived_choices = if analyzed.is_empty() {
@@ -130,12 +131,12 @@ impl CurcatApp {
         } else {
             0
         };
-        self.snap_overlay_choice = new_index;
-        self.snap_overlay_color = derived_choices
+        self.snap.snap_overlay_choice = new_index;
+        self.snap.snap_overlay_color = derived_choices
             .get(new_index)
             .copied()
-            .unwrap_or(self.snap_overlay_color);
-        self.snap_overlay_choices = derived_choices;
+            .unwrap_or(self.snap.snap_overlay_color);
+        self.snap.snap_overlay_choices = derived_choices;
     }
 
     pub(crate) fn analyze_image_for_snap_colors(image: &ColorImage) -> Vec<Color32> {
@@ -173,55 +174,55 @@ impl CurcatApp {
     }
 
     pub(crate) fn mark_snap_maps_dirty(&mut self) {
-        self.snap_maps_dirty = true;
-        self.snap_maps = None;
-        self.pending_snap_job = None;
+        self.snap.snap_maps_dirty = true;
+        self.snap.snap_maps = None;
+        self.snap.pending_snap_job = None;
     }
 
     pub(crate) fn start_snap_job(&mut self) {
-        if self.pending_snap_job.is_some() || !self.snap_maps_dirty {
+        if self.snap.pending_snap_job.is_some() || !self.snap.snap_maps_dirty {
             return;
         }
-        let Some(image) = &self.image else {
-            self.snap_maps_dirty = false;
-            self.snap_maps = None;
+        let Some(image) = &self.image.image else {
+            self.snap.snap_maps_dirty = false;
+            self.snap.snap_maps = None;
             return;
         };
         let color_image = image.pixels.clone();
-        let overlay_color = self.snap_target_color;
-        let tolerance = self.snap_color_tolerance;
+        let overlay_color = self.snap.snap_target_color;
+        let tolerance = self.snap.snap_color_tolerance;
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let result = SnapMapCache::build(&color_image, overlay_color, tolerance);
             let _ = tx.send(result);
         });
-        self.pending_snap_job = Some(SnapBuildJob { rx });
-        self.snap_maps_dirty = false;
+        self.snap.pending_snap_job = Some(SnapBuildJob { rx });
+        self.snap.snap_maps_dirty = false;
     }
 
     pub(crate) fn poll_snap_build_job(&mut self) {
-        let Some(job) = self.pending_snap_job.take() else {
+        let Some(job) = self.snap.pending_snap_job.take() else {
             return;
         };
         match job.rx.try_recv() {
             Ok(result) => {
-                self.snap_maps = result;
+                self.snap.snap_maps = result;
             }
             Err(TryRecvError::Empty) => {
-                self.pending_snap_job = Some(job);
+                self.snap.pending_snap_job = Some(job);
             }
             Err(TryRecvError::Disconnected) => {
-                self.snap_maps = None;
+                self.snap.snap_maps = None;
             }
         }
     }
 
     pub(crate) fn ensure_snap_maps(&mut self) {
         self.poll_snap_build_job();
-        if self.snap_maps.is_some() {
+        if self.snap.snap_maps.is_some() {
             return;
         }
-        if self.snap_maps_dirty && self.pending_snap_job.is_none() {
+        if self.snap.snap_maps_dirty && self.snap.pending_snap_job.is_none() {
             self.start_snap_job();
         }
         self.poll_snap_build_job();
@@ -233,7 +234,7 @@ impl CurcatApp {
     }
 
     pub(crate) fn compute_snap_candidate(&mut self, pixel_hint: Pos2) -> Option<Pos2> {
-        match self.point_input_mode {
+        match self.snap.point_input_mode {
             PointInputMode::Free => None,
             PointInputMode::ContrastSnap => self.find_contrast_point(pixel_hint),
             PointInputMode::CenterlineSnap => self.find_centerline_point(pixel_hint),
@@ -242,16 +243,16 @@ impl CurcatApp {
 
     pub(crate) fn find_contrast_point(&mut self, pixel_hint: Pos2) -> Option<Pos2> {
         let behavior = SnapBehavior::Contrast {
-            feature_source: self.snap_feature_source,
-            threshold_kind: self.snap_threshold_kind,
-            threshold: self.contrast_threshold,
+            feature_source: self.snap.snap_feature_source,
+            threshold_kind: self.snap.snap_threshold_kind,
+            threshold: self.snap.contrast_threshold,
         };
         self.find_snap_point(pixel_hint, behavior)
     }
 
     pub(crate) fn find_centerline_point(&mut self, pixel_hint: Pos2) -> Option<Pos2> {
         let behavior = SnapBehavior::Centerline {
-            threshold: self.centerline_threshold,
+            threshold: self.snap.centerline_threshold,
         };
         self.find_snap_point(pixel_hint, behavior)
     }
@@ -262,22 +263,22 @@ impl CurcatApp {
         behavior: SnapBehavior,
     ) -> Option<Pos2> {
         self.ensure_snap_maps();
-        if self.snap_maps.is_none()
-            && let Some(image) = &self.image
+        if self.snap.snap_maps.is_none()
+            && let Some(image) = &self.image.image
         {
             let color_image = image.pixels.clone();
-            let overlay_color = self.snap_target_color;
-            let tolerance = self.snap_color_tolerance;
-            self.snap_maps = SnapMapCache::build(&color_image, overlay_color, tolerance);
-            self.pending_snap_job = None;
-            self.snap_maps_dirty = false;
+            let overlay_color = self.snap.snap_target_color;
+            let tolerance = self.snap.snap_color_tolerance;
+            self.snap.snap_maps = SnapMapCache::build(&color_image, overlay_color, tolerance);
+            self.snap.pending_snap_job = None;
+            self.snap.snap_maps_dirty = false;
         }
-        let cache = self.snap_maps.as_ref()?;
-        cache.find_point(pixel_hint, self.contrast_search_radius, behavior)
+        let cache = self.snap.snap_maps.as_ref()?;
+        cache.find_point(pixel_hint, self.snap.contrast_search_radius, behavior)
     }
 
     pub(crate) fn sample_image_color(&self, pixel: Pos2) -> Option<Color32> {
-        let image = self.image.as_ref()?;
+        let image = self.image.image.as_ref()?;
         let [w, h] = image.pixels.size;
         if w == 0 || h == 0 {
             return None;
@@ -300,7 +301,7 @@ impl CurcatApp {
 
     pub(crate) fn pick_curve_color_at(&mut self, pixel: Pos2) {
         if let Some(color) = self.sample_image_color(pixel) {
-            self.snap_target_color = color;
+            self.snap.snap_target_color = color;
             self.mark_snap_maps_dirty();
             self.set_status(format!(
                 "Picked curve color #{:02X}{:02X}{:02X}",
@@ -317,7 +318,7 @@ impl CurcatApp {
         anchor: Option<Pos2>,
         image_size: Vec2,
     ) -> Pos2 {
-        if !self.calibration_angle_snap {
+        if !self.calibration.calibration_angle_snap {
             return candidate;
         }
         let Some(anchor) = anchor else {
