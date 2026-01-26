@@ -1528,6 +1528,7 @@ impl eframe::App for CurcatApp {
         }
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| self.ui_top(ui));
+        egui::TopBottomPanel::bottom("status").show(ctx, |ui| self.ui_status_bar(ui));
         let side_panel = match self.ui.side_position {
             SidePanelPosition::Left => egui::SidePanel::left("side"),
             SidePanelPosition::Right => egui::SidePanel::right("side"),
@@ -1537,7 +1538,6 @@ impl eframe::App for CurcatApp {
             .default_width(280.0)
             .show_animated(ctx, self.ui.side_open, |ui| self.ui_side_calibration(ui));
         egui::CentralPanel::default().show(ctx, |ui| self.ui_central_image(ctx, ui));
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| self.ui_status_bar(ui));
         self.ui_image_info_window(ctx);
         self.ui_points_info_window(ctx);
         self.ui_project_prompt(ctx);
