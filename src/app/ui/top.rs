@@ -1,6 +1,7 @@
 use super::super::CurcatApp;
 use super::common::toggle_switch;
 use super::icons;
+use egui::containers::menu::MenuButton;
 
 impl CurcatApp {
     pub(crate) fn ui_top(&mut self, ui: &mut egui::Ui) {
@@ -88,16 +89,31 @@ impl CurcatApp {
         } else {
             "Show side"
         };
-        if ui
-            .add(
-                egui::Button::new(format!("{} {side_label}", icons::ICON_SIDE_TOGGLE))
-                    .shortcut_text("Ctrl+B"),
-            )
-            .on_hover_text("Toggle side panel (Ctrl+B)")
-            .clicked()
-        {
-            self.ui.side_open = !self.ui.side_open;
-        }
+        let button = egui::Button::new(format!("{} {side_label}", icons::ICON_SIDE_TOGGLE))
+            .shortcut_text("Ctrl+B");
+        let (response, _) = MenuButton::from_button(button).ui(ui, |ui| {
+            let toggle_label = if self.ui.side_open {
+                "Hide side panel"
+            } else {
+                "Show side panel"
+            };
+            if ui.button(toggle_label).clicked() {
+                self.ui.side_open = !self.ui.side_open;
+                ui.close();
+            }
+            ui.separator();
+            ui.label("Side panel position");
+            let left_selected = self.ui.side_position == super::super::SidePanelPosition::Left;
+            if ui.selectable_label(left_selected, "Left").clicked() {
+                self.ui.side_position = super::super::SidePanelPosition::Left;
+                ui.close();
+            }
+            if ui.selectable_label(!left_selected, "Right").clicked() {
+                self.ui.side_position = super::super::SidePanelPosition::Right;
+                ui.close();
+            }
+        });
+        response.on_hover_text("Toggle side panel (Ctrl+B) and set position");
     }
 
     fn ui_stats_info_buttons(&mut self, ui: &mut egui::Ui, has_image: bool) {

@@ -156,6 +156,7 @@ impl CurcatApp {
         } else {
             "Export data to JSON (Ctrl+Shift+J)"
         };
+
         self.export_action_button(
             ui,
             can_export,
@@ -163,6 +164,29 @@ impl CurcatApp {
             "Ctrl+Shift+J",
             json_hint,
             Self::start_export_json,
+        );
+
+        let ron_hint = if !has_points {
+            "Add points before exporting to RON"
+        } else if !calibrated {
+            match self.calibration.coord_system {
+                crate::types::CoordSystem::Cartesian => {
+                    "Complete both axis calibrations before exporting to RON"
+                }
+                crate::types::CoordSystem::Polar => {
+                    "Complete origin, radius, and angle calibration before exporting to RON"
+                }
+            }
+        } else {
+            "Export data to RON (Ctrl+Shift+R)"
+        };
+        self.export_action_button(
+            ui,
+            can_export,
+            format!("{} Export RON…", icons::ICON_EXPORT_RON),
+            "Ctrl+Shift+R",
+            ron_hint,
+            Self::start_export_ron,
         );
 
         let xlsx_hint = if !has_points {

@@ -70,6 +70,12 @@ enum ZoomIntent {
     TargetPan(Vec2),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidePanelPosition {
+    Left,
+    Right,
+}
+
 enum ImageLoadRequest {
     Path(PathBuf),
     Bytes(Vec<u8>),
@@ -230,6 +236,7 @@ struct InteractionState {
 
 struct UiState {
     side_open: bool,
+    side_position: SidePanelPosition,
     info_window_open: bool,
     points_info_window_open: bool,
     last_status: Option<String>,
@@ -370,7 +377,12 @@ enum NativeDialog {
         dialog: FileDialog,
         payload: ExportPayload,
     },
+
     SaveJson {
+        dialog: FileDialog,
+        payload: ExportPayload,
+    },
+    SaveRon {
         dialog: FileDialog,
         payload: ExportPayload,
     },
@@ -678,6 +690,7 @@ impl Default for CurcatApp {
             },
             ui: UiState {
                 side_open: true,
+                side_position: SidePanelPosition::Right,
                 info_window_open: false,
                 points_info_window_open: false,
                 last_status: None,
@@ -1457,6 +1470,12 @@ impl eframe::App for CurcatApp {
             {
                 self.start_export_json();
             }
+            // Ctrl/Cmd + Shift + R: export RON
+            if self.project.active_dialog.is_none()
+                && ctx.input(|i| i.key_pressed(Key::R) && i.modifiers.command && i.modifiers.shift)
+            {
+                self.start_export_ron();
+            }
             // Ctrl/Cmd + Shift + E: export Excel
             if self.project.active_dialog.is_none()
                 && ctx.input(|i| i.key_pressed(Key::E) && i.modifiers.command && i.modifiers.shift)
@@ -1481,7 +1500,7 @@ impl eframe::App for CurcatApp {
             }
             // Ctrl/Cmd + R: reset view (zoom 100%, pan origin)
             if self.image.image.is_some()
-                && ctx.input(|i| i.key_pressed(Key::R) && i.modifiers.command)
+                && ctx.input(|i| i.key_pressed(Key::R) && i.modifiers.command && !i.modifiers.shift)
             {
                 self.reset_view();
             }
@@ -1509,7 +1528,11 @@ impl eframe::App for CurcatApp {
         }
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| self.ui_top(ui));
-        egui::SidePanel::right("side")
+        let side_panel = match self.ui.side_position {
+            SidePanelPosition::Left => egui::SidePanel::left("side"),
+            SidePanelPosition::Right => egui::SidePanel::right("side"),
+        };
+        side_panel
             .resizable(true)
             .default_width(280.0)
             .show_animated(ctx, self.ui.side_open, |ui| self.ui_side_calibration(ui));
@@ -1619,6 +1642,26 @@ impl eframe::App for CurcatApp {
                         match export::export_to_json(&path, payload) {
                             Ok(()) => self.set_status("JSON exported."),
                             Err(e) => self.set_status(format!("JSON export failed: {e}")),
+                        }
+                        close_dialog = true;
+                    } else {
+                        match dialog.state() {
+                            DialogState::Cancelled => {
+                                self.set_status("Export canceled.");
+                                close_dialog = true;
+                            }
+                            DialogState::Closed => close_dialog = true,
+                            _ => {}
+                        }
+                    }
+                }
+                NativeDialog::SaveRon { dialog, payload } => {
+                    dialog.update(ctx);
+                    if let Some(path) = dialog.take_picked() {
+                        picked_export_path = Some(path.clone());
+                        match export::export_to_ron(&path, payload) {
+                            Ok(()) => self.set_status("RON exported."),
+                            Err(e) => self.set_status(format!("RON export failed: {e}")),
                         }
                         close_dialog = true;
                     } else {

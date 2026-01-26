@@ -1,11 +1,15 @@
-//! Export helpers for writing picked points to CSV, JSON, and XLSX formats.
+//! Export helpers for writing picked points to CSV, JSON, RON, and XLSX formats.
 
 use crate::interp::XYPoint;
 use crate::types::{AngleUnit, AxisUnit, AxisValue, CoordSystem};
 use chrono::{Datelike, Duration, Timelike};
+use ron::ser::PrettyConfig;
 use rust_xlsxwriter::{ExcelDateTime, Format, Workbook, XlsxError};
+use serde::Serialize;
+use serde::ser::Serializer;
 use serde_json::{Map, Number, Value};
-use std::io::BufWriter;
+use std::collections::BTreeMap;
+use std::io::{BufWriter, Write};
 
 /// Export-ready dataset plus axis units and optional computed columns.
 #[derive(Debug, Clone)]
@@ -260,6 +264,78 @@ pub fn export_to_json(path: &std::path::Path, payload: &ExportPayload) -> anyhow
     Ok(())
 }
 
+#[derive(Debug, Serialize)]
+struct RonExport {
+    coord_system: &'static str,
+    x_unit: &'static str,
+    y_unit: &'static str,
+    x_label: String,
+    y_label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    angle_unit: Option<&'static str>,
+    points: Vec<BTreeMap<String, RonValue>>,
+}
+
+#[derive(Debug, Clone)]
+enum RonValue {
+    Number(f64),
+    String(String),
+    None,
+}
+
+impl Serialize for RonValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Number(value) => serializer.serialize_f64(*value),
+            Self::String(value) => serializer.serialize_str(value),
+            Self::None => serializer.serialize_none(),
+        }
+    }
+}
+
+/// Write the payload to RON at the provided path.
+///
+/// The output mirrors the JSON structure, using `None` for missing values.
+pub fn export_to_ron(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
+    let mut points = Vec::with_capacity(payload.row_count());
+    for row_idx in 0..payload.row_count() {
+        let mut row = BTreeMap::new();
+        let p = &payload.points[row_idx];
+        row.insert(
+            payload.x_label.clone(),
+            axis_value_to_ron(payload.x_unit, p.x, &payload.x_label)?,
+        );
+        row.insert(
+            payload.y_label.clone(),
+            axis_value_to_ron(payload.y_unit, p.y, &payload.y_label)?,
+        );
+        for col in &payload.extra_columns {
+            debug_assert_eq!(col.values.len(), payload.row_count());
+            let cell = col.values.get(row_idx).and_then(|v| *v);
+            row.insert(col.header.clone(), optional_number_ron(cell));
+        }
+        points.push(row);
+    }
+
+    let doc = RonExport {
+        coord_system: coord_system_label(payload.coord_system),
+        x_unit: axis_unit_label(payload.x_unit),
+        y_unit: axis_unit_label(payload.y_unit),
+        x_label: payload.x_label.clone(),
+        y_label: payload.y_label.clone(),
+        angle_unit: payload.angle_unit.map(angle_unit_label),
+        points,
+    };
+
+    let ron_string = ron::ser::to_string_pretty(&doc, PrettyConfig::default())?;
+    let mut writer = BufWriter::new(std::fs::File::create(path)?);
+    writer.write_all(ron_string.as_bytes())?;
+    Ok(())
+}
+
 const fn axis_unit_label(unit: AxisUnit) -> &'static str {
     match unit {
         AxisUnit::Float => "float",
@@ -300,14 +376,50 @@ fn axis_value_to_json(
     }
 }
 
+fn axis_value_to_ron(
+    unit: AxisUnit,
+    scalar_seconds: f64,
+    axis_label: &str,
+) -> anyhow::Result<RonValue> {
+    match unit {
+        AxisUnit::Float => {
+            if !scalar_seconds.is_finite() {
+                anyhow::bail!("Cannot export non-finite float value {scalar_seconds}.");
+            }
+            Ok(number_to_ron_value(scalar_seconds))
+        }
+        AxisUnit::DateTime => {
+            let value = axis_value_from_scalar_for_export(unit, scalar_seconds, axis_label)?;
+            Ok(RonValue::String(value.format()))
+        }
+    }
+}
+
 fn optional_number_json(value: Option<f64>) -> Value {
     value.map_or(Value::Null, rounded_number_json)
 }
 
+fn optional_number_ron(value: Option<f64>) -> RonValue {
+    value.map_or(RonValue::None, number_to_ron_value)
+}
+
+fn number_to_ron_value(value: f64) -> RonValue {
+    let rounded = rounded_f64(value);
+    if rounded.is_finite() {
+        RonValue::Number(rounded)
+    } else {
+        RonValue::String(format!("{rounded}"))
+    }
+}
+
 fn rounded_number_json(value: f64) -> Value {
     // Keep parity with CSV output: 6 fractional digits, rounded.
-    let rounded = (value * 1_000_000.0).round() / 1_000_000.0;
+    let rounded = rounded_f64(value);
     Number::from_f64(rounded).map_or_else(|| Value::String(format!("{rounded}")), Value::Number)
+}
+
+fn rounded_f64(value: f64) -> f64 {
+    (value * 1_000_000.0).round() / 1_000_000.0
 }
 
 fn axis_value_to_excel_datetime(value: &AxisValue) -> Option<ExcelDateTime> {
@@ -350,4 +462,115 @@ fn axis_value_from_scalar_for_xlsx(
             axis_unit_label(unit)
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ron::value::{Map, Value};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn map_value<'a>(map: &'a Map, key: &str) -> &'a Value {
+        map.get(&Value::String(key.to_string()))
+            .unwrap_or_else(|| panic!("missing key {key}"))
+    }
+
+    fn string_value<'a>(map: &'a Map, key: &str) -> &'a str {
+        match map_value(map, key) {
+            Value::String(value) => value,
+            other => panic!("expected string for {key}, got {other:?}"),
+        }
+    }
+
+    fn number_value(map: &Map, key: &str) -> f64 {
+        match map_value(map, key) {
+            Value::Number(value) => (*value).into_f64(),
+            other => panic!("expected number for {key}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn export_ron_rounds_and_preserves_none() {
+        let payload = ExportPayload {
+            points: vec![
+                XYPoint {
+                    x: 1.234_567_89,
+                    y: 2.0,
+                },
+                XYPoint { x: 3.0, y: 4.0 },
+            ],
+            x_unit: AxisUnit::Float,
+            y_unit: AxisUnit::Float,
+            x_label: "X".to_string(),
+            y_label: "Y".to_string(),
+            coord_system: CoordSystem::Cartesian,
+            angle_unit: None,
+            extra_columns: vec![ExportExtraColumn::new(
+                "extra",
+                vec![None, Some(9.876_543_21)],
+            )],
+        };
+
+        let path = std::env::temp_dir().join(format!(
+            "curcat_ron_export_test_{}.ron",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos()
+        ));
+        export_to_ron(&path, &payload).expect("RON export failed");
+        let text = std::fs::read_to_string(&path).expect("failed to read RON output");
+        let parsed: Value = ron::de::from_str(&text).expect("failed to parse RON output");
+        let _ = std::fs::remove_file(&path);
+
+        let root = match parsed {
+            Value::Map(map) => map,
+            other => panic!("expected map root, got {other:?}"),
+        };
+
+        assert_eq!(string_value(&root, "coord_system"), "cartesian");
+        assert_eq!(string_value(&root, "x_unit"), "float");
+        assert_eq!(string_value(&root, "y_unit"), "float");
+        assert_eq!(string_value(&root, "x_label"), "X");
+        assert_eq!(string_value(&root, "y_label"), "Y");
+        let angle_unit = root.get(&Value::String("angle_unit".to_string()));
+        if let Some(value) = angle_unit {
+            match value {
+                Value::Option(None) => {}
+                other => panic!("expected angle_unit None, got {other:?}"),
+            }
+        }
+
+        let points = match map_value(&root, "points") {
+            Value::Seq(values) => values,
+            other => panic!("expected points array, got {other:?}"),
+        };
+        assert_eq!(points.len(), 2);
+
+        let first = match &points[0] {
+            Value::Map(map) => map,
+            other => panic!("expected map point, got {other:?}"),
+        };
+        let second = match &points[1] {
+            Value::Map(map) => map,
+            other => panic!("expected map point, got {other:?}"),
+        };
+
+        let x0 = number_value(first, "X");
+        let y0 = number_value(first, "Y");
+        let extra0 = map_value(first, "extra");
+        assert!((x0 - 1.234_568).abs() < 1e-9);
+        assert!((y0 - 2.0).abs() < 1e-9);
+        match extra0 {
+            Value::Option(None) => {}
+            other => panic!("expected extra None, got {other:?}"),
+        }
+
+        let x1 = number_value(second, "X");
+        let y1 = number_value(second, "Y");
+        let extra1 = number_value(second, "extra");
+        assert!((x1 - 3.0).abs() < 1e-9);
+        assert!((y1 - 4.0).abs() < 1e-9);
+        assert!((extra1 - 9.876_543).abs() < 1e-9);
+    }
 }

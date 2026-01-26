@@ -86,6 +86,22 @@ impl CurcatApp {
         }
     }
 
+    pub(crate) fn start_export_ron(&mut self) {
+        match self.build_export_payload() {
+            Ok(payload) => {
+                let mut dialog = Self::make_save_dialog(
+                    "Export RON",
+                    "curve.ron",
+                    &["ron"],
+                    self.project.last_export_dir.as_deref(),
+                );
+                dialog.save_file();
+                self.project.active_dialog = Some(NativeDialog::SaveRon { dialog, payload });
+            }
+            Err(msg) => self.set_status(msg),
+        }
+    }
+
     pub(crate) fn make_open_dialog(initial_dir: Option<&Path>) -> FileDialog {
         // Keep in sync with enabled `image` crate features.
         // Add separate presets for frequent formats.

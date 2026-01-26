@@ -17,6 +17,7 @@ pub const ICON_CLEAR: &str = "✖";
 pub const ICON_UNDO: &str = "↶";
 pub const ICON_EXPORT_CSV: &str = "⇩";
 pub const ICON_EXPORT_JSON: &str = "⇩";
+pub const ICON_EXPORT_RON: &str = "⇩";
 pub const ICON_EXPORT_XLSX: &str = "⇩";
 pub const ICON_PICK_POINT: &str = "◎";
 pub const ICON_AUTO_PLACE: &str = "✚";
