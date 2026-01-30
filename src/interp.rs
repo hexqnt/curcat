@@ -371,6 +371,9 @@ mod tests {
         let points = vec![XYPoint { x: 0.0, y: 0.0 }, XYPoint { x: 10.0, y: 10.0 }];
         let out = interpolate_sorted(&points, 3, InterpAlgorithm::Linear);
         assert_eq!(out.len(), 3);
+        assert!(approx_eq(out[0].x, 0.0, 1.0e-9));
+        assert!(approx_eq(out[1].x, 5.0, 1.0e-9));
+        assert!(approx_eq(out[2].x, 10.0, 1.0e-9));
         assert!(approx_eq(out[0].y, 0.0, 1.0e-9));
         assert!(approx_eq(out[1].y, 5.0, 1.0e-9));
         assert!(approx_eq(out[2].y, 10.0, 1.0e-9));
@@ -381,6 +384,9 @@ mod tests {
         let points = vec![XYPoint { x: 0.0, y: 0.0 }, XYPoint { x: 10.0, y: 10.0 }];
         let out = interpolate_sorted(&points, 3, InterpAlgorithm::StepHold);
         assert_eq!(out.len(), 3);
+        assert!(approx_eq(out[0].x, 0.0, 1.0e-9));
+        assert!(approx_eq(out[1].x, 5.0, 1.0e-9));
+        assert!(approx_eq(out[2].x, 10.0, 1.0e-9));
         assert!(approx_eq(out[0].y, 0.0, 1.0e-9));
         assert!(approx_eq(out[1].y, 0.0, 1.0e-9));
         assert!(approx_eq(out[2].y, 10.0, 1.0e-9));

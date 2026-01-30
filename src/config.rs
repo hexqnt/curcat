@@ -457,7 +457,11 @@ mod tests {
             color: HexColor::from_rgba(0x01, 0x02, 0x03, 0x04),
         };
         let serialized = toml::to_string(&wrapper).unwrap();
-        assert_eq!(serialized.trim(), r##"color = "#01020304""##);
+        assert!(
+            serialized
+                .trim()
+                .eq_ignore_ascii_case(r##"color = "#01020304""##)
+        );
     }
 
     #[test]

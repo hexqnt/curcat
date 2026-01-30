@@ -178,3 +178,70 @@ pub fn decode_image_from_bytes(cfg: &AppConfig, bytes: Vec<u8>) -> anyhow::Resul
         .context("Failed to detect image format")?;
     decode_reader_to_color(cfg, reader)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn color_id(id: u8) -> Color32 {
+        Color32::from_rgb(id, 0, 0)
+    }
+
+    fn ids_from_image(image: &ColorImage) -> Vec<u8> {
+        image
+            .pixels
+            .iter()
+            .map(|c| c.to_srgba_unmultiplied()[0])
+            .collect()
+    }
+
+    fn test_image() -> ColorImage {
+        ColorImage::new(
+            [3, 2],
+            vec![
+                color_id(1),
+                color_id(2),
+                color_id(3),
+                color_id(4),
+                color_id(5),
+                color_id(6),
+            ],
+        )
+    }
+
+    #[test]
+    fn rotate_90_cw_maps_pixels() {
+        let ctx = Context::default();
+        let mut image = LoadedImage::from_color_image(&ctx, test_image());
+        image.rotate_90_cw();
+        assert_eq!(image.size, [2, 3]);
+        assert_eq!(ids_from_image(&image.pixels), vec![4, 1, 5, 2, 6, 3]);
+    }
+
+    #[test]
+    fn rotate_90_ccw_maps_pixels() {
+        let ctx = Context::default();
+        let mut image = LoadedImage::from_color_image(&ctx, test_image());
+        image.rotate_90_ccw();
+        assert_eq!(image.size, [2, 3]);
+        assert_eq!(ids_from_image(&image.pixels), vec![3, 6, 2, 5, 1, 4]);
+    }
+
+    #[test]
+    fn flip_horizontal_maps_pixels() {
+        let ctx = Context::default();
+        let mut image = LoadedImage::from_color_image(&ctx, test_image());
+        image.flip_horizontal();
+        assert_eq!(image.size, [3, 2]);
+        assert_eq!(ids_from_image(&image.pixels), vec![3, 2, 1, 6, 5, 4]);
+    }
+
+    #[test]
+    fn flip_vertical_maps_pixels() {
+        let ctx = Context::default();
+        let mut image = LoadedImage::from_color_image(&ctx, test_image());
+        image.flip_vertical();
+        assert_eq!(image.size, [3, 2]);
+        assert_eq!(ids_from_image(&image.pixels), vec![4, 5, 6, 1, 2, 3]);
+    }
+}
