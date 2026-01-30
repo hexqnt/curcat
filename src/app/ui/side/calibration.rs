@@ -101,6 +101,22 @@ impl PolarAxisKind {
     }
 }
 
+struct CalibrationUiState {
+    highlight_jobs: Vec<(Rect, bool)>,
+    pending_focus: Option<AxisValueField>,
+    pending_pick: Option<PickMode>,
+}
+
+impl CalibrationUiState {
+    fn new(pending_focus: Option<AxisValueField>) -> Self {
+        Self {
+            highlight_jobs: Vec::new(),
+            pending_focus,
+            pending_pick: None,
+        }
+    }
+}
+
 impl CurcatApp {
     pub(crate) fn ui_side_calibration(&mut self, ui: &mut egui::Ui) {
         self.ui_point_input_section(ui);
@@ -275,6 +291,34 @@ impl CurcatApp {
         AxisValue::Float(value).format()
     }
 
+    fn finish_calibration_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: CalibrationUiState,
+        mapping_ready: bool,
+        ok_label: &str,
+        ok_hover: &str,
+        warn_label: &str,
+        warn_hover: &str,
+    ) {
+        if let Some(mode) = state.pending_pick {
+            self.begin_pick_mode(mode);
+        }
+        self.calibration.pending_value_focus = state.pending_focus;
+
+        for (rect, active) in state.highlight_jobs {
+            self.paint_attention_outline_if(ui, rect, active);
+        }
+
+        if mapping_ready {
+            ui.label(RichText::new(ok_label).color(Color32::GREEN))
+                .on_hover_text(ok_hover);
+        } else {
+            ui.label(RichText::new(warn_label).color(Color32::GRAY))
+                .on_hover_text(warn_hover);
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(crate) fn axis_cal_group(&mut self, ui: &mut egui::Ui, is_x: bool) {
         let (label, p1_mode, p2_mode, p1_name, p2_name) = if is_x {
@@ -287,9 +331,8 @@ impl CurcatApp {
             .default_open(true)
             .show(ui, |ui| {
                 ui.push_id(label, |ui| {
-                    let mut highlight_jobs: Vec<(Rect, bool)> = Vec::new();
-                    let mut pending_focus = self.calibration.pending_value_focus;
-                    let mut pending_pick: Option<PickMode> = None;
+                    let mut ui_state =
+                        CalibrationUiState::new(self.calibration.pending_value_focus);
                     let mapping_ready;
                     {
                         let cal = if is_x {
@@ -365,7 +408,7 @@ impl CurcatApp {
                             } else {
                                 AxisValueField::Y1
                             },
-                            &mut pending_focus,
+                            &mut ui_state.pending_focus,
                             p1_mode,
                             cal.p1,
                         );
@@ -379,48 +422,39 @@ impl CurcatApp {
                             } else {
                                 AxisValueField::Y2
                             },
-                            &mut pending_focus,
+                            &mut ui_state.pending_focus,
                             p2_mode,
                             cal.p2,
                         );
                         if let Some(mode) = p1_row.requested_pick.or(p2_row.requested_pick) {
-                            pending_pick = Some(mode);
+                            ui_state.pending_pick = Some(mode);
                         }
 
                         let (p1_value_invalid, p2_value_invalid) = cal.value_invalid_flags();
                         if let Some(rect) = p1_row.value_rect {
-                            highlight_jobs.push((rect, p1_value_invalid));
+                            ui_state.highlight_jobs.push((rect, p1_value_invalid));
                         }
                         if let Some(rect) = p2_row.value_rect {
-                            highlight_jobs.push((rect, p2_value_invalid));
+                            ui_state.highlight_jobs.push((rect, p2_value_invalid));
                         }
                         if let Some(rect) = p1_row.pick_rect {
-                            highlight_jobs.push((rect, cal.p1.is_none()));
+                            ui_state.highlight_jobs.push((rect, cal.p1.is_none()));
                         }
                         if let Some(rect) = p2_row.pick_rect {
-                            highlight_jobs.push((rect, cal.p2.is_none()));
+                            ui_state.highlight_jobs.push((rect, cal.p2.is_none()));
                         }
 
                         mapping_ready = cal.mapping().is_some();
                     }
-                    if let Some(mode) = pending_pick {
-                        self.begin_pick_mode(mode);
-                    }
-                    self.calibration.pending_value_focus = pending_focus;
-
-                    for (rect, active) in highlight_jobs {
-                        self.paint_attention_outline_if(ui, rect, active);
-                    }
-
-                    if mapping_ready {
-                        ui.label(RichText::new("Mapping: OK").color(Color32::GREEN))
-                            .on_hover_text("Calibration complete — you can pick points and export");
-                    } else {
-                        ui.label(
-                            RichText::new("Mapping: incomplete or invalid").color(Color32::GRAY),
-                        )
-                        .on_hover_text("Provide two points and valid values to calibrate");
-                    }
+                    self.finish_calibration_panel(
+                        ui,
+                        ui_state,
+                        mapping_ready,
+                        "Mapping: OK",
+                        "Calibration complete — you can pick points and export",
+                        "Mapping: incomplete or invalid",
+                        "Provide two points and valid values to calibrate",
+                    );
                 });
             });
         collapsing.header_response.on_hover_text(if is_x {
@@ -490,9 +524,8 @@ impl CurcatApp {
             .default_open(true)
             .show(ui, |ui| {
                 ui.push_id(label, |ui| {
-                    let mut highlight_jobs: Vec<(Rect, bool)> = Vec::new();
-                    let mut pending_focus = self.calibration.pending_value_focus;
-                    let mut pending_pick: Option<PickMode> = None;
+                    let mut ui_state =
+                        CalibrationUiState::new(self.calibration.pending_value_focus);
 
                     let cal = match kind {
                         PolarAxisKind::Radius => &mut self.calibration.polar_cal.radius,
@@ -563,7 +596,7 @@ impl CurcatApp {
                         AxisUnit::Float,
                         &mut cal.v1_text,
                         p1_field,
-                        &mut pending_focus,
+                        &mut ui_state.pending_focus,
                         p1_mode,
                         cal.p1,
                     );
@@ -573,26 +606,26 @@ impl CurcatApp {
                         AxisUnit::Float,
                         &mut cal.v2_text,
                         p2_field,
-                        &mut pending_focus,
+                        &mut ui_state.pending_focus,
                         p2_mode,
                         cal.p2,
                     );
                     if let Some(mode) = p1_row.requested_pick.or(p2_row.requested_pick) {
-                        pending_pick = Some(mode);
+                        ui_state.pending_pick = Some(mode);
                     }
 
                     let (p1_invalid, p2_invalid) = cal.value_invalid_flags();
                     if let Some(rect) = p1_row.value_rect {
-                        highlight_jobs.push((rect, p1_invalid));
+                        ui_state.highlight_jobs.push((rect, p1_invalid));
                     }
                     if let Some(rect) = p2_row.value_rect {
-                        highlight_jobs.push((rect, p2_invalid));
+                        ui_state.highlight_jobs.push((rect, p2_invalid));
                     }
                     if let Some(rect) = p1_row.pick_rect {
-                        highlight_jobs.push((rect, cal.p1.is_none()));
+                        ui_state.highlight_jobs.push((rect, cal.p1.is_none()));
                     }
                     if let Some(rect) = p2_row.pick_rect {
-                        highlight_jobs.push((rect, cal.p2.is_none()));
+                        ui_state.highlight_jobs.push((rect, cal.p2.is_none()));
                     }
 
                     let origin_ready = self.calibration.polar_cal.origin.is_some();
@@ -600,24 +633,15 @@ impl CurcatApp {
                     let points_ready = cal.p1.is_some() && cal.p2.is_some();
                     let mapping_ready = origin_ready && values_ready && points_ready;
 
-                    if let Some(mode) = pending_pick {
-                        self.begin_pick_mode(mode);
-                    }
-                    self.calibration.pending_value_focus = pending_focus;
-
-                    for (rect, active) in highlight_jobs {
-                        self.paint_attention_outline_if(ui, rect, active);
-                    }
-
-                    if mapping_ready {
-                        ui.label(RichText::new("Mapping: OK").color(Color32::GREEN))
-                            .on_hover_text("Calibration complete for this axis");
-                    } else {
-                        ui.label(
-                            RichText::new("Mapping: incomplete or invalid").color(Color32::GRAY),
-                        )
-                        .on_hover_text("Provide origin, two points, and valid values");
-                    }
+                    self.finish_calibration_panel(
+                        ui,
+                        ui_state,
+                        mapping_ready,
+                        "Mapping: OK",
+                        "Calibration complete for this axis",
+                        "Mapping: incomplete or invalid",
+                        "Provide origin, two points, and valid values",
+                    );
                 });
             });
         collapsing.header_response.on_hover_text(match kind {

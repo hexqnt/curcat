@@ -6,6 +6,21 @@ use rayon::prelude::*;
 use std::io::{BufRead, Cursor, Read, Seek};
 use std::path::Path;
 
+/// Minimum pixel count before parallelizing per-pixel transforms.
+const PARALLEL_PIXEL_THRESHOLD: usize = 262_144; // 512x512
+
+fn map_pixels(total_pixels: usize, f: impl Fn(usize) -> Color32 + Sync + Send) -> Vec<Color32> {
+    if total_pixels >= PARALLEL_PIXEL_THRESHOLD {
+        (0..total_pixels).into_par_iter().map(f).collect()
+    } else {
+        let mut out = Vec::with_capacity(total_pixels);
+        for idx in 0..total_pixels {
+            out.push(f(idx));
+        }
+        out
+    }
+}
+
 /// Image data plus the egui texture handle that mirrors its pixels.
 pub struct LoadedImage {
     pub size: [usize; 2],
@@ -39,17 +54,15 @@ impl LoadedImage {
         }
         let new_width = height;
         let total_pixels = width * height;
-        let rotated_pixels: Vec<Color32> = (0..total_pixels)
-            .into_par_iter()
-            .map(|idx| {
-                let dx = idx % new_width;
-                let dy = idx / new_width;
-                let src_x = dy;
-                let src_y = new_width - 1 - dx;
-                let src_idx = src_y * width + src_x;
-                self.pixels.pixels[src_idx]
-            })
-            .collect();
+        let pixels = &self.pixels.pixels;
+        let rotated_pixels = map_pixels(total_pixels, |idx| {
+            let dx = idx % new_width;
+            let dy = idx / new_width;
+            let src_x = dy;
+            let src_y = new_width - 1 - dx;
+            let src_idx = src_y * width + src_x;
+            pixels[src_idx]
+        });
         self.pixels = ColorImage::new([height, width], rotated_pixels);
         self.refresh_texture();
     }
@@ -62,17 +75,15 @@ impl LoadedImage {
         }
         let new_width = height;
         let total_pixels = width * height;
-        let rotated_pixels: Vec<Color32> = (0..total_pixels)
-            .into_par_iter()
-            .map(|idx| {
-                let dx = idx % new_width;
-                let dy = idx / new_width;
-                let src_y = dx;
-                let src_x = width - 1 - dy;
-                let src_idx = src_y * width + src_x;
-                self.pixels.pixels[src_idx]
-            })
-            .collect();
+        let pixels = &self.pixels.pixels;
+        let rotated_pixels = map_pixels(total_pixels, |idx| {
+            let dx = idx % new_width;
+            let dy = idx / new_width;
+            let src_y = dx;
+            let src_x = width - 1 - dy;
+            let src_idx = src_y * width + src_x;
+            pixels[src_idx]
+        });
         self.pixels = ColorImage::new([height, width], rotated_pixels);
         self.refresh_texture();
     }
@@ -84,16 +95,14 @@ impl LoadedImage {
             return;
         }
         let total_pixels = width * height;
-        let flipped_pixels: Vec<Color32> = (0..total_pixels)
-            .into_par_iter()
-            .map(|idx| {
-                let x = idx % width;
-                let y = idx / width;
-                let src_x = width - 1 - x;
-                let src_idx = y * width + src_x;
-                self.pixels.pixels[src_idx]
-            })
-            .collect();
+        let pixels = &self.pixels.pixels;
+        let flipped_pixels = map_pixels(total_pixels, |idx| {
+            let x = idx % width;
+            let y = idx / width;
+            let src_x = width - 1 - x;
+            let src_idx = y * width + src_x;
+            pixels[src_idx]
+        });
         self.pixels = ColorImage::new([width, height], flipped_pixels);
         self.refresh_texture();
     }
@@ -105,16 +114,14 @@ impl LoadedImage {
             return;
         }
         let total_pixels = width * height;
-        let flipped_pixels: Vec<Color32> = (0..total_pixels)
-            .into_par_iter()
-            .map(|idx| {
-                let x = idx % width;
-                let y = idx / width;
-                let src_y = height - 1 - y;
-                let src_idx = src_y * width + x;
-                self.pixels.pixels[src_idx]
-            })
-            .collect();
+        let pixels = &self.pixels.pixels;
+        let flipped_pixels = map_pixels(total_pixels, |idx| {
+            let x = idx % width;
+            let y = idx / width;
+            let src_y = height - 1 - y;
+            let src_idx = src_y * width + x;
+            pixels[src_idx]
+        });
         self.pixels = ColorImage::new([width, height], flipped_pixels);
         self.refresh_texture();
     }

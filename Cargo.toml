@@ -43,7 +43,7 @@ serde_json = "1.0"
 ron = "0.12"
 toml = "0.9"
 directories = "6.0"
-rust_xlsxwriter = { version = "0.92", features = ["ryu"] }
+rust_xlsxwriter = { version = "0.93", features = ["ryu"] }
 egui-file-dialog = { version = "0.12" }
 rayon = "1.11"
 bincode = { version = "2.0", features = ["serde"] }
