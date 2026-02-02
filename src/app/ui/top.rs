@@ -126,6 +126,24 @@ impl CurcatApp {
         if stats_resp.clicked() {
             self.ui.points_info_window_open = true;
         }
+        let filters_resp = ui
+            .add(
+                egui::Button::new(format!("{} Filters", icons::ICON_FILTERS))
+                    .shortcut_text("Ctrl+Shift+F"),
+            )
+            .on_hover_text("Show image filters (Ctrl+Shift+F)");
+        if filters_resp.clicked() {
+            self.ui.image_filters_window_open = true;
+        }
+        let trace_resp = ui
+            .add(
+                egui::Button::new(format!("{} Auto-trace", icons::ICON_AUTO_TRACE))
+                    .shortcut_text("Ctrl+Shift+T"),
+            )
+            .on_hover_text("Show auto-trace controls (Ctrl+Shift+T)");
+        if trace_resp.clicked() {
+            self.ui.auto_trace_window_open = true;
+        }
         let info_resp = ui
             .add_enabled(
                 has_image,
@@ -139,19 +157,16 @@ impl CurcatApp {
     }
 
     fn ui_transform_buttons(&mut self, ui: &mut egui::Ui, has_image: bool) {
-        let warn_hover = |ui: &mut egui::Ui, action: &str| {
-            ui.colored_label(
-                egui::Color32::from_rgb(220, 80, 80),
-                format!("{} Clears ALL points and calibration", icons::ICON_WARN),
-            );
+        let info_hover = |ui: &mut egui::Ui, action: &str| {
+            ui.label("Transforms image, points, and calibration together.");
             ui.label(action);
         };
-        let warn_button = |ui: &mut egui::Ui, label: String, action: &str| {
+        let info_button = |ui: &mut egui::Ui, label: String, action: &str| {
             ui.add_enabled(has_image, egui::Button::new(label))
-                .on_hover_ui(|ui| warn_hover(ui, action))
+                .on_hover_ui(|ui| info_hover(ui, action))
         };
 
-        if warn_button(
+        if info_button(
             ui,
             format!("{} 90°", icons::ICON_ROTATE_CCW),
             "Rotate 90° counter-clockwise.",
@@ -160,7 +175,7 @@ impl CurcatApp {
         {
             self.rotate_image(false);
         }
-        if warn_button(
+        if info_button(
             ui,
             format!("{} 90°", icons::ICON_ROTATE_CW),
             "Rotate 90° clockwise.",
@@ -169,7 +184,7 @@ impl CurcatApp {
         {
             self.rotate_image(true);
         }
-        if warn_button(
+        if info_button(
             ui,
             format!("{} Flip H", icons::ICON_FLIP_H),
             "Flip horizontally.",
@@ -178,7 +193,7 @@ impl CurcatApp {
         {
             self.flip_image(true);
         }
-        if warn_button(
+        if info_button(
             ui,
             format!("{} Flip V", icons::ICON_FLIP_V),
             "Flip vertically.",

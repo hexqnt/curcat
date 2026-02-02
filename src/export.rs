@@ -47,6 +47,45 @@ impl ExportPayload {
     }
 }
 
+/// Compute per-point distances to the previous point (first entry is `None`).
+pub fn sequential_distances(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
+    let len = raw_points.len();
+    let mut values = vec![None; len];
+    for i in 1..len {
+        let prev = &raw_points[i - 1];
+        let curr = &raw_points[i];
+        let dx = curr.x - prev.x;
+        let dy = curr.y - prev.y;
+        values[i] = Some(dx.hypot(dy));
+    }
+    values
+}
+
+/// Compute turning angles (degrees) at each interior point.
+pub fn turning_angles(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
+    let len = raw_points.len();
+    let mut values = vec![None; len];
+    if len < 3 {
+        return values;
+    }
+    for i in 1..(len - 1) {
+        let prev = &raw_points[i - 1];
+        let curr = &raw_points[i];
+        let next = &raw_points[i + 1];
+        let v1 = (curr.x - prev.x, curr.y - prev.y);
+        let v2 = (next.x - curr.x, next.y - curr.y);
+        let mag1 = v1.0.hypot(v1.1);
+        let mag2 = v2.0.hypot(v2.1);
+        if mag1 <= f64::EPSILON || mag2 <= f64::EPSILON {
+            continue;
+        }
+        let dot = v1.0 * v2.0 + v1.1 * v2.1;
+        let cos_theta = (dot / (mag1 * mag2)).clamp(-1.0, 1.0);
+        values[i] = Some(cos_theta.acos().to_degrees());
+    }
+    values
+}
+
 const XLSX_MAX_ROWS: u32 = 1_048_576;
 const XLSX_MAX_COLS: u16 = 16_384;
 

@@ -2,34 +2,41 @@
 
 use crate::config::{AppConfig, AutoPlaceConfig};
 use crate::export::{self, ExportPayload};
-use crate::image_info::{
-    ImageMeta, describe_aspect_ratio, format_system_time, human_readable_bytes, total_pixel_count,
+use crate::image::{
+    ImageFilters, ImageMeta, LoadedImage, apply_image_filters, describe_aspect_ratio,
+    flip_color_image_horizontal, flip_color_image_vertical, format_system_time,
+    human_readable_bytes, rotate_color_image_ccw, rotate_color_image_cw, total_pixel_count,
 };
-
-use crate::image_util::LoadedImage;
 use crate::interp::{InterpAlgorithm, XYPoint};
-use crate::project::{self, ImageTransformOp, ImageTransformRecord};
+use crate::project::{ImageTransformOp, ImageTransformRecord};
 use crate::snap::{SnapFeatureSource, SnapMapCache, SnapThresholdKind};
 use crate::types::{
     AngleDirection, AngleUnit, AxisMapping, AxisUnit, AxisValue, CoordSystem, PolarMapping,
     ScaleKind, parse_axis_value,
 };
-use egui::{Color32, ColorImage, Context, Key, Pos2, Vec2};
+use egui::{Color32, ColorImage, Context, Key, Pos2, Vec2, pos2};
 
 use egui_file_dialog::{DialogState, FileDialog};
 use std::{
-    convert::TryFrom,
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver, TryRecvError},
+    sync::mpsc::Receiver,
     time::{Duration, Instant, SystemTime},
 };
 
+mod auto_trace;
 mod clipboard;
 mod export_helpers;
 mod image_loader;
+mod point_stats;
 mod points;
+mod project_state;
 mod snap_helpers;
 mod ui;
+mod util;
+
+pub(crate) use auto_trace::{AutoTraceConfig, AutoTraceDirection};
+use project_state::{PendingProjectSave, ProjectApplyPlan, ProjectLoadPrompt};
+pub(crate) use util::safe_usize_to_f32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PickMode {
@@ -44,6 +51,7 @@ enum PickMode {
     A1,
     A2,
     CurveColor,
+    AutoTrace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,28 +99,6 @@ enum ImageLoadResult {
     Error(String),
 }
 
-#[derive(Debug)]
-struct ProjectSaveRequest {
-    target_path: PathBuf,
-    image_path: PathBuf,
-    transform: ImageTransformRecord,
-    calibration: project::CalibrationRecord,
-    points: Vec<project::PointRecord>,
-    zoom: f32,
-    pan: [f32; 2],
-    title: Option<String>,
-    description: Option<String>,
-}
-
-struct PendingProjectSave {
-    rx: Receiver<ProjectSaveResult>,
-}
-
-enum ProjectSaveResult {
-    Success,
-    Error(String),
-}
-
 #[derive(Debug, Default)]
 struct AutoPlaceState {
     hold_started_at: Option<Instant>,
@@ -132,22 +118,10 @@ struct PrimaryPressInfo {
     shift_down: bool,
 }
 
-#[derive(Debug)]
-struct ProjectApplyPlan {
-    payload: project::ProjectPayload,
-    image: project::ResolvedImage,
-    project_path: PathBuf,
-    version: u32,
-}
-
-#[derive(Debug)]
-struct ProjectLoadPrompt {
-    warnings: Vec<project::ProjectWarning>,
-    plan: ProjectApplyPlan,
-}
-
 struct ImageState {
     image: Option<LoadedImage>,
+    base_pixels: Option<ColorImage>,
+    filters: ImageFilters,
     meta: Option<ImageMeta>,
     transform: ImageTransformRecord,
     pan: Vec2,
@@ -230,6 +204,7 @@ struct ExportState {
 struct InteractionState {
     auto_place_cfg: AutoPlaceConfig,
     auto_place_state: AutoPlaceState,
+    auto_trace_cfg: AutoTraceConfig,
     primary_press: Option<PrimaryPressInfo>,
     middle_pan_enabled: bool,
 }
@@ -239,6 +214,8 @@ struct UiState {
     side_position: SidePanelPosition,
     info_window_open: bool,
     points_info_window_open: bool,
+    image_filters_window_open: bool,
+    auto_trace_window_open: bool,
     last_status: Option<String>,
 }
 
@@ -288,54 +265,6 @@ enum PointInputMode {
     Free,
     ContrastSnap,
     CenterlineSnap,
-}
-
-fn safe_usize_to_f32(value: usize) -> f32 {
-    let clamped = value.min(u32::MAX as usize);
-    let as_u32 = u32::try_from(clamped).unwrap_or(u32::MAX);
-    #[allow(clippy::cast_precision_loss)]
-    {
-        as_u32 as f32
-    }
-}
-
-fn rounded_u8(value: f32) -> u8 {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    {
-        value.round().clamp(0.0, f32::from(u8::MAX)) as u8
-    }
-}
-
-fn perform_project_save(request: ProjectSaveRequest) -> Result<(), String> {
-    let ProjectSaveRequest {
-        target_path,
-        image_path,
-        transform,
-        calibration,
-        points,
-        zoom,
-        pan,
-        title,
-        description,
-    } = request;
-    let absolute_image_path = std::fs::canonicalize(&image_path).unwrap_or(image_path);
-    let image_crc32 =
-        project::compute_image_crc32(&absolute_image_path).map_err(|err| err.to_string())?;
-    let relative_image_path = project::make_relative_image_path(&target_path, &absolute_image_path)
-        .or_else(|| absolute_image_path.file_name().map(PathBuf::from));
-    let payload = project::ProjectPayload {
-        absolute_image_path,
-        relative_image_path,
-        image_crc32,
-        transform,
-        calibration,
-        points,
-        zoom,
-        pan,
-        title,
-        description,
-    };
-    project::save_project(&target_path, &payload).map_err(|err| err.to_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -575,6 +504,8 @@ impl Default for CurcatApp {
             config,
             image: ImageState {
                 image: None,
+                base_pixels: None,
+                filters: ImageFilters::default(),
                 meta: None,
                 transform: ImageTransformRecord::identity(),
                 pan: Vec2::ZERO,
@@ -685,6 +616,7 @@ impl Default for CurcatApp {
             interaction: InteractionState {
                 auto_place_cfg,
                 auto_place_state: AutoPlaceState::default(),
+                auto_trace_cfg: AutoTraceConfig::default(),
                 primary_press: None,
                 middle_pan_enabled: false,
             },
@@ -693,6 +625,8 @@ impl Default for CurcatApp {
                 side_position: SidePanelPosition::Right,
                 info_window_open: false,
                 points_info_window_open: false,
+                image_filters_window_open: false,
+                auto_trace_window_open: false,
                 last_status: None,
             },
         }
@@ -744,6 +678,7 @@ impl CurcatApp {
             PickMode::A1 => Some("Picking A1"),
             PickMode::A2 => Some("Picking A2"),
             PickMode::CurveColor => Some("Pick curve color"),
+            PickMode::AutoTrace => Some("Auto-trace: click start point"),
             PickMode::None => None,
         }
     }
@@ -771,7 +706,30 @@ impl CurcatApp {
         self.calibration.dragging_handle = None;
     }
 
-    fn reset_after_image_transform(&mut self) {
+    fn update_filtered_texture(&mut self) {
+        let Some(base) = self.image.base_pixels.as_ref() else {
+            return;
+        };
+        let Some(image) = self.image.image.as_mut() else {
+            return;
+        };
+        let filtered = apply_image_filters(base, self.image.filters);
+        image.replace_pixels(filtered);
+    }
+
+    fn after_image_pixels_changed(&mut self) {
+        self.mark_snap_maps_dirty();
+        self.refresh_snap_overlay_palette();
+        self.interaction.auto_place_state = AutoPlaceState::default();
+        self.interaction.primary_press = None;
+    }
+
+    fn apply_filters_to_loaded_image(&mut self) {
+        self.update_filtered_texture();
+        self.after_image_pixels_changed();
+    }
+
+    fn reset_after_new_image(&mut self) {
         self.reset_calibrations();
         self.points.points.clear();
         self.mark_points_dirty();
@@ -779,15 +737,27 @@ impl CurcatApp {
         self.image.touch_pan_active = false;
         self.image.touch_pan_last = None;
         self.image.pan = Vec2::ZERO;
-        self.mark_snap_maps_dirty();
-        self.refresh_snap_overlay_palette();
-        self.interaction.auto_place_state = AutoPlaceState::default();
-        self.interaction.primary_press = None;
+        self.after_image_pixels_changed();
         self.image.zoom_target = self.image.zoom;
         self.image.zoom_intent = ZoomIntent::TargetPan(self.image.pan);
     }
 
-    fn set_loaded_image(&mut self, image: LoadedImage, meta: Option<ImageMeta>) {
+    fn reset_after_image_transform(&mut self) {
+        self.calibration.dragging_handle = None;
+        self.image.touch_pan_active = false;
+        self.image.touch_pan_last = None;
+        self.after_image_pixels_changed();
+        self.image.zoom_target = self.image.zoom;
+        self.image.zoom_intent = ZoomIntent::TargetPan(self.image.pan);
+    }
+
+    fn set_loaded_image(&mut self, mut image: LoadedImage, meta: Option<ImageMeta>) {
+        self.image.base_pixels = Some(image.pixels.clone());
+        if !self.image.filters.is_identity() {
+            let filtered =
+                apply_image_filters(self.image.base_pixels.as_ref().unwrap(), self.image.filters);
+            image.replace_pixels(filtered);
+        }
         self.image.image = Some(image);
         self.image.meta = meta;
         self.image.transform = ImageTransformRecord::identity();
@@ -797,24 +767,68 @@ impl CurcatApp {
         self.image.zoom = 1.0;
         self.image.zoom_target = 1.0;
         self.image.zoom_intent = ZoomIntent::TargetPan(self.image.pan);
-        self.reset_after_image_transform();
+        self.reset_after_new_image();
     }
 
     fn apply_image_transform(&mut self, op: ImageTransformOp, status: Option<&str>) {
-        let Some(img) = self.image.image.as_mut() else {
+        let Some(base) = self.image.base_pixels.as_mut() else {
             return;
         };
+        let old_size = base.size;
         match op {
-            ImageTransformOp::RotateCw => img.rotate_90_cw(),
-            ImageTransformOp::RotateCcw => img.rotate_90_ccw(),
-            ImageTransformOp::FlipHorizontal => img.flip_horizontal(),
-            ImageTransformOp::FlipVertical => img.flip_vertical(),
+            ImageTransformOp::RotateCw => rotate_color_image_cw(base),
+            ImageTransformOp::RotateCcw => rotate_color_image_ccw(base),
+            ImageTransformOp::FlipHorizontal => flip_color_image_horizontal(base),
+            ImageTransformOp::FlipVertical => flip_color_image_vertical(base),
         }
+        let new_size = base.size;
+        self.transform_after_image_op(op, old_size, new_size);
+        self.update_filtered_texture();
         self.image.transform.apply(op);
         if let Some(msg) = status {
             self.set_status(msg);
         }
         self.reset_after_image_transform();
+    }
+
+    fn transform_after_image_op(
+        &mut self,
+        op: ImageTransformOp,
+        old_size: [usize; 2],
+        new_size: [usize; 2],
+    ) {
+        let map_pos = |pos: Pos2| -> Pos2 {
+            let max_x = old_size[0].saturating_sub(1) as f32;
+            let max_y = old_size[1].saturating_sub(1) as f32;
+            let clamped = pos2(pos.x.clamp(0.0, max_x), pos.y.clamp(0.0, max_y));
+            let mapped = match op {
+                ImageTransformOp::RotateCw => pos2(max_y - clamped.y, clamped.x),
+                ImageTransformOp::RotateCcw => pos2(clamped.y, max_x - clamped.x),
+                ImageTransformOp::FlipHorizontal => pos2(max_x - clamped.x, clamped.y),
+                ImageTransformOp::FlipVertical => pos2(clamped.x, max_y - clamped.y),
+            };
+            let new_max_x = new_size[0].saturating_sub(1) as f32;
+            let new_max_y = new_size[1].saturating_sub(1) as f32;
+            pos2(
+                mapped.x.clamp(0.0, new_max_x),
+                mapped.y.clamp(0.0, new_max_y),
+            )
+        };
+
+        self.calibration.cal_x.p1 = self.calibration.cal_x.p1.map(map_pos);
+        self.calibration.cal_x.p2 = self.calibration.cal_x.p2.map(map_pos);
+        self.calibration.cal_y.p1 = self.calibration.cal_y.p1.map(map_pos);
+        self.calibration.cal_y.p2 = self.calibration.cal_y.p2.map(map_pos);
+        self.calibration.polar_cal.origin = self.calibration.polar_cal.origin.map(map_pos);
+        self.calibration.polar_cal.radius.p1 = self.calibration.polar_cal.radius.p1.map(map_pos);
+        self.calibration.polar_cal.radius.p2 = self.calibration.polar_cal.radius.p2.map(map_pos);
+        self.calibration.polar_cal.angle.p1 = self.calibration.polar_cal.angle.p1.map(map_pos);
+        self.calibration.polar_cal.angle.p2 = self.calibration.polar_cal.angle.p2.map(map_pos);
+
+        for point in &mut self.points.points {
+            point.pixel = map_pos(point.pixel);
+        }
+        self.mark_points_dirty();
     }
 
     fn rotate_image(&mut self, clockwise: bool) {
@@ -1090,338 +1104,7 @@ enum DragTarget {
     PolarA2,
 }
 
-impl CurcatApp {
-    fn axis_to_record(cal: &AxisCalUi) -> project::AxisCalibrationRecord {
-        project::AxisCalibrationRecord {
-            unit: cal.unit,
-            scale: cal.scale,
-            p1: cal.p1.map(|p| [p.x, p.y]),
-            p2: cal.p2.map(|p| [p.x, p.y]),
-            v1_text: cal.v1_text.clone(),
-            v2_text: cal.v2_text.clone(),
-        }
-    }
-
-    fn axis_from_record(record: &project::AxisCalibrationRecord) -> AxisCalUi {
-        AxisCalUi {
-            unit: record.unit,
-            scale: record.scale,
-            p1: record.p1.map(|p| Pos2::new(p[0], p[1])),
-            p2: record.p2.map(|p| Pos2::new(p[0], p[1])),
-            v1_text: record.v1_text.clone(),
-            v2_text: record.v2_text.clone(),
-        }
-    }
-
-    fn polar_to_record(polar: &PolarCalUi) -> project::PolarCalibrationRecord {
-        project::PolarCalibrationRecord {
-            origin: polar.origin.map(|p| [p.x, p.y]),
-            radius: Self::axis_to_record(&polar.radius),
-            angle: Self::axis_to_record(&polar.angle),
-            angle_unit: polar.angle_unit,
-            angle_direction: polar.angle_direction,
-        }
-    }
-
-    fn polar_from_record(record: &project::PolarCalibrationRecord) -> PolarCalUi {
-        let mut radius = Self::axis_from_record(&record.radius);
-        let mut angle = Self::axis_from_record(&record.angle);
-        radius.unit = AxisUnit::Float;
-        angle.unit = AxisUnit::Float;
-        angle.scale = ScaleKind::Linear;
-        PolarCalUi {
-            origin: record.origin.map(|p| Pos2::new(p[0], p[1])),
-            radius,
-            angle,
-            angle_unit: record.angle_unit,
-            angle_direction: record.angle_direction,
-        }
-    }
-
-    fn build_project_save_request(
-        &mut self,
-        target_path: &Path,
-    ) -> anyhow::Result<ProjectSaveRequest> {
-        let Some(image_path) = self
-            .image
-            .meta
-            .as_ref()
-            .and_then(|m| m.path().map(Path::to_path_buf))
-        else {
-            anyhow::bail!("Cannot save project: image was not loaded from a file");
-        };
-
-        let (x_mapping, y_mapping) = self.cartesian_mappings();
-        let polar_mapping = self.polar_mapping();
-        self.ensure_point_numeric_cache(
-            self.calibration.coord_system,
-            x_mapping.as_ref(),
-            y_mapping.as_ref(),
-            polar_mapping.as_ref(),
-        );
-
-        let points = self
-            .points
-            .points
-            .iter()
-            .map(|p| project::PointRecord {
-                pixel: [p.pixel.x, p.pixel.y],
-                x_numeric: p.x_numeric,
-                y_numeric: p.y_numeric,
-            })
-            .collect();
-
-        let calibration = project::CalibrationRecord {
-            coord_system: self.calibration.coord_system,
-            x: Self::axis_to_record(&self.calibration.cal_x),
-            y: Self::axis_to_record(&self.calibration.cal_y),
-            polar: Self::polar_to_record(&self.calibration.polar_cal),
-            calibration_angle_snap: self.calibration.calibration_angle_snap,
-            show_calibration_segments: self.calibration.show_calibration_segments,
-        };
-
-        Ok(ProjectSaveRequest {
-            target_path: target_path.to_path_buf(),
-            image_path,
-            transform: self.image.transform,
-            calibration,
-            points,
-            zoom: self.image.zoom,
-            pan: [self.image.pan.x, self.image.pan.y],
-            title: self.project.title.clone(),
-            description: self.project.description.clone(),
-        })
-    }
-
-    fn handle_project_save(&mut self, path: &Path) {
-        if self.project.pending_project_save.is_some() {
-            self.set_status("Project save already in progress.");
-            return;
-        }
-        self.project.last_project_path = Some(path.to_path_buf());
-        self.project.last_project_dir = path.parent().map(Path::to_path_buf);
-        match self.build_project_save_request(path) {
-            Ok(request) => self.start_project_save_job(request),
-            Err(err) => self.set_status(format!("Project save failed: {err}")),
-        }
-    }
-
-    fn start_project_save_job(&mut self, request: ProjectSaveRequest) {
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let result = match perform_project_save(request) {
-                Ok(()) => ProjectSaveResult::Success,
-                Err(err) => ProjectSaveResult::Error(err),
-            };
-            let _ = tx.send(result);
-        });
-        self.project.pending_project_save = Some(PendingProjectSave { rx });
-        self.set_status("Saving project…");
-    }
-
-    fn poll_project_save_job(&mut self) {
-        let Some(job) = self.project.pending_project_save.take() else {
-            return;
-        };
-        match job.rx.try_recv() {
-            Ok(ProjectSaveResult::Success) => {
-                self.set_status("Project saved.");
-            }
-            Ok(ProjectSaveResult::Error(err)) => {
-                self.set_status(format!("Project save failed: {err}"));
-            }
-            Err(TryRecvError::Empty) => {
-                self.project.pending_project_save = Some(job);
-            }
-            Err(TryRecvError::Disconnected) => {
-                self.set_status("Project save failed: worker disconnected.");
-            }
-        }
-    }
-
-    fn handle_project_load(&mut self, path: PathBuf) {
-        self.project.project_prompt = None;
-        self.project.pending_project_apply = None;
-        self.project.last_project_dir = path.parent().map(Path::to_path_buf);
-        self.project.last_project_path = Some(path.clone());
-        match project::load_project(&path) {
-            Ok(outcome) => self.handle_loaded_project(path, outcome),
-            Err(err) => self.set_status(format!("Failed to load project: {err}")),
-        }
-    }
-
-    fn handle_loaded_project(&mut self, path: PathBuf, outcome: project::ProjectLoadOutcome) {
-        let plan = ProjectApplyPlan {
-            payload: outcome.payload,
-            image: outcome.chosen_image,
-            project_path: path,
-            version: outcome.version,
-        };
-        if outcome.warnings.is_empty() {
-            self.begin_applying_project(plan);
-        } else {
-            self.project.project_prompt = Some(ProjectLoadPrompt {
-                warnings: outcome.warnings,
-                plan,
-            });
-            self.set_status("Project has warnings. Confirm to continue loading.");
-        }
-    }
-
-    fn begin_applying_project(&mut self, plan: ProjectApplyPlan) {
-        let image_path = plan.image.path.clone();
-        self.project.project_prompt = None;
-        let status = {
-            let source_label = match plan.image.source {
-                project::ImagePathSource::Absolute => "absolute path",
-                project::ImagePathSource::Relative => "relative path",
-            };
-            if plan.image.checksum_matches {
-                format!(
-                    "Loading project v{} image from {source_label}…",
-                    plan.version
-                )
-            } else {
-                let expected = plan.payload.image_crc32;
-                let actual = plan
-                    .image
-                    .actual_checksum
-                    .map_or_else(|| "unknown".to_string(), |v| format!("{v:#010x}"));
-                format!(
-                    "Image checksum mismatch (expected {expected:#010x}, got {actual}). Loading from {source_label}…"
-                )
-            }
-        };
-        self.project.pending_project_apply = Some(plan);
-        self.set_status(status);
-        self.start_loading_image_from_path(image_path);
-    }
-
-    fn apply_project_if_ready(&mut self, loaded_path: Option<&Path>) {
-        let Some(plan) = self.project.pending_project_apply.take() else {
-            return;
-        };
-        let Some(path) = loaded_path else {
-            self.project.pending_project_apply = Some(plan);
-            return;
-        };
-        if path != plan.image.path {
-            self.project.pending_project_apply = Some(plan);
-            return;
-        }
-        self.apply_project_state(plan);
-    }
-
-    fn apply_project_state(&mut self, plan: ProjectApplyPlan) {
-        self.project.project_prompt = None;
-        self.project.pending_project_apply = None;
-
-        // Reapply transforms on freshly loaded image.
-        self.image.transform = ImageTransformRecord::identity();
-        let ops = plan.payload.transform.replay_operations();
-        for op in ops {
-            self.apply_image_transform(op, None);
-        }
-        self.image.transform = plan.payload.transform;
-
-        self.image.zoom = plan.payload.zoom.clamp(MIN_ZOOM, MAX_ZOOM);
-        self.image.pan = Vec2::new(plan.payload.pan[0], plan.payload.pan[1]);
-        self.image.zoom_target = self.image.zoom;
-        self.image.zoom_intent = ZoomIntent::TargetPan(self.image.pan);
-        self.project.title.clone_from(&plan.payload.title);
-        self.project
-            .description
-            .clone_from(&plan.payload.description);
-
-        self.calibration.cal_x = Self::axis_from_record(&plan.payload.calibration.x);
-        self.calibration.cal_y = Self::axis_from_record(&plan.payload.calibration.y);
-        self.calibration.polar_cal = Self::polar_from_record(&plan.payload.calibration.polar);
-        self.calibration.coord_system = plan.payload.calibration.coord_system;
-        self.calibration.calibration_angle_snap = plan.payload.calibration.calibration_angle_snap;
-        self.calibration.show_calibration_segments =
-            plan.payload.calibration.show_calibration_segments;
-        self.points.last_x_mapping = None;
-        self.points.last_y_mapping = None;
-        self.points.last_polar_mapping = None;
-        self.points.last_coord_system = self.calibration.coord_system;
-        self.calibration.pick_mode = PickMode::None;
-        self.calibration.pending_value_focus = None;
-        self.calibration.dragging_handle = None;
-        self.image.touch_pan_active = false;
-        self.image.touch_pan_last = None;
-
-        self.points.points = plan
-            .payload
-            .points
-            .iter()
-            .map(|p| PickedPoint {
-                pixel: Pos2::new(p.pixel[0], p.pixel[1]),
-                x_numeric: p.x_numeric,
-                y_numeric: p.y_numeric,
-            })
-            .collect();
-        self.mark_points_dirty();
-        self.mark_snap_maps_dirty();
-        self.refresh_snap_overlay_palette();
-
-        if let Some(parent) = plan.project_path.parent() {
-            self.project.last_project_dir = Some(parent.to_path_buf());
-        }
-        self.project.last_project_path = Some(plan.project_path);
-        self.remember_image_dir_from_path(&plan.image.path);
-
-        if plan.image.checksum_matches {
-            let source_label = match plan.image.source {
-                project::ImagePathSource::Absolute => "absolute path",
-                project::ImagePathSource::Relative => "relative path",
-            };
-            self.set_status(format!(
-                "Project v{} loaded ({source_label}).",
-                plan.version
-            ));
-        } else {
-            let expected = plan.payload.image_crc32;
-            let actual = plan
-                .image
-                .actual_checksum
-                .map_or_else(|| "unknown".to_string(), |v| format!("{v:#010x}"));
-            self.set_status(format!(
-                "Project v{} loaded with checksum warning (expected {expected:#010x}, got {actual}).",
-                plan.version
-            ));
-        }
-    }
-
-    fn project_warning_text(warn: &project::ProjectWarning) -> String {
-        let source_label = |source: &project::ImagePathSource| match source {
-            project::ImagePathSource::Absolute => "Absolute path",
-            project::ImagePathSource::Relative => "Relative path",
-        };
-
-        match warn {
-            project::ProjectWarning::MissingImage {
-                path,
-                source,
-                reason,
-            } => format!(
-                "{} image path missing ({}): {}",
-                source_label(source),
-                path.display(),
-                reason
-            ),
-            project::ProjectWarning::ChecksumMismatch {
-                path,
-                source,
-                expected,
-                actual,
-            } => format!(
-                "{} image checksum mismatch (expected {expected:#010x}, got {actual:#010x}) at {}",
-                source_label(source),
-                path.display()
-            ),
-        }
-    }
-}
+impl CurcatApp {}
 
 impl eframe::App for CurcatApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
@@ -1492,9 +1175,17 @@ impl eframe::App for CurcatApp {
             {
                 self.ui.info_window_open = true;
             }
+            // Ctrl/Cmd + Shift + F: image filters
+            if ctx.input(|i| i.key_pressed(Key::F) && i.modifiers.command && i.modifiers.shift) {
+                self.ui.image_filters_window_open = true;
+            }
+            // Ctrl/Cmd + Shift + T: auto-trace
+            if ctx.input(|i| i.key_pressed(Key::T) && i.modifiers.command && i.modifiers.shift) {
+                self.ui.auto_trace_window_open = true;
+            }
             // Ctrl/Cmd + F: fit view to viewport
             if self.image.image.is_some()
-                && ctx.input(|i| i.key_pressed(Key::F) && i.modifiers.command)
+                && ctx.input(|i| i.key_pressed(Key::F) && i.modifiers.command && !i.modifiers.shift)
             {
                 self.fit_image_to_viewport();
             }
@@ -1539,6 +1230,8 @@ impl eframe::App for CurcatApp {
             .show_animated(ctx, self.ui.side_open, |ui| self.ui_side_calibration(ui));
         egui::CentralPanel::default().show(ctx, |ui| self.ui_central_image(ctx, ui));
         self.ui_image_info_window(ctx);
+        self.ui_image_filters_window(ctx);
+        self.ui_auto_trace_window(ctx);
         self.ui_points_info_window(ctx);
         self.ui_project_prompt(ctx);
 

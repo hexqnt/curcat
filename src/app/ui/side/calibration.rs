@@ -108,7 +108,7 @@ struct CalibrationUiState {
 }
 
 impl CalibrationUiState {
-    fn new(pending_focus: Option<AxisValueField>) -> Self {
+    const fn new(pending_focus: Option<AxisValueField>) -> Self {
         Self {
             highlight_jobs: Vec::new(),
             pending_focus,

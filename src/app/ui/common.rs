@@ -1,6 +1,8 @@
 //! Shared UI helpers used across panels.
 
-use super::super::{AxisCalUi, CurcatApp, rounded_u8};
+use crate::app::util::rounded_u8;
+
+use super::super::{AxisCalUi, CurcatApp};
 use egui::{Color32, CornerRadius, StrokeKind, pos2};
 
 impl CurcatApp {

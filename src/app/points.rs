@@ -29,6 +29,7 @@ impl CurcatApp {
                     || self.points.last_polar_mapping.as_ref() != polar_mapping
             }
         };
+
         if mapping_changed {
             self.points.last_coord_system = coord_system;
             self.points.last_x_mapping = x_mapping.cloned();
@@ -36,6 +37,7 @@ impl CurcatApp {
             self.points.last_polar_mapping = polar_mapping.cloned();
             self.mark_points_dirty();
         }
+
         if self.points.points_numeric_dirty {
             match coord_system {
                 CoordSystem::Cartesian => {

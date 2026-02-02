@@ -28,6 +28,7 @@ impl CurcatApp {
             )
             .on_hover_text("Snap to the centerline of the color-matched curve");
         });
+
         match self.snap.point_input_mode {
             PointInputMode::Free => {}
             PointInputMode::ContrastSnap => {

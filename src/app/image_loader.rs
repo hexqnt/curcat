@@ -1,5 +1,5 @@
 use super::{CurcatApp, ImageLoadRequest, ImageLoadResult, PendingImageMeta, PendingImageTask};
-use crate::image_util::{LoadedImage, decode_image_from_bytes, decode_image_from_path};
+use crate::image::{LoadedImage, decode_image_from_bytes, decode_image_from_path};
 use egui::{ColorImage, Context};
 use std::path::Path;
 use std::sync::mpsc::{self, TryRecvError};

@@ -1,6 +1,8 @@
+pub mod auto_trace;
 pub mod center;
 pub mod common;
 pub mod dialogs;
+pub mod filters;
 pub mod icons;
 pub mod info;
 pub mod project;

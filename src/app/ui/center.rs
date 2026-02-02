@@ -1071,6 +1071,10 @@ impl CurcatApp {
                                 self.pick_curve_color_at(pixel);
                                 self.calibration.pick_mode = PickMode::None;
                             }
+                            PickMode::AutoTrace => {
+                                self.auto_trace_from(pixel);
+                                self.calibration.pick_mode = PickMode::None;
+                            }
                             _ => {
                                 if let Some(cal_target) = CalTarget::from_pick_mode(pick_mode) {
                                     self.apply_calibration_point(
@@ -1155,6 +1159,9 @@ impl CurcatApp {
     ) -> Option<(&'static str, Color32)> {
         if let Some(badge) = self.calibration_cursor_badge() {
             return Some(badge);
+        }
+        if matches!(self.calibration.pick_mode, PickMode::AutoTrace) {
+            return Some((icons::ICON_AUTO_TRACE, Color32::WHITE));
         }
         if self.interaction.auto_place_state.active {
             return Some((icons::ICON_AUTO_PLACE, Color32::WHITE));

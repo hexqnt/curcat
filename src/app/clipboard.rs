@@ -1,7 +1,6 @@
 use super::CurcatApp;
 use crate::config::AppConfig;
-use crate::image_info::{ImageMeta, human_readable_bytes};
-use crate::image_util::LoadedImage;
+use crate::image::{ImageMeta, LoadedImage, human_readable_bytes};
 use arboard::{Clipboard, Error as ClipboardError};
 use egui::{ColorImage, Context};
 
