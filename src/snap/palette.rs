@@ -1,3 +1,4 @@
+use crate::util::rounded_u8;
 use egui::{Color32, ColorImage};
 use rayon::prelude::*;
 
@@ -11,6 +12,7 @@ struct ImageColorStats {
 }
 
 impl ImageColorStats {
+    #[allow(clippy::cast_precision_loss)]
     fn from_image(image: &ColorImage) -> Option<Self> {
         let total_pixels = image.pixels.len();
         if total_pixels == 0 {
@@ -125,6 +127,7 @@ pub fn derive_snap_overlay_palette(image: &ColorImage) -> Vec<Color32> {
         .collect()
 }
 
+#[allow(clippy::suboptimal_flops)]
 fn srgb_luminance_components(r: f32, g: f32, b: f32) -> f32 {
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
@@ -197,6 +200,7 @@ fn highlight_value_candidates(avg_luma: f32) -> [f32; 3] {
     }
 }
 
+#[allow(clippy::suboptimal_flops)]
 fn snap_color_score(color: Color32, stats: &ImageColorStats) -> f32 {
     let luma_diff = (srgb_luminance(color) - stats.avg_luma).abs() / 255.0;
     let [r, g, b, _] = color.to_array();
@@ -205,11 +209,4 @@ fn snap_color_score(color: Color32, stats: &ImageColorStats) -> f32 {
     let db = f32::from(b) - stats.avg_rgb[2];
     let color_diff = (dr * dr + dg * dg + db * db).sqrt() / SNAP_MAX_COLOR_DISTANCE;
     (luma_diff * 0.7 + color_diff * 0.3).clamp(0.0, 1.0)
-}
-
-fn rounded_u8(value: f32) -> u8 {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    {
-        value.round().clamp(0.0, f32::from(u8::MAX)) as u8
-    }
 }

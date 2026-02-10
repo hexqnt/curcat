@@ -136,7 +136,11 @@ fn f64_to_i64_checked(value: f64) -> Option<i64> {
     if !value.is_finite() {
         return None;
     }
-    if value < i64::MIN as f64 || value > i64::MAX as f64 {
+    #[allow(clippy::cast_precision_loss)]
+    let min = i64::MIN as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let max = i64::MAX as f64;
+    if value < min || value > max {
         return None;
     }
     #[allow(clippy::cast_possible_truncation)]
@@ -198,7 +202,11 @@ fn parse_datetime(input: &str) -> Option<NaiveDateTime> {
     }
     for fmt in DATE_FORMATS {
         if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
-            return Some(d.and_hms_opt(0, 0, 0).unwrap());
+            if let Some(dt) = d.and_hms_opt(0, 0, 0) {
+                return Some(dt);
+            }
+            eprintln!("parse_datetime: failed to build midnight for date {d}");
+            return None;
         }
     }
     None

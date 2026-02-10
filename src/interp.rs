@@ -176,8 +176,16 @@ fn build_sample_positions(points: &[XYPoint], samples: usize) -> Vec<f64> {
         return vec![];
     }
     let mut xs = Vec::with_capacity(samples);
-    let x_min = points.first().unwrap().x;
-    let x_max = points.last().unwrap().x;
+    let Some(first) = points.first() else {
+        eprintln!("build_sample_positions called with no points");
+        return xs;
+    };
+    let Some(last) = points.last() else {
+        eprintln!("build_sample_positions missing last point");
+        return xs;
+    };
+    let x_min = first.x;
+    let x_max = last.x;
     if (x_max - x_min).abs() <= f64::EPSILON {
         xs.resize(samples, x_min);
         return xs;
@@ -237,6 +245,7 @@ fn interpolate_step(points: &[XYPoint], sample_xs: &[f64]) -> Vec<XYPoint> {
     out
 }
 
+#[allow(clippy::suboptimal_flops)]
 fn interpolate_cubic(points: &[XYPoint], sample_xs: &[f64]) -> Vec<XYPoint> {
     let unique = unique_by_x(points);
     if unique.len() < 2 {
@@ -248,7 +257,10 @@ fn interpolate_cubic(points: &[XYPoint], sample_xs: &[f64]) -> Vec<XYPoint> {
 
     let mut out = Vec::with_capacity(sample_xs.len());
     let mut seg_idx = 0usize;
-    let last_x = unique.last().unwrap().x;
+    let Some(last) = unique.last() else {
+        return interpolate_linear(points, sample_xs);
+    };
+    let last_x = last.x;
     for &sx in sample_xs {
         while seg_idx + 1 < segments.len() && sx >= segments[seg_idx + 1].x {
             seg_idx += 1;
@@ -287,6 +299,7 @@ struct CubicSegment {
     d: f64,
 }
 
+#[allow(clippy::suboptimal_flops)]
 fn build_natural_cubic_segments(points: &[XYPoint]) -> Option<Vec<CubicSegment>> {
     if points.len() < 2 {
         return None;

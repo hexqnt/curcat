@@ -1,12 +1,13 @@
 //! Shared UI helpers used across panels.
 
-use crate::app::util::rounded_u8;
+use crate::util::rounded_u8;
 
 use super::super::{AxisCalUi, CurcatApp};
 use egui::{Color32, CornerRadius, StrokeKind, pos2};
 
 impl CurcatApp {
     /// Compute a pulsing highlight color based on the UI time.
+    #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn attention_color(ctx: &egui::Context, base: Color32) -> Color32 {
         let [r, g, b, a] = base.to_array();
         let base_alpha = f32::from(a) / 255.0;

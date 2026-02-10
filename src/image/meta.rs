@@ -106,6 +106,7 @@ impl ImageMeta {
 }
 
 /// Format a byte count with binary units (KiB, MiB, ...).
+#[allow(clippy::cast_precision_loss)]
 pub fn human_readable_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes as f64;
@@ -128,6 +129,7 @@ pub fn format_system_time(time: SystemTime) -> String {
 }
 
 /// Return a simplified aspect ratio plus an approximate decimal ratio string.
+#[allow(clippy::cast_precision_loss)]
 pub fn describe_aspect_ratio(size: [usize; 2]) -> Option<String> {
     let [w, h] = size;
     if w == 0 || h == 0 {

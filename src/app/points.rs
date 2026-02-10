@@ -4,6 +4,38 @@ use crate::types::{CoordSystem, PolarMapping};
 use egui::Pos2;
 use std::cmp::Ordering;
 
+#[derive(Debug, Clone)]
+pub struct PickedPoint {
+    pub(super) pixel: Pos2,
+    pub(super) x_numeric: Option<f64>,
+    pub(super) y_numeric: Option<f64>,
+}
+
+impl PickedPoint {
+    pub(super) const fn new(pixel: Pos2) -> Self {
+        Self {
+            pixel,
+            x_numeric: None,
+            y_numeric: None,
+        }
+    }
+}
+
+#[allow(clippy::struct_excessive_bools)]
+pub struct PointsState {
+    pub(super) points: Vec<PickedPoint>,
+    pub(super) points_numeric_dirty: bool,
+    pub(super) cached_sorted_preview: Vec<(f64, Pos2)>,
+    pub(super) cached_sorted_numeric: Vec<XYPoint>,
+    pub(super) sorted_preview_dirty: bool,
+    pub(super) sorted_numeric_dirty: bool,
+    pub(super) last_x_mapping: Option<AxisMapping>,
+    pub(super) last_y_mapping: Option<AxisMapping>,
+    pub(super) last_polar_mapping: Option<PolarMapping>,
+    pub(super) last_coord_system: CoordSystem,
+    pub(super) show_curve_segments: bool,
+}
+
 impl CurcatApp {
     pub(crate) const fn mark_points_dirty(&mut self) {
         self.points.points_numeric_dirty = true;
@@ -91,12 +123,12 @@ impl CurcatApp {
 
     pub(crate) fn push_curve_point(&mut self, pixel_hint: Pos2) {
         let resolved = self.resolve_curve_pick(pixel_hint);
-        self.points.points.push(super::PickedPoint::new(resolved));
+        self.points.points.push(PickedPoint::new(resolved));
         self.mark_points_dirty();
     }
 
     pub(crate) fn push_curve_point_snapped(&mut self, snapped: Pos2) {
-        self.points.points.push(super::PickedPoint::new(snapped));
+        self.points.points.push(PickedPoint::new(snapped));
         self.mark_points_dirty();
     }
 

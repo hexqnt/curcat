@@ -1,7 +1,9 @@
 use super::{
-    AxisCalUi, CurcatApp, MAX_ZOOM, MIN_ZOOM, PickMode, PickedPoint, PolarCalUi, ZoomIntent,
+    AxisCalUi, CurcatApp, MAX_ZOOM, MIN_ZOOM, NativeDialog, PendingImageTask, PickMode,
+    PickedPoint, PolarCalUi, ZoomIntent,
 };
-use crate::project::{self, ImageTransformRecord};
+use crate::image::ImageTransformRecord;
+use crate::project;
 use crate::types::{AxisUnit, ScaleKind};
 use egui::{Pos2, Vec2};
 use std::path::{Path, PathBuf};
@@ -41,6 +43,20 @@ pub(super) struct ProjectApplyPlan {
 pub(super) struct ProjectLoadPrompt {
     pub(super) warnings: Vec<project::ProjectWarning>,
     pub(super) plan: ProjectApplyPlan,
+}
+
+pub struct ProjectState {
+    pub(super) pending_image_task: Option<PendingImageTask>,
+    pub(super) pending_project_apply: Option<ProjectApplyPlan>,
+    pub(super) pending_project_save: Option<PendingProjectSave>,
+    pub(super) project_prompt: Option<ProjectLoadPrompt>,
+    pub(super) title: Option<String>,
+    pub(super) description: Option<String>,
+    pub(super) active_dialog: Option<NativeDialog>,
+    pub(super) last_project_dir: Option<PathBuf>,
+    pub(super) last_project_path: Option<PathBuf>,
+    pub(super) last_image_dir: Option<PathBuf>,
+    pub(super) last_export_dir: Option<PathBuf>,
 }
 
 fn perform_project_save(request: ProjectSaveRequest) -> Result<(), String> {

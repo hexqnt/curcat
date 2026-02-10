@@ -1,7 +1,7 @@
 use super::super::common::toggle_switch;
 use super::super::icons;
 use super::axis_input::sanitize_axis_text;
-use crate::app::{APP_VERSION, AxisValueField, CurcatApp, PickMode, safe_usize_to_f32};
+use crate::app::{APP_VERSION, AxisCalUi, AxisValueField, CurcatApp, PickMode, safe_usize_to_f32};
 use crate::types::{AngleDirection, AngleUnit, AxisUnit, AxisValue, CoordSystem, ScaleKind};
 use egui::{Color32, Pos2, Rect, RichText};
 
@@ -35,6 +35,7 @@ impl CalibrationPresetKind {
 }
 
 #[derive(Clone, Copy)]
+#[allow(clippy::upper_case_acronyms)]
 enum CalibrationQuadrant {
     I,
     II,
@@ -291,6 +292,7 @@ impl CurcatApp {
         AxisValue::Float(value).format()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish_calibration_panel(
         &mut self,
         ui: &mut egui::Ui,
@@ -317,6 +319,59 @@ impl CurcatApp {
             ui.label(RichText::new(warn_label).color(Color32::GRAY))
                 .on_hover_text(warn_hover);
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_axis_rows(
+        ui: &mut egui::Ui,
+        cal: &mut AxisCalUi,
+        p1_label: &str,
+        p2_label: &str,
+        p1_field: AxisValueField,
+        p2_field: AxisValueField,
+        p1_mode: PickMode,
+        p2_mode: PickMode,
+        ui_state: &mut CalibrationUiState,
+    ) -> (bool, bool) {
+        let p1_row = Self::render_calibration_row(
+            ui,
+            p1_label,
+            cal.unit,
+            &mut cal.v1_text,
+            p1_field,
+            &mut ui_state.pending_focus,
+            p1_mode,
+            cal.p1,
+        );
+        let p2_row = Self::render_calibration_row(
+            ui,
+            p2_label,
+            cal.unit,
+            &mut cal.v2_text,
+            p2_field,
+            &mut ui_state.pending_focus,
+            p2_mode,
+            cal.p2,
+        );
+        if let Some(mode) = p1_row.requested_pick.or(p2_row.requested_pick) {
+            ui_state.pending_pick = Some(mode);
+        }
+
+        let (p1_invalid, p2_invalid) = cal.value_invalid_flags();
+        if let Some(rect) = p1_row.value_rect {
+            ui_state.highlight_jobs.push((rect, p1_invalid));
+        }
+        if let Some(rect) = p2_row.value_rect {
+            ui_state.highlight_jobs.push((rect, p2_invalid));
+        }
+        if let Some(rect) = p1_row.pick_rect {
+            ui_state.highlight_jobs.push((rect, cal.p1.is_none()));
+        }
+        if let Some(rect) = p2_row.pick_rect {
+            ui_state.highlight_jobs.push((rect, cal.p2.is_none()));
+        }
+
+        (p1_invalid, p2_invalid)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -398,51 +453,25 @@ impl CurcatApp {
                             sanitize_axis_text(&mut cal.v2_text, cal.unit);
                         }
 
-                        let p1_row = Self::render_calibration_row(
+                        let _ = Self::render_axis_rows(
                             ui,
+                            cal,
                             p1_name,
-                            cal.unit,
-                            &mut cal.v1_text,
+                            p2_name,
                             if is_x {
                                 AxisValueField::X1
                             } else {
                                 AxisValueField::Y1
                             },
-                            &mut ui_state.pending_focus,
-                            p1_mode,
-                            cal.p1,
-                        );
-                        let p2_row = Self::render_calibration_row(
-                            ui,
-                            p2_name,
-                            cal.unit,
-                            &mut cal.v2_text,
                             if is_x {
                                 AxisValueField::X2
                             } else {
                                 AxisValueField::Y2
                             },
-                            &mut ui_state.pending_focus,
+                            p1_mode,
                             p2_mode,
-                            cal.p2,
+                            &mut ui_state,
                         );
-                        if let Some(mode) = p1_row.requested_pick.or(p2_row.requested_pick) {
-                            ui_state.pending_pick = Some(mode);
-                        }
-
-                        let (p1_value_invalid, p2_value_invalid) = cal.value_invalid_flags();
-                        if let Some(rect) = p1_row.value_rect {
-                            ui_state.highlight_jobs.push((rect, p1_value_invalid));
-                        }
-                        if let Some(rect) = p2_row.value_rect {
-                            ui_state.highlight_jobs.push((rect, p2_value_invalid));
-                        }
-                        if let Some(rect) = p1_row.pick_rect {
-                            ui_state.highlight_jobs.push((rect, cal.p1.is_none()));
-                        }
-                        if let Some(rect) = p2_row.pick_rect {
-                            ui_state.highlight_jobs.push((rect, cal.p2.is_none()));
-                        }
 
                         mapping_ready = cal.mapping().is_some();
                     }
@@ -590,43 +619,17 @@ impl CurcatApp {
                         });
                     }
 
-                    let p1_row = Self::render_calibration_row(
+                    let (p1_invalid, p2_invalid) = Self::render_axis_rows(
                         ui,
+                        cal,
                         kind.p1_label(),
-                        AxisUnit::Float,
-                        &mut cal.v1_text,
-                        p1_field,
-                        &mut ui_state.pending_focus,
-                        p1_mode,
-                        cal.p1,
-                    );
-                    let p2_row = Self::render_calibration_row(
-                        ui,
                         kind.p2_label(),
-                        AxisUnit::Float,
-                        &mut cal.v2_text,
+                        p1_field,
                         p2_field,
-                        &mut ui_state.pending_focus,
+                        p1_mode,
                         p2_mode,
-                        cal.p2,
+                        &mut ui_state,
                     );
-                    if let Some(mode) = p1_row.requested_pick.or(p2_row.requested_pick) {
-                        ui_state.pending_pick = Some(mode);
-                    }
-
-                    let (p1_invalid, p2_invalid) = cal.value_invalid_flags();
-                    if let Some(rect) = p1_row.value_rect {
-                        ui_state.highlight_jobs.push((rect, p1_invalid));
-                    }
-                    if let Some(rect) = p2_row.value_rect {
-                        ui_state.highlight_jobs.push((rect, p2_invalid));
-                    }
-                    if let Some(rect) = p1_row.pick_rect {
-                        ui_state.highlight_jobs.push((rect, cal.p1.is_none()));
-                    }
-                    if let Some(rect) = p2_row.pick_rect {
-                        ui_state.highlight_jobs.push((rect, cal.p2.is_none()));
-                    }
 
                     let origin_ready = self.calibration.polar_cal.origin.is_some();
                     let values_ready = !p1_invalid && !p2_invalid;

@@ -56,6 +56,7 @@ impl ImageFilters {
 }
 
 /// Apply the provided filter settings to a base image.
+#[allow(clippy::many_single_char_names, clippy::suboptimal_flops)]
 pub fn apply_image_filters(base: &ColorImage, filters: ImageFilters) -> ColorImage {
     if base.pixels.is_empty() {
         return base.clone();
@@ -119,6 +120,7 @@ pub fn apply_image_filters(base: &ColorImage, filters: ImageFilters) -> ColorIma
     ColorImage::new(base.size, pixels)
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn float_to_u8(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
@@ -139,23 +141,23 @@ fn box_blur(image: &ColorImage, radius: u32) -> Vec<Color32> {
             let [r, g, b, a] = image.pixels[row_start + x].to_array();
             let prev = prefix[x];
             prefix[x + 1] = [
-                prev[0] + r as u32,
-                prev[1] + g as u32,
-                prev[2] + b as u32,
-                prev[3] + a as u32,
+                prev[0] + u32::from(r),
+                prev[1] + u32::from(g),
+                prev[2] + u32::from(b),
+                prev[3] + u32::from(a),
             ];
         }
         for x in 0..width {
             let x0 = x.saturating_sub(radius);
             let x1 = (x + radius).min(width - 1);
-            let count = (x1 - x0 + 1) as u32;
+            let count = u32::try_from(x1 - x0 + 1).unwrap_or(u32::MAX);
             let sum = prefix[x1 + 1];
             let base = prefix[x0];
             horiz[row_start + x] = [
-                ((sum[0] - base[0] + count / 2) / count) as u8,
-                ((sum[1] - base[1] + count / 2) / count) as u8,
-                ((sum[2] - base[2] + count / 2) / count) as u8,
-                ((sum[3] - base[3] + count / 2) / count) as u8,
+                avg_channel(sum[0], base[0], count),
+                avg_channel(sum[1], base[1], count),
+                avg_channel(sum[2], base[2], count),
+                avg_channel(sum[3], base[3], count),
             ];
         }
     }
@@ -168,27 +170,33 @@ fn box_blur(image: &ColorImage, radius: u32) -> Vec<Color32> {
             let [r, g, b, a] = horiz[idx];
             let prev = prefix[y];
             prefix[y + 1] = [
-                prev[0] + r as u32,
-                prev[1] + g as u32,
-                prev[2] + b as u32,
-                prev[3] + a as u32,
+                prev[0] + u32::from(r),
+                prev[1] + u32::from(g),
+                prev[2] + u32::from(b),
+                prev[3] + u32::from(a),
             ];
         }
         for y in 0..height {
             let y0 = y.saturating_sub(radius);
             let y1 = (y + radius).min(height - 1);
-            let count = (y1 - y0 + 1) as u32;
+            let count = u32::try_from(y1 - y0 + 1).unwrap_or(u32::MAX);
             let sum = prefix[y1 + 1];
             let base = prefix[y0];
             let idx = y * row_len + x;
             out[idx] = Color32::from_rgba_unmultiplied(
-                ((sum[0] - base[0] + count / 2) / count) as u8,
-                ((sum[1] - base[1] + count / 2) / count) as u8,
-                ((sum[2] - base[2] + count / 2) / count) as u8,
-                ((sum[3] - base[3] + count / 2) / count) as u8,
+                avg_channel(sum[0], base[0], count),
+                avg_channel(sum[1], base[1], count),
+                avg_channel(sum[2], base[2], count),
+                avg_channel(sum[3], base[3], count),
             );
         }
     }
 
     out
+}
+
+fn avg_channel(sum: u32, base: u32, count: u32) -> u8 {
+    let value = (sum - base + count / 2) / count;
+    let clamped = value.min(u32::from(u8::MAX));
+    u8::try_from(clamped).unwrap_or(u8::MAX)
 }

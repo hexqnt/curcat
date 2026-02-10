@@ -100,60 +100,61 @@ impl PolarMapping {
     ///
     /// Returns `None` when inputs are non-finite, spans are zero, or when log
     /// scaling is requested with non-positive radius values.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         origin: Pos2,
-        radius_d1: f64,
-        radius_d2: f64,
-        radius_v1: f64,
-        radius_v2: f64,
+        radius_distance1: f64,
+        radius_distance2: f64,
+        radius_value1: f64,
+        radius_value2: f64,
         radius_scale: ScaleKind,
-        angle_a1: f64,
-        angle_a2: f64,
-        angle_v1: f64,
-        angle_v2: f64,
+        angle_pixel1: f64,
+        angle_pixel2: f64,
+        angle_value1: f64,
+        angle_value2: f64,
         angle_unit: AngleUnit,
         angle_direction: AngleDirection,
     ) -> Option<Self> {
-        if !radius_d1.is_finite()
-            || !radius_d2.is_finite()
-            || !radius_v1.is_finite()
-            || !radius_v2.is_finite()
+        if !radius_distance1.is_finite()
+            || !radius_distance2.is_finite()
+            || !radius_value1.is_finite()
+            || !radius_value2.is_finite()
         {
             return None;
         }
-        if (radius_d2 - radius_d1).abs() <= f64::EPSILON {
+        if (radius_distance2 - radius_distance1).abs() <= f64::EPSILON {
             return None;
         }
-        if radius_scale == ScaleKind::Log10 && (radius_v1 <= 0.0 || radius_v2 <= 0.0) {
+        if radius_scale == ScaleKind::Log10 && (radius_value1 <= 0.0 || radius_value2 <= 0.0) {
             return None;
         }
-        if !angle_a1.is_finite()
-            || !angle_a2.is_finite()
-            || !angle_v1.is_finite()
-            || !angle_v2.is_finite()
+        if !angle_pixel1.is_finite()
+            || !angle_pixel2.is_finite()
+            || !angle_value1.is_finite()
+            || !angle_value2.is_finite()
         {
             return None;
         }
-        if (angle_v2 - angle_v1).abs() <= f64::EPSILON {
+        if (angle_value2 - angle_value1).abs() <= f64::EPSILON {
             return None;
         }
-        let a1 = normalize_angle_rad(angle_a1);
-        let a2 = normalize_angle_rad(angle_a2);
+        let a1 = normalize_angle_rad(angle_pixel1);
+        let a2 = normalize_angle_rad(angle_pixel2);
         let span = angle_delta(a1, a2, angle_direction);
         if span <= f64::EPSILON {
             return None;
         }
         Some(Self {
             origin,
-            radius_d1,
-            radius_d2,
-            radius_v1,
-            radius_v2,
+            radius_d1: radius_distance1,
+            radius_d2: radius_distance2,
+            radius_v1: radius_value1,
+            radius_v2: radius_value2,
             radius_scale,
             angle_a1: a1,
             angle_span: span,
-            angle_v1,
-            angle_v2,
+            angle_v1: angle_value1,
+            angle_v2: angle_value2,
             angle_unit,
             angle_direction,
         })

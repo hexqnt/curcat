@@ -1,4 +1,4 @@
-use super::super::point_stats::{AxisKind, axis_length, format_span};
+use super::stats::{AxisKind, axis_length, format_span};
 use super::super::{
     CurcatApp, describe_aspect_ratio, format_system_time, human_readable_bytes, total_pixel_count,
 };
@@ -25,6 +25,7 @@ impl CurcatApp {
         });
     }
 
+    #[allow(clippy::cast_precision_loss)]
     pub(crate) fn ui_image_info_window(&mut self, ctx: &egui::Context) {
         if !self.ui.info_window_open {
             return;
@@ -281,11 +282,11 @@ impl CurcatApp {
                     ) {
                         let v1 = match v1 {
                             AxisValue::Float(v) => v,
-                            _ => 0.0,
+                            AxisValue::DateTime(_) => 0.0,
                         };
                         let v2 = match v2 {
                             AxisValue::Float(v) => v,
-                            _ => 0.0,
+                            AxisValue::DateTime(_) => 0.0,
                         };
                         ui.label(format!(
                             "Angle values: {} … {} {}",

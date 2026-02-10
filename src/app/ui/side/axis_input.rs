@@ -102,6 +102,7 @@ pub(super) struct CalRowResult {
 }
 
 impl CurcatApp {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn render_calibration_row(
         ui: &mut egui::Ui,
         name: &str,

@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use super::behavior::SnapBehavior;
 use super::color::{color_luminance, color_similarity_value};
 use super::search::{refine_snap_position, search_in_level};
-use super::util::{clamp_index, u32_to_f32};
+use crate::util::{clamp_index, u32_to_f32};
 
 #[derive(Debug, Clone)]
 pub(super) struct SnapMapLevel {
@@ -66,7 +66,10 @@ impl SnapMapCache {
             coarse_candidate.pos.x * scale,
             coarse_candidate.pos.y * scale,
         );
-        let base_level = self.levels.first().unwrap();
+        let Some(base_level) = self.levels.first() else {
+            eprintln!("snap map cache missing base level; using coarse position");
+            return Some(coarse_base_pos);
+        };
         let refine_radius = (scale * 2.5).max(3.0);
         let refined_candidate =
             search_in_level(base_level, coarse_base_pos, refine_radius, behavior)

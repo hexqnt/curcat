@@ -3,15 +3,7 @@
 use super::CurcatApp;
 use crate::export::{ExportExtraColumn, ExportPayload, sequential_distances, turning_angles};
 use crate::interp::{XYPoint, auto_sample_count, interpolate_sorted};
-use crate::types::{AngleUnit, AxisUnit, AxisValue, CoordSystem};
-
-/// Format an axis value for the on-canvas overlay.
-pub fn format_overlay_value(value: &AxisValue) -> String {
-    match value {
-        AxisValue::Float(v) => format!("{v:.3}"),
-        AxisValue::DateTime(_) => value.format(),
-    }
-}
+use crate::types::{AngleUnit, AxisUnit, CoordSystem};
 
 impl CurcatApp {
     pub(crate) fn collect_numeric_points_in_order(&self) -> Vec<XYPoint> {

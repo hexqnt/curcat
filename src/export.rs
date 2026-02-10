@@ -47,6 +47,61 @@ impl ExportPayload {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    Csv,
+    Xlsx,
+    Json,
+    Ron,
+}
+
+impl ExportFormat {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Csv => "CSV",
+            Self::Xlsx => "Excel",
+            Self::Json => "JSON",
+            Self::Ron => "RON",
+        }
+    }
+
+    pub const fn dialog_title(self) -> &'static str {
+        match self {
+            Self::Csv => "Export CSV",
+            Self::Xlsx => "Export Excel",
+            Self::Json => "Export JSON",
+            Self::Ron => "Export RON",
+        }
+    }
+
+    pub const fn default_filename(self) -> &'static str {
+        match self {
+            Self::Csv => "curve.csv",
+            Self::Xlsx => "curve.xlsx",
+            Self::Json => "curve.json",
+            Self::Ron => "curve.ron",
+        }
+    }
+
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::Xlsx => "xlsx",
+            Self::Json => "json",
+            Self::Ron => "ron",
+        }
+    }
+
+    pub fn export(self, path: &std::path::Path, payload: &ExportPayload) -> Result<(), String> {
+        match self {
+            Self::Csv => export_to_csv(path, payload).map_err(|e| e.to_string()),
+            Self::Xlsx => export_to_xlsx(path, payload).map_err(|e| e.to_string()),
+            Self::Json => export_to_json(path, payload).map_err(|e| e.to_string()),
+            Self::Ron => export_to_ron(path, payload).map_err(|e| e.to_string()),
+        }
+    }
+}
+
 /// Compute per-point distances to the previous point (first entry is `None`).
 pub fn sequential_distances(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
     let len = raw_points.len();
@@ -62,6 +117,7 @@ pub fn sequential_distances(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
 }
 
 /// Compute turning angles (degrees) at each interior point.
+#[allow(clippy::suboptimal_flops)]
 pub fn turning_angles(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
     let len = raw_points.len();
     let mut values = vec![None; len];
@@ -123,6 +179,7 @@ pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
 ///
 /// The export respects Excel row/column limits, splitting data across sheets
 /// when needed. Non-finite numbers and unrepresentable datetimes return errors.
+#[allow(clippy::too_many_lines)]
 pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result<(), XlsxError> {
     let mut workbook = Workbook::new();
     let total_columns = payload.extra_columns.len().saturating_add(2);

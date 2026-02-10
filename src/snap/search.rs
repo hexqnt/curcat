@@ -2,7 +2,7 @@ use egui::{Pos2, pos2};
 
 use super::behavior::SnapBehavior;
 use super::maps::SnapMapLevel;
-use super::util::{i32_to_f32, saturating_f32_to_i32};
+use crate::util::{i32_to_f32, saturating_f32_to_i32};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SnapCandidate {

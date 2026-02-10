@@ -1,10 +1,12 @@
 use egui::Color32;
 
+#[allow(clippy::suboptimal_flops)]
 pub(super) fn color_luminance(color: Color32) -> f32 {
     let [r, g, b, _] = color.to_array();
     0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)
 }
 
+#[allow(clippy::suboptimal_flops)]
 pub(super) fn color_similarity_value(color: Color32, target: Color32, tolerance: f32) -> f32 {
     let [tr, tg, tb, _] = target.to_array();
     let [r, g, b, _] = color.to_array();

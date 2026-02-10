@@ -6,6 +6,7 @@ mod interp;
 mod project;
 mod snap;
 mod types;
+mod util;
 
 use app::CurcatApp;
 use std::path::PathBuf;

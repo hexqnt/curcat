@@ -20,6 +20,7 @@ impl CurcatApp {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_export_section(&mut self, ui: &mut egui::Ui) {
         ui.heading("Export points");
         let has_points = !self.points.points.is_empty();

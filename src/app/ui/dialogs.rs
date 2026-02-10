@@ -1,4 +1,5 @@
 use super::super::{CurcatApp, NativeDialog};
+use crate::export::ExportFormat;
 use egui_file_dialog::FileDialog;
 use std::path::Path;
 
@@ -39,64 +40,36 @@ impl CurcatApp {
     }
 
     pub(crate) fn start_export_csv(&mut self) {
-        match self.build_export_payload() {
-            Ok(payload) => {
-                let mut dialog = Self::make_save_dialog(
-                    "Export CSV",
-                    "curve.csv",
-                    &["csv"],
-                    self.project.last_export_dir.as_deref(),
-                );
-                dialog.save_file();
-                self.project.active_dialog = Some(NativeDialog::SaveCsv { dialog, payload });
-            }
-            Err(msg) => self.set_status(msg),
-        }
+        self.start_export(ExportFormat::Csv);
     }
 
     pub(crate) fn start_export_xlsx(&mut self) {
-        match self.build_export_payload() {
-            Ok(payload) => {
-                let mut dialog = Self::make_save_dialog(
-                    "Export Excel",
-                    "curve.xlsx",
-                    &["xlsx"],
-                    self.project.last_export_dir.as_deref(),
-                );
-                dialog.save_file();
-                self.project.active_dialog = Some(NativeDialog::SaveXlsx { dialog, payload });
-            }
-            Err(msg) => self.set_status(msg),
-        }
+        self.start_export(ExportFormat::Xlsx);
     }
 
     pub(crate) fn start_export_json(&mut self) {
-        match self.build_export_payload() {
-            Ok(payload) => {
-                let mut dialog = Self::make_save_dialog(
-                    "Export JSON",
-                    "curve.json",
-                    &["json"],
-                    self.project.last_export_dir.as_deref(),
-                );
-                dialog.save_file();
-                self.project.active_dialog = Some(NativeDialog::SaveJson { dialog, payload });
-            }
-            Err(msg) => self.set_status(msg),
-        }
+        self.start_export(ExportFormat::Json);
     }
 
     pub(crate) fn start_export_ron(&mut self) {
+        self.start_export(ExportFormat::Ron);
+    }
+
+    pub(crate) fn start_export(&mut self, format: ExportFormat) {
         match self.build_export_payload() {
             Ok(payload) => {
                 let mut dialog = Self::make_save_dialog(
-                    "Export RON",
-                    "curve.ron",
-                    &["ron"],
+                    format.dialog_title(),
+                    format.default_filename(),
+                    &[format.extension()],
                     self.project.last_export_dir.as_deref(),
                 );
                 dialog.save_file();
-                self.project.active_dialog = Some(NativeDialog::SaveRon { dialog, payload });
+                self.project.active_dialog = Some(NativeDialog::SaveExport {
+                    dialog,
+                    payload,
+                    format,
+                });
             }
             Err(msg) => self.set_status(msg),
         }

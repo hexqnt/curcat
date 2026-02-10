@@ -1,65 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::image::ImageTransformRecord;
 use crate::types::{AngleDirection, AngleUnit, AxisUnit, CoordSystem, ScaleKind};
-
-/// Image transform operation that can be replayed.
-#[derive(Debug, Clone, Copy)]
-pub enum ImageTransformOp {
-    RotateCw,
-    RotateCcw,
-    FlipHorizontal,
-    FlipVertical,
-}
-
-/// Accumulated rotation/flip state for the loaded image.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ImageTransformRecord {
-    pub rotation_quarters: u8,
-    pub reflected: bool,
-}
-
-impl ImageTransformRecord {
-    /// Identity transform (no rotation or reflection).
-    pub const fn identity() -> Self {
-        Self {
-            rotation_quarters: 0,
-            reflected: false,
-        }
-    }
-
-    /// Apply a single transform operation to the accumulated state.
-    pub const fn apply(&mut self, op: ImageTransformOp) {
-        match op {
-            ImageTransformOp::RotateCw => {
-                self.rotation_quarters = (self.rotation_quarters + 1) % 4;
-            }
-            ImageTransformOp::RotateCcw => {
-                self.rotation_quarters = (self.rotation_quarters + 3) % 4;
-            }
-            ImageTransformOp::FlipHorizontal => {
-                self.rotation_quarters = (4 - self.rotation_quarters % 4) % 4;
-                self.reflected = !self.reflected;
-            }
-            ImageTransformOp::FlipVertical => {
-                self.rotation_quarters = (2 + 4 - self.rotation_quarters % 4) % 4;
-                self.reflected = !self.reflected;
-            }
-        }
-    }
-
-    /// Expand stored state into a sequence of operations to reapply.
-    pub fn replay_operations(self) -> Vec<ImageTransformOp> {
-        let mut ops = Vec::new();
-        for _ in 0..(self.rotation_quarters % 4) {
-            ops.push(ImageTransformOp::RotateCw);
-        }
-        if self.reflected {
-            ops.push(ImageTransformOp::FlipHorizontal);
-        }
-        ops
-    }
-}
 
 /// Saved calibration data for a single axis.
 #[derive(Debug, Clone, Serialize, Deserialize)]

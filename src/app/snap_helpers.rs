@@ -10,6 +10,21 @@ use std::thread;
 pub const SNAP_SWATCH_SIZE: f32 = 22.0;
 
 impl CurcatApp {
+    /// Return the active snap behavior based on the current input mode.
+    pub(crate) const fn current_snap_behavior(&self) -> Option<SnapBehavior> {
+        match self.snap.point_input_mode {
+            PointInputMode::Free => None,
+            PointInputMode::ContrastSnap => Some(SnapBehavior::Contrast {
+                feature_source: self.snap.snap_feature_source,
+                threshold_kind: self.snap.snap_threshold_kind,
+                threshold: self.snap.contrast_threshold,
+            }),
+            PointInputMode::CenterlineSnap => Some(SnapBehavior::Centerline {
+                threshold: self.snap.centerline_threshold,
+            }),
+        }
+    }
+
     /// Default overlay palette used when the image analysis yields no colors.
     ///
     /// The set favors high-contrast tones that remain visible over most charts.
@@ -126,28 +141,7 @@ impl CurcatApp {
 
     /// Compute the best snap candidate based on the current input mode.
     pub(crate) fn compute_snap_candidate(&mut self, pixel_hint: Pos2) -> Option<Pos2> {
-        match self.snap.point_input_mode {
-            PointInputMode::Free => None,
-            PointInputMode::ContrastSnap => self.find_contrast_point(pixel_hint),
-            PointInputMode::CenterlineSnap => self.find_centerline_point(pixel_hint),
-        }
-    }
-
-    /// Find a high-contrast snap target near the hint position.
-    pub(crate) fn find_contrast_point(&mut self, pixel_hint: Pos2) -> Option<Pos2> {
-        let behavior = SnapBehavior::Contrast {
-            feature_source: self.snap.snap_feature_source,
-            threshold_kind: self.snap.snap_threshold_kind,
-            threshold: self.snap.contrast_threshold,
-        };
-        self.find_snap_point_with_radius(pixel_hint, self.snap.contrast_search_radius, behavior)
-    }
-
-    /// Find the centerline of a stroke near the hint position.
-    pub(crate) fn find_centerline_point(&mut self, pixel_hint: Pos2) -> Option<Pos2> {
-        let behavior = SnapBehavior::Centerline {
-            threshold: self.snap.centerline_threshold,
-        };
+        let behavior = self.current_snap_behavior()?;
         self.find_snap_point_with_radius(pixel_hint, self.snap.contrast_search_radius, behavior)
     }
 

@@ -1,482 +1,55 @@
 //! Main egui/eframe application state and UI orchestration.
 
-use crate::config::{AppConfig, AutoPlaceConfig};
-use crate::export::{self, ExportPayload};
+use crate::config::AppConfig;
 use crate::image::{
     ImageFilters, ImageMeta, LoadedImage, apply_image_filters, describe_aspect_ratio,
     flip_color_image_horizontal, flip_color_image_vertical, format_system_time,
     human_readable_bytes, rotate_color_image_ccw, rotate_color_image_cw, total_pixel_count,
 };
-use crate::interp::{InterpAlgorithm, XYPoint};
-use crate::project::{ImageTransformOp, ImageTransformRecord};
-use crate::snap::{SnapFeatureSource, SnapMapCache, SnapThresholdKind};
+use crate::interp::InterpAlgorithm;
+use crate::image::{ImageTransformOp, ImageTransformRecord};
+use crate::snap::{SnapFeatureSource, SnapThresholdKind};
 use crate::types::{
-    AngleDirection, AngleUnit, AxisMapping, AxisUnit, AxisValue, CoordSystem, PolarMapping,
-    ScaleKind, parse_axis_value,
+    AngleDirection, AngleUnit, AxisMapping, AxisUnit, CoordSystem, PolarMapping, ScaleKind,
 };
-use egui::{Color32, ColorImage, Context, Key, Pos2, Vec2, pos2};
+use egui::{Color32, Context, Key, Pos2, Vec2, pos2};
 
 use egui_file_dialog::{DialogState, FileDialog};
 use std::{
     path::{Path, PathBuf},
-    sync::mpsc::Receiver,
-    time::{Duration, Instant, SystemTime},
+    time::Duration,
 };
 
 mod auto_trace;
+mod calibration;
 mod clipboard;
+mod constants;
 mod export_helpers;
+mod export_state;
 mod image_loader;
-mod point_stats;
+mod image_state;
+mod interaction;
 mod points;
 mod project_state;
 mod snap_helpers;
+mod snap_state;
 mod ui;
-mod util;
+mod ui_state;
 
-pub(crate) use auto_trace::{AutoTraceConfig, AutoTraceDirection};
-use project_state::{PendingProjectSave, ProjectApplyPlan, ProjectLoadPrompt};
-pub(crate) use util::safe_usize_to_f32;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PickMode {
-    None,
-    X1,
-    X2,
-    Y1,
-    Y2,
-    Origin,
-    R1,
-    R2,
-    A1,
-    A2,
-    CurveColor,
-    AutoTrace,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AxisValueField {
-    X1,
-    X2,
-    Y1,
-    Y2,
-    R1,
-    R2,
-    A1,
-    A2,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ZoomAnchor {
-    ViewportCenter,
-    ViewportPos(Pos2),
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ZoomIntent {
-    Anchor(ZoomAnchor),
-    TargetPan(Vec2),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SidePanelPosition {
-    Left,
-    Right,
-}
-
-enum ImageLoadRequest {
-    Path(PathBuf),
-    Bytes(Vec<u8>),
-}
-
-struct PendingImageTask {
-    rx: Receiver<ImageLoadResult>,
-    meta: PendingImageMeta,
-}
-
-enum ImageLoadResult {
-    Success(ColorImage),
-    Error(String),
-}
-
-#[derive(Debug, Default)]
-struct AutoPlaceState {
-    hold_started_at: Option<Instant>,
-    active: bool,
-    last_pointer: Option<(Pos2, Instant)>,
-    last_snapped_point: Option<(Pos2, Instant)>,
-    speed_ewma: f32,
-    pause_started_at: Option<Instant>,
-    suppress_click: bool,
-}
-
-#[derive(Debug)]
-struct PrimaryPressInfo {
-    pos: Pos2,
-    time: Instant,
-    in_rect: bool,
-    shift_down: bool,
-}
-
-struct ImageState {
-    image: Option<LoadedImage>,
-    base_pixels: Option<ColorImage>,
-    filters: ImageFilters,
-    meta: Option<ImageMeta>,
-    transform: ImageTransformRecord,
-    pan: Vec2,
-    last_viewport_size: Option<Vec2>,
-    skip_pan_sync_once: bool,
-    pending_fit_on_load: bool,
-    zoom: f32,
-    zoom_target: f32,
-    zoom_intent: ZoomIntent,
-    touch_pan_active: bool,
-    touch_pan_last: Option<Pos2>,
-}
-
-struct ProjectState {
-    pending_image_task: Option<PendingImageTask>,
-    pending_project_apply: Option<ProjectApplyPlan>,
-    pending_project_save: Option<PendingProjectSave>,
-    project_prompt: Option<ProjectLoadPrompt>,
-    title: Option<String>,
-    description: Option<String>,
-    active_dialog: Option<NativeDialog>,
-    last_project_dir: Option<PathBuf>,
-    last_project_path: Option<PathBuf>,
-    last_image_dir: Option<PathBuf>,
-    last_export_dir: Option<PathBuf>,
-}
-
-struct CalibrationState {
-    pick_mode: PickMode,
-    pending_value_focus: Option<AxisValueField>,
-    cal_x: AxisCalUi,
-    cal_y: AxisCalUi,
-    polar_cal: PolarCalUi,
-    coord_system: CoordSystem,
-    calibration_angle_snap: bool,
-    show_calibration_segments: bool,
-    dragging_handle: Option<DragTarget>,
-}
-
-struct PointsState {
-    points: Vec<PickedPoint>,
-    points_numeric_dirty: bool,
-    cached_sorted_preview: Vec<(f64, Pos2)>,
-    cached_sorted_numeric: Vec<XYPoint>,
-    sorted_preview_dirty: bool,
-    sorted_numeric_dirty: bool,
-    last_x_mapping: Option<AxisMapping>,
-    last_y_mapping: Option<AxisMapping>,
-    last_polar_mapping: Option<PolarMapping>,
-    last_coord_system: CoordSystem,
-    show_curve_segments: bool,
-}
-
-struct SnapState {
-    point_input_mode: PointInputMode,
-    contrast_search_radius: f32,
-    contrast_threshold: f32,
-    centerline_threshold: f32,
-    snap_feature_source: SnapFeatureSource,
-    snap_threshold_kind: SnapThresholdKind,
-    snap_target_color: Color32,
-    snap_color_tolerance: f32,
-    snap_maps: Option<SnapMapCache>,
-    pending_snap_job: Option<SnapBuildJob>,
-    snap_maps_dirty: bool,
-    snap_overlay_color: Color32,
-    snap_overlay_choices: Vec<Color32>,
-    snap_overlay_choice: usize,
-}
-
-struct ExportState {
-    sample_count: usize,
-    export_kind: ExportKind,
-    interp_algorithm: InterpAlgorithm,
-    raw_include_distances: bool,
-    raw_include_angles: bool,
-    polar_export_include_cartesian: bool,
-}
-
-struct InteractionState {
-    auto_place_cfg: AutoPlaceConfig,
-    auto_place_state: AutoPlaceState,
-    auto_trace_cfg: AutoTraceConfig,
-    primary_press: Option<PrimaryPressInfo>,
-    middle_pan_enabled: bool,
-}
-
-struct UiState {
-    side_open: bool,
-    side_position: SidePanelPosition,
-    info_window_open: bool,
-    points_info_window_open: bool,
-    image_filters_window_open: bool,
-    auto_trace_window_open: bool,
-    last_status: Option<String>,
-}
-
-#[derive(Clone)]
-enum PendingImageMeta {
-    Path {
-        path: PathBuf,
-    },
-    DroppedBytes {
-        name: Option<String>,
-        byte_len: usize,
-        last_modified: Option<SystemTime>,
-    },
-}
-
-impl PendingImageMeta {
-    fn description(&self) -> String {
-        match self {
-            Self::Path { path } => path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map_or_else(|| path.display().to_string(), str::to_string),
-            Self::DroppedBytes { name, .. } => name
-                .as_deref()
-                .map_or_else(|| "dropped bytes".to_string(), str::to_string),
-        }
-    }
-
-    fn into_image_meta(self) -> ImageMeta {
-        match self {
-            Self::Path { path } => ImageMeta::from_path(&path),
-            Self::DroppedBytes {
-                name,
-                byte_len,
-                last_modified,
-            } => ImageMeta::from_dropped_bytes(name.as_deref(), byte_len, last_modified),
-        }
-    }
-}
-
-struct SnapBuildJob {
-    rx: Receiver<Option<SnapMapCache>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PointInputMode {
-    Free,
-    ContrastSnap,
-    CenterlineSnap,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExportKind {
-    Interpolated,
-    RawPoints,
-}
-
-const ZOOM_PRESETS: &[f32] = &[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0];
-const MIN_ZOOM: f32 = 0.25;
-const MAX_ZOOM: f32 = 8.0;
-const ZOOM_SMOOTH_RESPONSE: f32 = 0.10;
-const ZOOM_SNAP_EPS: f32 = 0.0005;
-const PAN_SNAP_EPS: f32 = 0.5;
-const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const POINT_HIT_RADIUS: f32 = 12.0;
-const SAMPLE_COUNT_MIN: usize = 10;
-const CAL_POINT_DRAW_RADIUS: f32 = 4.0;
-const CAL_POINT_OUTLINE_PAD: f32 = 1.5;
-const CAL_LINE_WIDTH: f32 = 1.6;
-const CAL_LINE_OUTLINE_WIDTH: f32 = 3.2;
-const CAL_OUTLINE_ALPHA: u8 = 180;
-const CAL_ANGLE_SNAP_STEP_RAD: f32 = std::f32::consts::PI / 12.0;
-const ATTENTION_BLINK_SPEED: f32 = 2.2;
-const ATTENTION_ALPHA_MIN: f32 = 0.35;
-const ATTENTION_ALPHA_MAX: f32 = 1.0;
-const ATTENTION_OUTLINE_PAD: f32 = 2.0;
-
-#[derive(Debug)]
-enum NativeDialog {
-    Open(FileDialog),
-    OpenProject(FileDialog),
-    SaveProject(FileDialog),
-    SaveCsv {
-        dialog: FileDialog,
-        payload: ExportPayload,
-    },
-    SaveXlsx {
-        dialog: FileDialog,
-        payload: ExportPayload,
-    },
-
-    SaveJson {
-        dialog: FileDialog,
-        payload: ExportPayload,
-    },
-    SaveRon {
-        dialog: FileDialog,
-        payload: ExportPayload,
-    },
-}
-
-#[derive(Debug, Clone)]
-struct AxisCalUi {
-    unit: AxisUnit,
-    scale: ScaleKind,
-    p1: Option<Pos2>,
-    p2: Option<Pos2>,
-    v1_text: String,
-    v2_text: String,
-}
-
-impl AxisCalUi {
-    fn mapping(&self) -> Option<AxisMapping> {
-        let (p1, p2) = (self.p1?, self.p2?);
-        if !Self::points_are_distinct(p1, p2) {
-            return None;
-        }
-        let v1 = parse_axis_value(&self.v1_text, self.unit)?;
-        let v2 = parse_axis_value(&self.v2_text, self.unit)?;
-        if !Self::values_are_valid(self.scale, self.unit, &v1, &v2) {
-            return None;
-        }
-        Some(AxisMapping {
-            p1,
-            p2,
-            v1,
-            v2,
-            scale: self.scale,
-            unit: self.unit,
-        })
-    }
-
-    fn points_are_distinct(p1: Pos2, p2: Pos2) -> bool {
-        (p2 - p1).length_sq() > f32::EPSILON
-    }
-
-    fn values_are_valid(scale: ScaleKind, unit: AxisUnit, v1: &AxisValue, v2: &AxisValue) -> bool {
-        match (unit, v1, v2) {
-            (AxisUnit::Float, AxisValue::Float(a), AxisValue::Float(b)) => {
-                let finite = a.is_finite() && b.is_finite();
-                if !finite {
-                    return false;
-                }
-                let distinct = (*a - *b).abs() > f64::EPSILON;
-                let positive = scale != ScaleKind::Log10 || (*a > 0.0 && *b > 0.0);
-                distinct && positive
-            }
-            (AxisUnit::DateTime, AxisValue::DateTime(a), AxisValue::DateTime(b)) => {
-                scale == ScaleKind::Linear && a != b
-            }
-            _ => false,
-        }
-    }
-
-    fn value_invalid_flags(&self) -> (bool, bool) {
-        let v1 = parse_axis_value(&self.v1_text, self.unit);
-        let v2 = parse_axis_value(&self.v2_text, self.unit);
-        let invalid_pair = if let (Some(a), Some(b)) = (&v1, &v2) {
-            !Self::values_are_valid(self.scale, self.unit, a, b)
-        } else {
-            false
-        };
-        (v1.is_none() || invalid_pair, v2.is_none() || invalid_pair)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct PolarCalUi {
-    origin: Option<Pos2>,
-    radius: AxisCalUi,
-    angle: AxisCalUi,
-    angle_unit: AngleUnit,
-    angle_direction: AngleDirection,
-}
-
-impl PolarCalUi {
-    fn mapping(&self) -> Option<PolarMapping> {
-        let origin = self.origin?;
-
-        if self.radius.unit != AxisUnit::Float || self.angle.unit != AxisUnit::Float {
-            return None;
-        }
-
-        let radius_v1 = match parse_axis_value(&self.radius.v1_text, AxisUnit::Float)? {
-            AxisValue::Float(v) => v,
-            _ => return None,
-        };
-        let radius_v2 = match parse_axis_value(&self.radius.v2_text, AxisUnit::Float)? {
-            AxisValue::Float(v) => v,
-            _ => return None,
-        };
-        if !AxisCalUi::values_are_valid(
-            self.radius.scale,
-            AxisUnit::Float,
-            &AxisValue::Float(radius_v1),
-            &AxisValue::Float(radius_v2),
-        ) {
-            return None;
-        }
-
-        let angle_v1 = match parse_axis_value(&self.angle.v1_text, AxisUnit::Float)? {
-            AxisValue::Float(v) => v,
-            _ => return None,
-        };
-        let angle_v2 = match parse_axis_value(&self.angle.v2_text, AxisUnit::Float)? {
-            AxisValue::Float(v) => v,
-            _ => return None,
-        };
-        if !AxisCalUi::values_are_valid(
-            ScaleKind::Linear,
-            AxisUnit::Float,
-            &AxisValue::Float(angle_v1),
-            &AxisValue::Float(angle_v2),
-        ) {
-            return None;
-        }
-
-        let rp1 = self.radius.p1?;
-        let rp2 = self.radius.p2?;
-        let ap1 = self.angle.p1?;
-        let ap2 = self.angle.p2?;
-
-        let d1 = f64::from((rp1 - origin).length());
-        let d2 = f64::from((rp2 - origin).length());
-        let a1 = f64::from((ap1.y - origin.y).atan2(ap1.x - origin.x));
-        let a2 = f64::from((ap2.y - origin.y).atan2(ap2.x - origin.x));
-
-        PolarMapping::new(
-            origin,
-            d1,
-            d2,
-            radius_v1,
-            radius_v2,
-            self.radius.scale,
-            a1,
-            a2,
-            angle_v1,
-            angle_v2,
-            self.angle_unit,
-            self.angle_direction,
-        )
-    }
-}
-
-#[derive(Debug, Clone)]
-struct PickedPoint {
-    pixel: Pos2,
-    x_numeric: Option<f64>,
-    y_numeric: Option<f64>,
-}
-
-impl PickedPoint {
-    const fn new(pixel: Pos2) -> Self {
-        Self {
-            pixel,
-            x_numeric: None,
-            y_numeric: None,
-        }
-    }
-}
-
+pub use auto_trace::{AutoTraceConfig, AutoTraceDirection};
+pub use calibration::{AxisCalUi, AxisValueField, CalibrationState, PickMode, PolarCalUi};
+pub use constants::*;
+pub use export_state::{ExportKind, ExportState, SAMPLE_COUNT_MIN};
+pub use image_state::{
+    ImageLoadRequest, ImageLoadResult, ImageState, PendingImageMeta, PendingImageTask, ZoomAnchor,
+    ZoomIntent,
+};
+pub use interaction::{AutoPlaceState, DragTarget, InteractionState, PrimaryPressInfo};
+pub use points::{PickedPoint, PointsState};
+pub use project_state::ProjectState;
+pub use snap_state::{PointInputMode, SnapBuildJob, SnapState};
+pub use ui_state::{NativeDialog, SidePanelPosition, UiState};
+pub use crate::util::safe_usize_to_f32;
 /// Top-level application state for the Curcat UI.
 #[allow(clippy::struct_excessive_bools)]
 pub struct CurcatApp {
@@ -491,7 +64,15 @@ pub struct CurcatApp {
     ui: UiState,
 }
 
+enum DialogPoll {
+    Picked(PathBuf),
+    Cancelled,
+    Closed,
+    Open,
+}
+
 impl Default for CurcatApp {
+    #[allow(clippy::too_many_lines)]
     fn default() -> Self {
         let config = AppConfig::load();
         let auto_place_cfg = config.auto_place();
@@ -683,6 +264,18 @@ impl CurcatApp {
         }
     }
 
+    fn poll_dialog(ctx: &Context, dialog: &mut FileDialog) -> DialogPoll {
+        dialog.update(ctx);
+        dialog.take_picked().map_or_else(
+            || match dialog.state() {
+                DialogState::Cancelled => DialogPoll::Cancelled,
+                DialogState::Closed => DialogPoll::Closed,
+                _ => DialogPoll::Open,
+            },
+            DialogPoll::Picked,
+        )
+    }
+
     fn reset_calibrations(&mut self) {
         self.calibration.cal_x.p1 = None;
         self.calibration.cal_x.p2 = None;
@@ -752,10 +345,10 @@ impl CurcatApp {
     }
 
     fn set_loaded_image(&mut self, mut image: LoadedImage, meta: Option<ImageMeta>) {
-        self.image.base_pixels = Some(image.pixels.clone());
+        let base_pixels = image.pixels.clone();
+        self.image.base_pixels = Some(base_pixels.clone());
         if !self.image.filters.is_identity() {
-            let filtered =
-                apply_image_filters(self.image.base_pixels.as_ref().unwrap(), self.image.filters);
+            let filtered = apply_image_filters(&base_pixels, self.image.filters);
             image.replace_pixels(filtered);
         }
         self.image.image = Some(image);
@@ -798,8 +391,8 @@ impl CurcatApp {
         new_size: [usize; 2],
     ) {
         let map_pos = |pos: Pos2| -> Pos2 {
-            let max_x = old_size[0].saturating_sub(1) as f32;
-            let max_y = old_size[1].saturating_sub(1) as f32;
+            let max_x = safe_usize_to_f32(old_size[0].saturating_sub(1));
+            let max_y = safe_usize_to_f32(old_size[1].saturating_sub(1));
             let clamped = pos2(pos.x.clamp(0.0, max_x), pos.y.clamp(0.0, max_y));
             let mapped = match op {
                 ImageTransformOp::RotateCw => pos2(max_y - clamped.y, clamped.x),
@@ -807,8 +400,8 @@ impl CurcatApp {
                 ImageTransformOp::FlipHorizontal => pos2(max_x - clamped.x, clamped.y),
                 ImageTransformOp::FlipVertical => pos2(clamped.x, max_y - clamped.y),
             };
-            let new_max_x = new_size[0].saturating_sub(1) as f32;
-            let new_max_y = new_size[1].saturating_sub(1) as f32;
+            let new_max_x = safe_usize_to_f32(new_size[0].saturating_sub(1));
+            let new_max_y = safe_usize_to_f32(new_size[1].saturating_sub(1));
             pos2(
                 mapped.x.clamp(0.0, new_max_x),
                 mapped.y.clamp(0.0, new_max_y),
@@ -1090,23 +683,8 @@ impl CurcatApp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DragTarget {
-    CurvePoint(usize),
-    CalX1,
-    CalX2,
-    CalY1,
-    CalY2,
-    PolarOrigin,
-    PolarR1,
-    PolarR2,
-    PolarA1,
-    PolarA2,
-}
-
-impl CurcatApp {}
-
 impl eframe::App for CurcatApp {
+    #[allow(clippy::too_many_lines)]
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.poll_image_loader(ctx);
         self.poll_project_save_job();
@@ -1241,131 +819,70 @@ impl eframe::App for CurcatApp {
         if let Some(dialog_state) = self.project.active_dialog.as_mut() {
             match dialog_state {
                 NativeDialog::Open(dialog) => {
-                    dialog.update(ctx);
-                    if let Some(path) = dialog.take_picked() {
-                        self.start_loading_image_from_path(path);
-                        close_dialog = true;
-                    } else {
-                        match dialog.state() {
-                            DialogState::Cancelled => {
-                                self.set_status("Open canceled.");
-                                close_dialog = true;
-                            }
-                            DialogState::Closed => close_dialog = true,
-                            _ => {}
+                    match Self::poll_dialog(ctx, dialog) {
+                        DialogPoll::Picked(path) => {
+                            self.start_loading_image_from_path(path);
+                            close_dialog = true;
                         }
+                        DialogPoll::Cancelled => {
+                            self.set_status("Open canceled.");
+                            close_dialog = true;
+                        }
+                        DialogPoll::Closed => close_dialog = true,
+                        DialogPoll::Open => {}
                     }
                 }
                 NativeDialog::OpenProject(dialog) => {
-                    dialog.update(ctx);
-                    if let Some(path) = dialog.take_picked() {
-                        self.handle_project_load(path);
-                        close_dialog = true;
-                    } else {
-                        match dialog.state() {
-                            DialogState::Cancelled => {
-                                self.set_status("Project open canceled.");
-                                close_dialog = true;
-                            }
-                            DialogState::Closed => close_dialog = true,
-                            _ => {}
+                    match Self::poll_dialog(ctx, dialog) {
+                        DialogPoll::Picked(path) => {
+                            self.handle_project_load(path);
+                            close_dialog = true;
                         }
+                        DialogPoll::Cancelled => {
+                            self.set_status("Project open canceled.");
+                            close_dialog = true;
+                        }
+                        DialogPoll::Closed => close_dialog = true,
+                        DialogPoll::Open => {}
                     }
                 }
                 NativeDialog::SaveProject(dialog) => {
-                    dialog.update(ctx);
-                    if let Some(path) = dialog.take_picked() {
-                        self.handle_project_save(&path);
-                        close_dialog = true;
-                    } else {
-                        match dialog.state() {
-                            DialogState::Cancelled => {
-                                self.set_status("Project save canceled.");
-                                close_dialog = true;
-                            }
-                            DialogState::Closed => close_dialog = true,
-                            _ => {}
+                    match Self::poll_dialog(ctx, dialog) {
+                        DialogPoll::Picked(path) => {
+                            self.handle_project_save(&path);
+                            close_dialog = true;
                         }
+                        DialogPoll::Cancelled => {
+                            self.set_status("Project save canceled.");
+                            close_dialog = true;
+                        }
+                        DialogPoll::Closed => close_dialog = true,
+                        DialogPoll::Open => {}
                     }
                 }
-                NativeDialog::SaveCsv { dialog, payload } => {
-                    dialog.update(ctx);
-                    if let Some(path) = dialog.take_picked() {
-                        picked_export_path = Some(path.clone());
-                        match export::export_to_csv(&path, payload) {
-                            Ok(()) => self.set_status("CSV exported."),
-                            Err(e) => self.set_status(format!("CSV export failed: {e}")),
-                        }
-                        close_dialog = true;
-                    } else {
-                        match dialog.state() {
-                            DialogState::Cancelled => {
-                                self.set_status("Export canceled.");
-                                close_dialog = true;
+                NativeDialog::SaveExport {
+                    dialog,
+                    payload,
+                    format,
+                } => {
+                    let format = *format;
+                    match Self::poll_dialog(ctx, dialog) {
+                        DialogPoll::Picked(path) => {
+                            picked_export_path = Some(path.clone());
+                            match format.export(&path, payload) {
+                                Ok(()) => self.set_status(format!("{} exported.", format.label())),
+                                Err(e) => {
+                                    self.set_status(format!("{} export failed: {e}", format.label()));
+                                }
                             }
-                            DialogState::Closed => close_dialog = true,
-                            _ => {}
+                            close_dialog = true;
                         }
-                    }
-                }
-                NativeDialog::SaveXlsx { dialog, payload } => {
-                    dialog.update(ctx);
-                    if let Some(path) = dialog.take_picked() {
-                        picked_export_path = Some(path.clone());
-                        match export::export_to_xlsx(&path, payload) {
-                            Ok(()) => self.set_status("Excel exported."),
-                            Err(e) => self.set_status(format!("Excel export failed: {e}")),
+                        DialogPoll::Cancelled => {
+                            self.set_status("Export canceled.");
+                            close_dialog = true;
                         }
-                        close_dialog = true;
-                    } else {
-                        match dialog.state() {
-                            DialogState::Cancelled => {
-                                self.set_status("Export canceled.");
-                                close_dialog = true;
-                            }
-                            DialogState::Closed => close_dialog = true,
-                            _ => {}
-                        }
-                    }
-                }
-                NativeDialog::SaveJson { dialog, payload } => {
-                    dialog.update(ctx);
-                    if let Some(path) = dialog.take_picked() {
-                        picked_export_path = Some(path.clone());
-                        match export::export_to_json(&path, payload) {
-                            Ok(()) => self.set_status("JSON exported."),
-                            Err(e) => self.set_status(format!("JSON export failed: {e}")),
-                        }
-                        close_dialog = true;
-                    } else {
-                        match dialog.state() {
-                            DialogState::Cancelled => {
-                                self.set_status("Export canceled.");
-                                close_dialog = true;
-                            }
-                            DialogState::Closed => close_dialog = true,
-                            _ => {}
-                        }
-                    }
-                }
-                NativeDialog::SaveRon { dialog, payload } => {
-                    dialog.update(ctx);
-                    if let Some(path) = dialog.take_picked() {
-                        picked_export_path = Some(path.clone());
-                        match export::export_to_ron(&path, payload) {
-                            Ok(()) => self.set_status("RON exported."),
-                            Err(e) => self.set_status(format!("RON export failed: {e}")),
-                        }
-                        close_dialog = true;
-                    } else {
-                        match dialog.state() {
-                            DialogState::Cancelled => {
-                                self.set_status("Export canceled.");
-                                close_dialog = true;
-                            }
-                            DialogState::Closed => close_dialog = true,
-                            _ => {}
-                        }
+                        DialogPoll::Closed => close_dialog = true,
+                        DialogPoll::Open => {}
                     }
                 }
             }

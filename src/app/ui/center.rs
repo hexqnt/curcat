@@ -1,18 +1,25 @@
-use super::super::export_helpers::format_overlay_value;
 use super::super::{
     AutoPlaceState, AxisValueField, CurcatApp, DragTarget, PickMode, PointInputMode,
     PrimaryPressInfo, safe_usize_to_f32,
 };
 use super::icons;
 
-use crate::types::{AxisMapping, CoordSystem, PolarMapping};
+use crate::types::{AxisMapping, AxisValue, CoordSystem, PolarMapping};
 use egui::{Color32, Key, PointerButton, Pos2, Sense, Vec2, pos2};
 use std::time::{Duration, Instant};
 
 const LIGHT_DRAG_CLICK_DIST: f32 = 20.0;
 const LIGHT_DRAG_CLICK_MAX_DURATION: Duration = Duration::from_millis(400);
 
+fn format_overlay_value(value: &AxisValue) -> String {
+    match value {
+        AxisValue::Float(v) => format!("{v:.3}"),
+        AxisValue::DateTime(_) => value.format(),
+    }
+}
+
 #[derive(Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
 struct PointerState {
     shift_pressed: bool,
     primary_down: bool,
@@ -92,7 +99,7 @@ impl CalTarget {
             DragTarget::PolarR2 => Some(Self::R2),
             DragTarget::PolarA1 => Some(Self::A1),
             DragTarget::PolarA2 => Some(Self::A2),
-            _ => None,
+            DragTarget::CurvePoint(_) => None,
         }
     }
 
@@ -116,6 +123,15 @@ impl CalTarget {
 enum CalUpdateMode {
     Drag,
     Pick,
+}
+
+struct CalOverlayStyle {
+    outline: egui::Stroke,
+    stroke: egui::Stroke,
+    point_outer_radius: f32,
+    point_inner_radius: f32,
+    label_font: egui::FontId,
+    label_shadow: Color32,
 }
 
 impl CurcatApp {
@@ -219,6 +235,7 @@ impl CurcatApp {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn add_centered_image(
         &self,
         ui: &mut egui::Ui,
@@ -341,6 +358,7 @@ impl CurcatApp {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_calibration_point(
         &mut self,
         target: CalTarget,
@@ -430,19 +448,58 @@ impl CurcatApp {
         }
     }
 
-    fn draw_cartesian_calibration_overlay(&self, painter: &egui::Painter, rect: egui::Rect) {
-        let stroke_cal_outline = egui::Stroke {
-            width: super::super::CAL_LINE_OUTLINE_WIDTH,
-            color: Color32::from_black_alpha(super::super::CAL_OUTLINE_ALPHA),
-        };
-        let stroke_cal = egui::Stroke {
+    fn calibration_style() -> CalOverlayStyle {
+        let stroke = egui::Stroke {
             width: super::super::CAL_LINE_WIDTH,
             color: Color32::LIGHT_BLUE,
         };
-        let cal_point_color = stroke_cal.color;
-        let cal_radius = super::super::CAL_POINT_DRAW_RADIUS + super::super::CAL_POINT_OUTLINE_PAD;
-        let cal_label_shadow = Color32::from_black_alpha(160);
-        let cal_label_font = egui::FontId::monospace(11.0);
+        CalOverlayStyle {
+            outline: egui::Stroke {
+                width: super::super::CAL_LINE_OUTLINE_WIDTH,
+                color: Color32::from_black_alpha(super::super::CAL_OUTLINE_ALPHA),
+            },
+            stroke,
+            point_outer_radius: super::super::CAL_POINT_DRAW_RADIUS
+                + super::super::CAL_POINT_OUTLINE_PAD,
+            point_inner_radius: super::super::CAL_POINT_DRAW_RADIUS,
+            label_font: egui::FontId::monospace(11.0),
+            label_shadow: Color32::from_black_alpha(160),
+        }
+    }
+
+    fn draw_cal_line(
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        zoom: f32,
+        style: &CalOverlayStyle,
+        p1: Pos2,
+        p2: Pos2,
+    ) {
+        let line = [rect.min + p1.to_vec2() * zoom, rect.min + p2.to_vec2() * zoom];
+        painter.line_segment(line, style.outline);
+        painter.line_segment(line, style.stroke);
+    }
+
+    fn draw_cal_point_base(
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        zoom: f32,
+        style: &CalOverlayStyle,
+        point: Pos2,
+    ) -> Pos2 {
+        let screen = rect.min + point.to_vec2() * zoom;
+        painter.circle_filled(screen, style.point_outer_radius, style.outline.color);
+        painter.circle_filled(screen, style.point_inner_radius, style.stroke.color);
+        screen
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn draw_cartesian_calibration_overlay(&self, painter: &egui::Painter, rect: egui::Rect) {
+        let style = Self::calibration_style();
+        let cal_point_color = style.stroke.color;
+        let cal_radius = style.point_outer_radius;
+        let cal_label_shadow = style.label_shadow;
+        let cal_label_font = style.label_font.clone();
         let cal_length_bg = Color32::from_rgba_unmultiplied(0, 0, 0, 140);
         let cal_length_padding = Vec2::new(6.0, 3.0);
         let label_gap_px = 6.0;
@@ -467,7 +524,7 @@ impl CurcatApp {
         let x_normal = calc_label_normal(self.calibration.cal_x.p1, self.calibration.cal_x.p2);
         let y_normal = calc_label_normal(self.calibration.cal_y.p1, self.calibration.cal_y.p2);
         let draw_cal_point = |point: Pos2, label: &str, normal: Option<Vec2>, flip_side: bool| {
-            let screen = rect.min + point.to_vec2() * self.image.zoom;
+            let screen = Self::draw_cal_point_base(painter, rect, self.image.zoom, &style, point);
             let dir = normal.unwrap_or(default_dir);
             let dir = if flip_side { -dir } else { dir };
             let galley =
@@ -475,8 +532,6 @@ impl CurcatApp {
             let offset = galley.size().y.mul_add(0.5, cal_radius + label_gap_px);
             let label_center = screen + dir * offset;
             let label_pos = label_center - galley.size() * 0.5;
-            painter.circle_filled(screen, cal_radius, stroke_cal_outline.color);
-            painter.circle_filled(screen, super::super::CAL_POINT_DRAW_RADIUS, cal_point_color);
             let shadow_pos = label_pos + Vec2::splat(1.0);
             painter.galley(shadow_pos, galley.clone(), cal_label_shadow);
             painter.galley(label_pos, galley, cal_point_color);
@@ -515,12 +570,7 @@ impl CurcatApp {
             painter.add(text_shape);
         };
         let draw_cal_line = |p1: Pos2, p2: Pos2| {
-            let line = [
-                rect.min + p1.to_vec2() * self.image.zoom,
-                rect.min + p2.to_vec2() * self.image.zoom,
-            ];
-            painter.line_segment(line, stroke_cal_outline);
-            painter.line_segment(line, stroke_cal);
+            Self::draw_cal_line(painter, rect, self.image.zoom, &style, p1, p2);
         };
         if let Some(p1) = self.calibration.cal_x.p1
             && let Some(p2) = self.calibration.cal_x.p2
@@ -549,18 +599,10 @@ impl CurcatApp {
     }
 
     fn draw_polar_calibration_overlay(&self, painter: &egui::Painter, rect: egui::Rect) {
-        let stroke_cal_outline = egui::Stroke {
-            width: super::super::CAL_LINE_OUTLINE_WIDTH,
-            color: Color32::from_black_alpha(super::super::CAL_OUTLINE_ALPHA),
-        };
-        let stroke_cal = egui::Stroke {
-            width: super::super::CAL_LINE_WIDTH,
-            color: Color32::LIGHT_BLUE,
-        };
-        let cal_point_color = stroke_cal.color;
-        let cal_radius = super::super::CAL_POINT_DRAW_RADIUS + super::super::CAL_POINT_OUTLINE_PAD;
-        let cal_label_shadow = Color32::from_black_alpha(160);
-        let cal_label_font = egui::FontId::monospace(11.0);
+        let style = Self::calibration_style();
+        let cal_point_color = style.stroke.color;
+        let cal_label_shadow = style.label_shadow;
+        let cal_label_font = style.label_font.clone();
         let label_offset = Vec2::new(8.0, -8.0);
         let draw_label = |screen: Pos2, label: &str| {
             let galley =
@@ -571,18 +613,11 @@ impl CurcatApp {
             painter.galley(label_pos, galley, cal_point_color);
         };
         let draw_point = |point: Pos2, label: &str| {
-            let screen = rect.min + point.to_vec2() * self.image.zoom;
-            painter.circle_filled(screen, cal_radius, stroke_cal_outline.color);
-            painter.circle_filled(screen, super::super::CAL_POINT_DRAW_RADIUS, cal_point_color);
+            let screen = Self::draw_cal_point_base(painter, rect, self.image.zoom, &style, point);
             draw_label(screen, label);
         };
         let draw_line = |p1: Pos2, p2: Pos2| {
-            let line = [
-                rect.min + p1.to_vec2() * self.image.zoom,
-                rect.min + p2.to_vec2() * self.image.zoom,
-            ];
-            painter.line_segment(line, stroke_cal_outline);
-            painter.line_segment(line, stroke_cal);
+            Self::draw_cal_line(painter, rect, self.image.zoom, &style, p1, p2);
         };
 
         let Some(origin) = self.calibration.polar_cal.origin else {
@@ -685,6 +720,7 @@ impl CurcatApp {
         }
     }
 
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn draw_crosshair_overlay(
         &self,
         painter: &egui::Painter,
@@ -928,13 +964,13 @@ impl CurcatApp {
                 };
 
                 let pointer_pos = response.interact_pointer_pos();
-                let pointer = PointerState::read(ui.ctx());
-                let hover_pos = response.hover_pos().or(pointer.latest_pos);
+                let pointer_state = PointerState::read(ui.ctx());
+                let hover_pos = response.hover_pos().or(pointer_state.latest_pos);
                 let pointer_pixel = hover_pos.map(&to_pixel);
                 let hover_pos_only = response.hover_pos();
                 let hover_pixel = hover_pos_only.map(&to_pixel);
                 let (primary_clicked, click_pos) =
-                    self.resolve_primary_click(&response, rect, pointer, pointer_pos, hover_pos);
+                    self.resolve_primary_click(&response, rect, pointer_state, pointer_pos, hover_pos);
                 let snap_preview = self.compute_snap_preview(pointer_pixel);
                 let calibrated = match self.calibration.coord_system {
                     CoordSystem::Cartesian => {
@@ -944,18 +980,18 @@ impl CurcatApp {
                 };
                 let suppress_primary_click = self.auto_place_tick(
                     pointer_pixel,
-                    pointer.primary_down,
-                    pointer.primary_pressed,
-                    pointer.shift_pressed,
-                    pointer.delete_down,
+                    pointer_state.primary_down,
+                    pointer_state.primary_pressed,
+                    pointer_state.shift_pressed,
+                    pointer_state.delete_down,
                     calibrated,
                 );
 
-                if pointer.primary_down {
+                if pointer_state.primary_down {
                     ui.ctx().request_repaint_after(Duration::from_millis(16));
                 }
 
-                if pointer.shift_pressed
+                if pointer_state.shift_pressed
                     && response.drag_started_by(PointerButton::Primary)
                     && let Some(pos) = pointer_pos
                 {
@@ -1032,7 +1068,7 @@ impl CurcatApp {
                             }
                         }
                     }
-                    if !pointer.shift_pressed || !pointer.primary_down {
+                    if !pointer_state.shift_pressed || !pointer_state.primary_down {
                         self.calibration.dragging_handle = None;
                     }
                 } else if response.clicked_by(PointerButton::Secondary)
@@ -1043,10 +1079,10 @@ impl CurcatApp {
                     self.remove_point_near_screen(pos, image_origin);
                 } else if primary_clicked
                     && !suppress_primary_click
-                    && !pointer.shift_pressed
+                    && !pointer_state.shift_pressed
                     && let Some(pos) = click_pos
                 {
-                    if pointer.delete_down {
+                    if pointer_state.delete_down {
                         let image_origin = rect.min;
                         self.remove_point_near_screen(pos, image_origin);
                     } else {
@@ -1114,9 +1150,9 @@ impl CurcatApp {
                     x_mapping.as_ref(),
                     y_mapping.as_ref(),
                     polar_mapping.as_ref(),
-                    pointer.delete_down,
-                    pointer.shift_pressed,
-                    pointer.ctrl_pressed,
+                    pointer_state.delete_down,
+                    pointer_state.shift_pressed,
+                    pointer_state.ctrl_pressed,
                 );
             });
             if self.image.skip_pan_sync_once {
@@ -1228,6 +1264,7 @@ impl CurcatApp {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::fn_params_excessive_bools)]
     fn auto_place_tick(
         &mut self,
         pointer_pixel: Option<Pos2>,
@@ -1274,10 +1311,17 @@ impl CurcatApp {
         }
 
         if !self.interaction.auto_place_state.active {
+            let hold_started_at = if let Some(started_at) =
+                self.interaction.auto_place_state.hold_started_at
+            {
+                started_at
+            } else {
+                eprintln!("auto-place: missing hold start; resetting timer");
+                self.interaction.auto_place_state.hold_started_at = Some(now);
+                now
+            };
             let hold_elapsed = now
-                .saturating_duration_since(
-                    self.interaction.auto_place_state.hold_started_at.unwrap(),
-                )
+                .saturating_duration_since(hold_started_at)
                 .as_secs_f32();
             if hold_elapsed >= cfg.hold_activation_secs {
                 self.interaction.auto_place_state.active = true;

@@ -8,6 +8,8 @@ repository = "https://github.com/hexqnt/curcat"
 homepage = "https://github.com/hexqnt/curcat"
 readme = "README.md"
 rust-version = "1.90"
+keywords = ["digitizer", "chart", "graph", "egui", "calibration"]
+categories = ["graphics", "visualization", "gui"]
 
 [dependencies]
 arboard = "3.6"
@@ -57,7 +59,8 @@ lto = true
 codegen-units = 1
 
 [lints.clippy]
-all = "warn"
-pedantic = "warn"
-nursery = "warn"
-cargo = "warn"
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+multiple_crate_versions = "allow"

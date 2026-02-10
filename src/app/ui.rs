@@ -6,5 +6,6 @@ pub mod filters;
 pub mod icons;
 pub mod info;
 pub mod project;
+pub mod stats;
 pub mod side;
 pub mod top;

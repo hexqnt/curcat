@@ -1,4 +1,5 @@
-use super::{AxisCalUi, CurcatApp};
+use super::super::{AxisCalUi, CurcatApp};
+use crate::util::safe_usize_to_f32;
 use crate::types::{AxisUnit, AxisValue};
 
 #[derive(Clone, Copy)]
@@ -95,7 +96,8 @@ impl CurcatApp {
                 total += (b.pixel - a.pixel).length();
             }
         }
-        let avg = total / ((self.points.points.len() - 1) as f32);
+        let denom = safe_usize_to_f32(self.points.points.len().saturating_sub(1));
+        let avg = total / denom.max(f32::EPSILON);
         Some((avg, total))
     }
 

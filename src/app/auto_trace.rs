@@ -1,6 +1,7 @@
-use super::{CurcatApp, PickedPoint, PointInputMode};
+use super::{CurcatApp, PickedPoint};
 use crate::snap::SnapBehavior;
 use crate::types::CoordSystem;
+use crate::util::safe_usize_to_f32;
 use egui::{Pos2, Vec2};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,20 +67,6 @@ impl AutoTraceConfig {
 }
 
 impl CurcatApp {
-    const fn auto_trace_behavior(&self) -> Option<SnapBehavior> {
-        match self.snap.point_input_mode {
-            PointInputMode::ContrastSnap => Some(SnapBehavior::Contrast {
-                feature_source: self.snap.snap_feature_source,
-                threshold_kind: self.snap.snap_threshold_kind,
-                threshold: self.snap.contrast_threshold,
-            }),
-            PointInputMode::CenterlineSnap => Some(SnapBehavior::Centerline {
-                threshold: self.snap.centerline_threshold,
-            }),
-            PointInputMode::Free => None,
-        }
-    }
-
     pub(crate) fn auto_trace_from(&mut self, pixel_hint: Pos2) {
         if self.image.image.is_none() {
             self.set_status("Auto-trace requires an image.");
@@ -93,7 +80,7 @@ impl CurcatApp {
             self.set_status("Auto-trace currently supports Cartesian calibration only.");
             return;
         }
-        let Some(behavior) = self.auto_trace_behavior() else {
+        let Some(behavior) = self.current_snap_behavior() else {
             self.set_status("Auto-trace requires snapping (Contrast/Centerline).");
             return;
         };
@@ -183,8 +170,8 @@ impl CurcatApp {
         let mut probe = start;
         let mut misses = 0u32;
         let step = axis_dir * cfg.step_px * dir_sign.signum();
-        let max_x = size[0].saturating_sub(1) as f32;
-        let max_y = size[1].saturating_sub(1) as f32;
+        let max_x = safe_usize_to_f32(size[0].saturating_sub(1));
+        let max_y = safe_usize_to_f32(size[1].saturating_sub(1));
 
         for _ in 0..cfg.max_points {
             probe += step;
