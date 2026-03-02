@@ -10,8 +10,6 @@ pub use model::{
     ProjectLoadOutcome, ProjectPayload, ProjectWarning, ResolvedImage,
 };
 pub use path::make_relative_image_path;
-#[allow(unused_imports)]
-pub use crate::image::{ImageTransformOp, ImageTransformRecord};
 
 #[cfg(test)]
 mod tests;

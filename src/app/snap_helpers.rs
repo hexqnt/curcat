@@ -154,6 +154,7 @@ impl CurcatApp {
     ) -> Option<Pos2> {
         self.ensure_snap_maps();
         if self.snap.snap_maps.is_none()
+            && self.snap.pending_snap_job.is_none()
             && let Some(image) = &self.image.image
         {
             // Fall back to a synchronous build when a result is needed immediately.

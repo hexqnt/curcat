@@ -6,6 +6,7 @@ use super::icons;
 
 use crate::types::{AxisMapping, AxisValue, CoordSystem, PolarMapping};
 use egui::{Color32, Key, PointerButton, Pos2, Sense, Vec2, pos2};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const LIGHT_DRAG_CLICK_DIST: f32 = 20.0;
@@ -179,58 +180,82 @@ impl CurcatApp {
     }
 
     fn handle_drag_and_drop(&mut self, ui: &egui::Ui) {
-        // Handle drag & drop regardless of whether an image is already loaded
-        let (hovered_files, dropped_files) =
-            ui.input(|i| (i.raw.hovered_files.clone(), i.raw.dropped_files.clone()));
-        if (!hovered_files.is_empty() || !dropped_files.is_empty()) && cfg!(debug_assertions) {
-            eprintln!(
-                "[DnD] hovered={} dropped={}",
-                hovered_files.len(),
-                dropped_files.len()
-            );
-            for (idx, h) in hovered_files.iter().enumerate() {
-                eprintln!("[DnD] hover[{idx}] path={:?} mime={}", h.path, h.mime);
-            }
-            for (idx, f) in dropped_files.iter().enumerate() {
-                let blen = f.bytes.as_ref().map_or(0, |b| b.len());
+        enum DropAction {
+            None,
+            LoadPath(PathBuf),
+            LoadBytes {
+                name: Option<String>,
+                bytes: Vec<u8>,
+                last_modified: Option<std::time::SystemTime>,
+            },
+            FailNoReadable,
+        }
+
+        let action = ui.input(|i| {
+            if (!i.raw.hovered_files.is_empty() || !i.raw.dropped_files.is_empty())
+                && cfg!(debug_assertions)
+            {
                 eprintln!(
-                    "[DnD] drop[{idx}] name='{}' mime={} path={:?} bytes={} last_modified={:?}",
-                    f.name, f.mime, f.path, blen, f.last_modified
+                    "[DnD] hovered={} dropped={}",
+                    i.raw.hovered_files.len(),
+                    i.raw.dropped_files.len()
                 );
+                for (idx, h) in i.raw.hovered_files.iter().enumerate() {
+                    eprintln!("[DnD] hover[{idx}] path={:?} mime={}", h.path, h.mime);
+                }
+                for (idx, f) in i.raw.dropped_files.iter().enumerate() {
+                    let blen = f.bytes.as_ref().map_or(0, |b| b.len());
+                    eprintln!(
+                        "[DnD] drop[{idx}] name='{}' mime={} path={:?} bytes={} last_modified={:?}",
+                        f.name, f.mime, f.path, blen, f.last_modified
+                    );
+                }
             }
-        }
 
-        if dropped_files.is_empty() {
-            return;
-        }
+            if i.raw.dropped_files.is_empty() {
+                return DropAction::None;
+            }
 
-        let mut loaded = false;
-        for f in &dropped_files {
-            if let Some(path) = &f.path {
-                self.start_loading_image_from_path(path.clone());
-                loaded = true;
+            for f in &i.raw.dropped_files {
+                if let Some(path) = f.path.as_ref() {
+                    return DropAction::LoadPath(path.clone());
+                }
+                if let Some(bytes) = f.bytes.as_ref() {
+                    return DropAction::LoadBytes {
+                        name: (!f.name.is_empty()).then(|| f.name.clone()),
+                        bytes: bytes.to_vec(),
+                        last_modified: f.last_modified,
+                    };
+                }
+            }
+
+            DropAction::FailNoReadable
+        });
+
+        match action {
+            DropAction::None => {}
+            DropAction::LoadPath(path) => {
                 if cfg!(debug_assertions) {
                     eprintln!("[DnD] Loading from path: {}", path.display());
                 }
-                break;
+                self.start_loading_image_from_path(path);
             }
-            if let Some(bytes) = &f.bytes {
-                self.start_loading_image_from_bytes(
-                    (!f.name.is_empty()).then(|| f.name.clone()),
-                    bytes.to_vec(),
-                    f.last_modified,
-                );
-                loaded = true;
+            DropAction::LoadBytes {
+                name,
+                bytes,
+                last_modified,
+            } => {
                 if cfg!(debug_assertions) {
-                    eprintln!("[DnD] Loading from dropped bytes: name='{}'", f.name);
+                    let debug_name = name.as_deref().unwrap_or("<unnamed>");
+                    eprintln!("[DnD] Loading from dropped bytes: name='{debug_name}'");
                 }
-                break;
+                self.start_loading_image_from_bytes(name, bytes, last_modified);
             }
-        }
-        if !loaded {
-            self.set_status("Drop failed: no readable bytes/path");
-            if cfg!(debug_assertions) {
-                eprintln!("[DnD] Drop failed: no readable bytes/path");
+            DropAction::FailNoReadable => {
+                self.set_status("Drop failed: no readable bytes/path");
+                if cfg!(debug_assertions) {
+                    eprintln!("[DnD] Drop failed: no readable bytes/path");
+                }
             }
         }
     }
@@ -475,7 +500,10 @@ impl CurcatApp {
         p1: Pos2,
         p2: Pos2,
     ) {
-        let line = [rect.min + p1.to_vec2() * zoom, rect.min + p2.to_vec2() * zoom];
+        let line = [
+            rect.min + p1.to_vec2() * zoom,
+            rect.min + p2.to_vec2() * zoom,
+        ];
         painter.line_segment(line, style.outline);
         painter.line_segment(line, style.stroke);
     }
@@ -1311,18 +1339,15 @@ impl CurcatApp {
         }
 
         if !self.interaction.auto_place_state.active {
-            let hold_started_at = if let Some(started_at) =
-                self.interaction.auto_place_state.hold_started_at
-            {
-                started_at
-            } else {
-                eprintln!("auto-place: missing hold start; resetting timer");
-                self.interaction.auto_place_state.hold_started_at = Some(now);
-                now
-            };
-            let hold_elapsed = now
-                .saturating_duration_since(hold_started_at)
-                .as_secs_f32();
+            let hold_started_at =
+                if let Some(started_at) = self.interaction.auto_place_state.hold_started_at {
+                    started_at
+                } else {
+                    eprintln!("auto-place: missing hold start; resetting timer");
+                    self.interaction.auto_place_state.hold_started_at = Some(now);
+                    now
+                };
+            let hold_elapsed = now.saturating_duration_since(hold_started_at).as_secs_f32();
             if hold_elapsed >= cfg.hold_activation_secs {
                 self.interaction.auto_place_state.active = true;
                 self.interaction.auto_place_state.suppress_click = true;

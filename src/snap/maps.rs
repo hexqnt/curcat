@@ -66,10 +66,7 @@ impl SnapMapCache {
             coarse_candidate.pos.x * scale,
             coarse_candidate.pos.y * scale,
         );
-        let Some(base_level) = self.levels.first() else {
-            eprintln!("snap map cache missing base level; using coarse position");
-            return Some(coarse_base_pos);
-        };
+        let base_level = &self.levels[0];
         let refine_radius = (scale * 2.5).max(3.0);
         let refined_candidate =
             search_in_level(base_level, coarse_base_pos, refine_radius, behavior)

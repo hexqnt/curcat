@@ -1,6 +1,6 @@
 use super::super::{AxisCalUi, CurcatApp};
-use crate::util::safe_usize_to_f32;
 use crate::types::{AxisUnit, AxisValue};
+use crate::util::safe_usize_to_f32;
 
 #[derive(Clone, Copy)]
 pub enum AxisKind {

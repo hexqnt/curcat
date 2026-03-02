@@ -6,8 +6,8 @@ use crate::image::{
     flip_color_image_horizontal, flip_color_image_vertical, format_system_time,
     human_readable_bytes, rotate_color_image_ccw, rotate_color_image_cw, total_pixel_count,
 };
-use crate::interp::InterpAlgorithm;
 use crate::image::{ImageTransformOp, ImageTransformRecord};
+use crate::interp::InterpAlgorithm;
 use crate::snap::{SnapFeatureSource, SnapThresholdKind};
 use crate::types::{
     AngleDirection, AngleUnit, AxisMapping, AxisUnit, CoordSystem, PolarMapping, ScaleKind,
@@ -36,6 +36,7 @@ mod snap_state;
 mod ui;
 mod ui_state;
 
+pub use crate::util::safe_usize_to_f32;
 pub use auto_trace::{AutoTraceConfig, AutoTraceDirection};
 pub use calibration::{AxisCalUi, AxisValueField, CalibrationState, PickMode, PolarCalUi};
 pub use constants::*;
@@ -49,7 +50,6 @@ pub use points::{PickedPoint, PointsState};
 pub use project_state::ProjectState;
 pub use snap_state::{PointInputMode, SnapBuildJob, SnapState};
 pub use ui_state::{NativeDialog, SidePanelPosition, UiState};
-pub use crate::util::safe_usize_to_f32;
 /// Top-level application state for the Curcat UI.
 #[allow(clippy::struct_excessive_bools)]
 pub struct CurcatApp {
@@ -346,11 +346,11 @@ impl CurcatApp {
 
     fn set_loaded_image(&mut self, mut image: LoadedImage, meta: Option<ImageMeta>) {
         let base_pixels = image.pixels.clone();
-        self.image.base_pixels = Some(base_pixels.clone());
         if !self.image.filters.is_identity() {
             let filtered = apply_image_filters(&base_pixels, self.image.filters);
             image.replace_pixels(filtered);
         }
+        self.image.base_pixels = Some(base_pixels);
         self.image.image = Some(image);
         self.image.meta = meta;
         self.image.transform = ImageTransformRecord::identity();
@@ -818,48 +818,42 @@ impl eframe::App for CurcatApp {
 
         if let Some(dialog_state) = self.project.active_dialog.as_mut() {
             match dialog_state {
-                NativeDialog::Open(dialog) => {
-                    match Self::poll_dialog(ctx, dialog) {
-                        DialogPoll::Picked(path) => {
-                            self.start_loading_image_from_path(path);
-                            close_dialog = true;
-                        }
-                        DialogPoll::Cancelled => {
-                            self.set_status("Open canceled.");
-                            close_dialog = true;
-                        }
-                        DialogPoll::Closed => close_dialog = true,
-                        DialogPoll::Open => {}
+                NativeDialog::Open(dialog) => match Self::poll_dialog(ctx, dialog) {
+                    DialogPoll::Picked(path) => {
+                        self.start_loading_image_from_path(path);
+                        close_dialog = true;
                     }
-                }
-                NativeDialog::OpenProject(dialog) => {
-                    match Self::poll_dialog(ctx, dialog) {
-                        DialogPoll::Picked(path) => {
-                            self.handle_project_load(path);
-                            close_dialog = true;
-                        }
-                        DialogPoll::Cancelled => {
-                            self.set_status("Project open canceled.");
-                            close_dialog = true;
-                        }
-                        DialogPoll::Closed => close_dialog = true,
-                        DialogPoll::Open => {}
+                    DialogPoll::Cancelled => {
+                        self.set_status("Open canceled.");
+                        close_dialog = true;
                     }
-                }
-                NativeDialog::SaveProject(dialog) => {
-                    match Self::poll_dialog(ctx, dialog) {
-                        DialogPoll::Picked(path) => {
-                            self.handle_project_save(&path);
-                            close_dialog = true;
-                        }
-                        DialogPoll::Cancelled => {
-                            self.set_status("Project save canceled.");
-                            close_dialog = true;
-                        }
-                        DialogPoll::Closed => close_dialog = true,
-                        DialogPoll::Open => {}
+                    DialogPoll::Closed => close_dialog = true,
+                    DialogPoll::Open => {}
+                },
+                NativeDialog::OpenProject(dialog) => match Self::poll_dialog(ctx, dialog) {
+                    DialogPoll::Picked(path) => {
+                        self.handle_project_load(path);
+                        close_dialog = true;
                     }
-                }
+                    DialogPoll::Cancelled => {
+                        self.set_status("Project open canceled.");
+                        close_dialog = true;
+                    }
+                    DialogPoll::Closed => close_dialog = true,
+                    DialogPoll::Open => {}
+                },
+                NativeDialog::SaveProject(dialog) => match Self::poll_dialog(ctx, dialog) {
+                    DialogPoll::Picked(path) => {
+                        self.handle_project_save(&path);
+                        close_dialog = true;
+                    }
+                    DialogPoll::Cancelled => {
+                        self.set_status("Project save canceled.");
+                        close_dialog = true;
+                    }
+                    DialogPoll::Closed => close_dialog = true,
+                    DialogPoll::Open => {}
+                },
                 NativeDialog::SaveExport {
                     dialog,
                     payload,
@@ -872,7 +866,10 @@ impl eframe::App for CurcatApp {
                             match format.export(&path, payload) {
                                 Ok(()) => self.set_status(format!("{} exported.", format.label())),
                                 Err(e) => {
-                                    self.set_status(format!("{} export failed: {e}", format.label()));
+                                    self.set_status(format!(
+                                        "{} export failed: {e}",
+                                        format.label()
+                                    ));
                                 }
                             }
                             close_dialog = true;

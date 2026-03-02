@@ -1,7 +1,7 @@
-use super::stats::{AxisKind, axis_length, format_span};
 use super::super::{
     CurcatApp, describe_aspect_ratio, format_system_time, human_readable_bytes, total_pixel_count,
 };
+use super::stats::{AxisKind, axis_length, format_span};
 use crate::types::{AxisUnit, AxisValue, CoordSystem, PolarMapping};
 use egui::{Color32, RichText};
 

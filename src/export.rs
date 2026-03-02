@@ -145,11 +145,31 @@ pub fn turning_angles(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
 const XLSX_MAX_ROWS: u32 = 1_048_576;
 const XLSX_MAX_COLS: u16 = 16_384;
 
+fn validate_extra_columns(payload: &ExportPayload) -> Result<(), String> {
+    let expected_rows = payload.row_count();
+    if let Some((index, column)) = payload
+        .extra_columns
+        .iter()
+        .enumerate()
+        .find(|(_, col)| col.values.len() != expected_rows)
+    {
+        return Err(format!(
+            "Extra column '{}' (index {index}) has {} rows, expected {expected_rows}.",
+            column.header,
+            column.values.len()
+        ));
+    }
+    Ok(())
+}
+
 /// Write the payload to CSV at the provided path.
 ///
 /// Floats are formatted with 6 fractional digits; `DateTime` values are emitted
 /// as formatted strings. Returns an error if any value is not representable.
 pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
+    if let Err(err) = validate_extra_columns(payload) {
+        anyhow::bail!(err);
+    }
     let mut wtr = csv::Writer::from_path(path)?;
     let mut headers = vec![payload.x_label.clone(), payload.y_label.clone()];
     headers.extend(payload.extra_columns.iter().map(|c| c.header.clone()));
@@ -181,6 +201,9 @@ pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
 /// when needed. Non-finite numbers and unrepresentable datetimes return errors.
 #[allow(clippy::too_many_lines)]
 pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result<(), XlsxError> {
+    if let Err(err) = validate_extra_columns(payload) {
+        return Err(XlsxError::ParameterError(err));
+    }
     let mut workbook = Workbook::new();
     let total_columns = payload.extra_columns.len().saturating_add(2);
     let total_columns_u16 = u16::try_from(total_columns)
@@ -306,6 +329,9 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
 /// The output contains `x_unit`, `y_unit`, and a `points` array. Floats are
 /// rounded to 6 fractional digits; `DateTime` values are emitted as strings.
 pub fn export_to_json(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
+    if let Err(err) = validate_extra_columns(payload) {
+        anyhow::bail!(err);
+    }
     let mut points = Vec::with_capacity(payload.row_count());
     for row_idx in 0..payload.row_count() {
         let mut obj = Map::new();
@@ -396,6 +422,9 @@ impl Serialize for RonValue {
 ///
 /// The output mirrors the JSON structure, using `None` for missing values.
 pub fn export_to_ron(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
+    if let Err(err) = validate_extra_columns(payload) {
+        anyhow::bail!(err);
+    }
     let mut points = Vec::with_capacity(payload.row_count());
     for row_idx in 0..payload.row_count() {
         let mut row = BTreeMap::new();
@@ -668,5 +697,33 @@ mod tests {
         assert!((x1 - 3.0).abs() < 1e-9);
         assert!((y1 - 4.0).abs() < 1e-9);
         assert!((extra1 - 9.876_543).abs() < 1e-9);
+    }
+
+    #[test]
+    fn export_rejects_mismatched_extra_column_lengths() {
+        let payload = ExportPayload {
+            points: vec![XYPoint { x: 1.0, y: 2.0 }, XYPoint { x: 3.0, y: 4.0 }],
+            x_unit: AxisUnit::Float,
+            y_unit: AxisUnit::Float,
+            x_label: "X".to_string(),
+            y_label: "Y".to_string(),
+            coord_system: CoordSystem::Cartesian,
+            angle_unit: None,
+            extra_columns: vec![ExportExtraColumn::new("extra", vec![Some(1.0)])],
+        };
+
+        let check_err = validate_extra_columns(&payload).expect_err("must reject mismatch");
+        assert!(check_err.contains("expected 2"));
+
+        let path = std::env::temp_dir().join(format!(
+            "curcat_csv_export_mismatch_test_{}.csv",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos()
+        ));
+        let export_err = export_to_csv(&path, &payload).expect_err("CSV export must fail");
+        assert!(export_err.to_string().contains("expected 2"));
+        let _ = std::fs::remove_file(&path);
     }
 }

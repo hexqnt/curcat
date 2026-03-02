@@ -202,11 +202,7 @@ fn parse_datetime(input: &str) -> Option<NaiveDateTime> {
     }
     for fmt in DATE_FORMATS {
         if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
-            if let Some(dt) = d.and_hms_opt(0, 0, 0) {
-                return Some(dt);
-            }
-            eprintln!("parse_datetime: failed to build midnight for date {d}");
-            return None;
+            return d.and_hms_opt(0, 0, 0);
         }
     }
     None

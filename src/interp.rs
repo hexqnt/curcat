@@ -176,12 +176,7 @@ fn build_sample_positions(points: &[XYPoint], samples: usize) -> Vec<f64> {
         return vec![];
     }
     let mut xs = Vec::with_capacity(samples);
-    let Some(first) = points.first() else {
-        eprintln!("build_sample_positions called with no points");
-        return xs;
-    };
-    let Some(last) = points.last() else {
-        eprintln!("build_sample_positions missing last point");
+    let (Some(first), Some(last)) = (points.first(), points.last()) else {
         return xs;
     };
     let x_min = first.x;

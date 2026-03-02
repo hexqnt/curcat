@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::image::{ImageTransformOp, ImageTransformRecord};
 use crate::types::{AxisUnit, CoordSystem, ScaleKind};
 
 fn unique_temp_dir(label: &str) -> PathBuf {

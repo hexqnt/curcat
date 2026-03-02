@@ -127,13 +127,11 @@ impl PolarCalUi {
             return None;
         }
 
-        let AxisValue::Float(radius_v1) =
-            parse_axis_value(&self.radius.v1_text, AxisUnit::Float)?
+        let AxisValue::Float(radius_v1) = parse_axis_value(&self.radius.v1_text, AxisUnit::Float)?
         else {
             return None;
         };
-        let AxisValue::Float(radius_v2) =
-            parse_axis_value(&self.radius.v2_text, AxisUnit::Float)?
+        let AxisValue::Float(radius_v2) = parse_axis_value(&self.radius.v2_text, AxisUnit::Float)?
         else {
             return None;
         };
@@ -146,13 +144,11 @@ impl PolarCalUi {
             return None;
         }
 
-        let AxisValue::Float(angle_v1) =
-            parse_axis_value(&self.angle.v1_text, AxisUnit::Float)?
+        let AxisValue::Float(angle_v1) = parse_axis_value(&self.angle.v1_text, AxisUnit::Float)?
         else {
             return None;
         };
-        let AxisValue::Float(angle_v2) =
-            parse_axis_value(&self.angle.v2_text, AxisUnit::Float)?
+        let AxisValue::Float(angle_v2) = parse_axis_value(&self.angle.v2_text, AxisUnit::Float)?
         else {
             return None;
         };

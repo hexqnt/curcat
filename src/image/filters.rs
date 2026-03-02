@@ -133,14 +133,15 @@ fn box_blur(image: &ColorImage, radius: u32) -> Vec<Color32> {
     let radius = radius as usize;
     let row_len = width;
     let mut horiz = vec![[0u8; 4]; width * height];
+    let mut row_prefix = vec![[0u32; 4]; width + 1];
 
     for y in 0..height {
         let row_start = y * row_len;
-        let mut prefix = vec![[0u32; 4]; width + 1];
+        row_prefix[0] = [0; 4];
         for x in 0..width {
             let [r, g, b, a] = image.pixels[row_start + x].to_array();
-            let prev = prefix[x];
-            prefix[x + 1] = [
+            let prev = row_prefix[x];
+            row_prefix[x + 1] = [
                 prev[0] + u32::from(r),
                 prev[1] + u32::from(g),
                 prev[2] + u32::from(b),
@@ -151,8 +152,8 @@ fn box_blur(image: &ColorImage, radius: u32) -> Vec<Color32> {
             let x0 = x.saturating_sub(radius);
             let x1 = (x + radius).min(width - 1);
             let count = u32::try_from(x1 - x0 + 1).unwrap_or(u32::MAX);
-            let sum = prefix[x1 + 1];
-            let base = prefix[x0];
+            let sum = row_prefix[x1 + 1];
+            let base = row_prefix[x0];
             horiz[row_start + x] = [
                 avg_channel(sum[0], base[0], count),
                 avg_channel(sum[1], base[1], count),
@@ -163,13 +164,14 @@ fn box_blur(image: &ColorImage, radius: u32) -> Vec<Color32> {
     }
 
     let mut out = vec![Color32::TRANSPARENT; width * height];
+    let mut col_prefix = vec![[0u32; 4]; height + 1];
     for x in 0..width {
-        let mut prefix = vec![[0u32; 4]; height + 1];
+        col_prefix[0] = [0; 4];
         for y in 0..height {
             let idx = y * row_len + x;
             let [r, g, b, a] = horiz[idx];
-            let prev = prefix[y];
-            prefix[y + 1] = [
+            let prev = col_prefix[y];
+            col_prefix[y + 1] = [
                 prev[0] + u32::from(r),
                 prev[1] + u32::from(g),
                 prev[2] + u32::from(b),
@@ -180,8 +182,8 @@ fn box_blur(image: &ColorImage, radius: u32) -> Vec<Color32> {
             let y0 = y.saturating_sub(radius);
             let y1 = (y + radius).min(height - 1);
             let count = u32::try_from(y1 - y0 + 1).unwrap_or(u32::MAX);
-            let sum = prefix[y1 + 1];
-            let base = prefix[y0];
+            let sum = col_prefix[y1 + 1];
+            let base = col_prefix[y0];
             let idx = y * row_len + x;
             out[idx] = Color32::from_rgba_unmultiplied(
                 avg_channel(sum[0], base[0], count),
