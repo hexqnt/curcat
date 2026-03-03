@@ -104,14 +104,14 @@ impl CurcatApp {
     }
 
     fn axis_from_record(record: &project::AxisCalibrationRecord) -> AxisCalUi {
-        AxisCalUi {
-            unit: record.unit,
-            scale: record.scale,
-            p1: record.p1.map(|p| Pos2::new(p[0], p[1])),
-            p2: record.p2.map(|p| Pos2::new(p[0], p[1])),
-            v1_text: record.v1_text.clone(),
-            v2_text: record.v2_text.clone(),
-        }
+        AxisCalUi::with_values(
+            record.unit,
+            record.scale,
+            record.p1.map(|p| Pos2::new(p[0], p[1])),
+            record.p2.map(|p| Pos2::new(p[0], p[1])),
+            record.v1_text.clone(),
+            record.v2_text.clone(),
+        )
     }
 
     fn polar_to_record(polar: &PolarCalUi) -> project::PolarCalibrationRecord {

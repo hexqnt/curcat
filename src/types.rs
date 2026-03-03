@@ -6,10 +6,11 @@ mod mapping;
 
 pub use axis::{AxisUnit, AxisValue, parse_axis_value};
 pub use coord::{AngleDirection, AngleUnit, CoordSystem, ScaleKind};
-pub use mapping::{AxisMapping, PolarMapping};
+pub use mapping::{AxisMapping, PolarMapping, PolarMappingParams};
 
 #[cfg(test)]
 mod tests {
+    use super::mapping::{AxisMappingError, PolarMappingError};
     use super::*;
     use chrono::{DateTime, NaiveDate, Utc};
     use egui::Pos2;
@@ -113,22 +114,44 @@ mod tests {
     }
 
     #[test]
+    fn axis_mapping_try_new_rejects_datetime_log_scale() {
+        let start = DateTime::<Utc>::from_timestamp(0, 0)
+            .expect("timestamp")
+            .naive_utc();
+        let end = DateTime::<Utc>::from_timestamp(10, 0)
+            .expect("timestamp")
+            .naive_utc();
+        let result = AxisMapping::try_new(
+            Pos2::new(0.0, 0.0),
+            Pos2::new(10.0, 0.0),
+            AxisValue::DateTime(start),
+            AxisValue::DateTime(end),
+            ScaleKind::Log10,
+            AxisUnit::DateTime,
+        );
+        assert_eq!(
+            result,
+            Err(AxisMappingError::LogScaleUnsupportedForDateTime)
+        );
+    }
+
+    #[test]
     fn polar_mapping_linear_deg_ccw() {
         let origin = Pos2::new(0.0, 0.0);
-        let mapping = PolarMapping::new(
+        let mapping = PolarMapping::try_new(PolarMappingParams {
             origin,
-            1.0,
-            2.0,
-            10.0,
-            20.0,
-            ScaleKind::Linear,
-            0.0,
-            std::f64::consts::FRAC_PI_2,
-            0.0,
-            90.0,
-            AngleUnit::Degrees,
-            AngleDirection::Ccw,
-        )
+            radius_distance1: 1.0,
+            radius_distance2: 2.0,
+            radius_value1: 10.0,
+            radius_value2: 20.0,
+            radius_scale: ScaleKind::Linear,
+            angle_pixel1: 0.0,
+            angle_pixel2: std::f64::consts::FRAC_PI_2,
+            angle_value1: 0.0,
+            angle_value2: 90.0,
+            angle_unit: AngleUnit::Degrees,
+            angle_direction: AngleDirection::Ccw,
+        })
         .expect("valid mapping");
 
         let r = mapping.radius_at(Pos2::new(1.5, 0.0)).expect("radius");
@@ -141,20 +164,20 @@ mod tests {
     #[test]
     fn polar_mapping_cw_wraps_angles() {
         let origin = Pos2::new(0.0, 0.0);
-        let mapping = PolarMapping::new(
+        let mapping = PolarMapping::try_new(PolarMappingParams {
             origin,
-            1.0,
-            2.0,
-            1.0,
-            2.0,
-            ScaleKind::Linear,
-            0.0,
-            -std::f64::consts::FRAC_PI_2,
-            0.0,
-            90.0,
-            AngleUnit::Degrees,
-            AngleDirection::Cw,
-        )
+            radius_distance1: 1.0,
+            radius_distance2: 2.0,
+            radius_value1: 1.0,
+            radius_value2: 2.0,
+            radius_scale: ScaleKind::Linear,
+            angle_pixel1: 0.0,
+            angle_pixel2: -std::f64::consts::FRAC_PI_2,
+            angle_value1: 0.0,
+            angle_value2: 90.0,
+            angle_unit: AngleUnit::Degrees,
+            angle_direction: AngleDirection::Cw,
+        })
         .expect("valid mapping");
 
         let theta = mapping.angle_at(Pos2::new(0.0, -1.0)).expect("angle");
@@ -162,5 +185,27 @@ mod tests {
 
         let wrap = mapping.angle_at(Pos2::new(0.0, 1.0)).expect("angle");
         assert!((wrap - 270.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn polar_mapping_try_new_rejects_equal_angle_values() {
+        let params = PolarMappingParams {
+            origin: Pos2::new(0.0, 0.0),
+            radius_distance1: 1.0,
+            radius_distance2: 2.0,
+            radius_value1: 10.0,
+            radius_value2: 20.0,
+            radius_scale: ScaleKind::Linear,
+            angle_pixel1: 0.0,
+            angle_pixel2: std::f64::consts::FRAC_PI_2,
+            angle_value1: 90.0,
+            angle_value2: 90.0,
+            angle_unit: AngleUnit::Degrees,
+            angle_direction: AngleDirection::Ccw,
+        };
+        assert_eq!(
+            PolarMapping::try_new(params),
+            Err(PolarMappingError::EqualAngleValues)
+        );
     }
 }

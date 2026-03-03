@@ -5,6 +5,17 @@ use egui::Pos2;
 use super::axis::{AxisUnit, AxisValue};
 use super::coord::{AngleDirection, AngleUnit, ScaleKind};
 
+/// Validation errors for cartesian axis mappings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AxisMappingError {
+    CoincidentPoints,
+    UnitValueMismatch,
+    NonFiniteValue,
+    EqualValues,
+    LogScaleRequiresPositiveValues,
+    LogScaleUnsupportedForDateTime,
+}
+
 /// Mapping between two calibration points and their axis values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AxisMapping {
@@ -23,6 +34,62 @@ pub struct AxisMapping {
 }
 
 impl AxisMapping {
+    /// Build a validated axis mapping.
+    pub fn try_new(
+        p1: Pos2,
+        p2: Pos2,
+        v1: AxisValue,
+        v2: AxisValue,
+        scale: ScaleKind,
+        unit: AxisUnit,
+    ) -> Result<Self, AxisMappingError> {
+        if (p2 - p1).length_sq() <= f32::EPSILON {
+            return Err(AxisMappingError::CoincidentPoints);
+        }
+        Self::validate_value_pair(scale, unit, &v1, &v2)?;
+        Ok(Self {
+            p1,
+            p2,
+            v1,
+            v2,
+            scale,
+            unit,
+        })
+    }
+
+    /// Validate a value pair for the target unit/scale combination.
+    pub fn validate_value_pair(
+        scale: ScaleKind,
+        unit: AxisUnit,
+        v1: &AxisValue,
+        v2: &AxisValue,
+    ) -> Result<(), AxisMappingError> {
+        match (unit, v1, v2) {
+            (AxisUnit::Float, AxisValue::Float(a), AxisValue::Float(b)) => {
+                if !a.is_finite() || !b.is_finite() {
+                    return Err(AxisMappingError::NonFiniteValue);
+                }
+                if (*a - *b).abs() <= f64::EPSILON {
+                    return Err(AxisMappingError::EqualValues);
+                }
+                if scale == ScaleKind::Log10 && (*a <= 0.0 || *b <= 0.0) {
+                    return Err(AxisMappingError::LogScaleRequiresPositiveValues);
+                }
+                Ok(())
+            }
+            (AxisUnit::DateTime, AxisValue::DateTime(a), AxisValue::DateTime(b)) => {
+                if scale != ScaleKind::Linear {
+                    return Err(AxisMappingError::LogScaleUnsupportedForDateTime);
+                }
+                if a == b {
+                    return Err(AxisMappingError::EqualValues);
+                }
+                Ok(())
+            }
+            _ => Err(AxisMappingError::UnitValueMismatch),
+        }
+    }
+
     /// Parameter t of the point along the calibration segment (0..1).
     ///
     /// The value is computed by projecting onto the calibration line; degenerate
@@ -72,6 +139,33 @@ impl AxisMapping {
     }
 }
 
+/// Validation errors for polar mappings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolarMappingError {
+    NonFiniteInput,
+    CoincidentRadiusPoints,
+    LogScaleRequiresPositiveRadius,
+    EqualAngleValues,
+    ZeroAngleSpan,
+}
+
+/// Raw parameters required to build a polar mapping.
+#[derive(Debug, Clone, Copy)]
+pub struct PolarMappingParams {
+    pub origin: Pos2,
+    pub radius_distance1: f64,
+    pub radius_distance2: f64,
+    pub radius_value1: f64,
+    pub radius_value2: f64,
+    pub radius_scale: ScaleKind,
+    pub angle_pixel1: f64,
+    pub angle_pixel2: f64,
+    pub angle_value1: f64,
+    pub angle_value2: f64,
+    pub angle_unit: AngleUnit,
+    pub angle_direction: AngleDirection,
+}
+
 /// Polar calibration mapping from pixels to (angle, radius).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PolarMapping {
@@ -91,72 +185,49 @@ pub struct PolarMapping {
 }
 
 impl PolarMapping {
-    /// Build a polar mapping from two radial and two angular calibration points.
-    ///
-    /// - `radius_d1/radius_d2` are pixel distances from the origin.
-    /// - `radius_v1/radius_v2` are the corresponding radius values.
-    /// - `angle_a1/angle_a2` are pixel angles in radians (from `atan2`).
-    /// - `angle_v1/angle_v2` are the corresponding angle values in `angle_unit`.
-    ///
-    /// Returns `None` when inputs are non-finite, spans are zero, or when log
-    /// scaling is requested with non-positive radius values.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        origin: Pos2,
-        radius_distance1: f64,
-        radius_distance2: f64,
-        radius_value1: f64,
-        radius_value2: f64,
-        radius_scale: ScaleKind,
-        angle_pixel1: f64,
-        angle_pixel2: f64,
-        angle_value1: f64,
-        angle_value2: f64,
-        angle_unit: AngleUnit,
-        angle_direction: AngleDirection,
-    ) -> Option<Self> {
-        if !radius_distance1.is_finite()
-            || !radius_distance2.is_finite()
-            || !radius_value1.is_finite()
-            || !radius_value2.is_finite()
+    /// Build a validated polar mapping from raw calibration parameters.
+    pub fn try_new(params: PolarMappingParams) -> Result<Self, PolarMappingError> {
+        if !params.radius_distance1.is_finite()
+            || !params.radius_distance2.is_finite()
+            || !params.radius_value1.is_finite()
+            || !params.radius_value2.is_finite()
+            || !params.angle_pixel1.is_finite()
+            || !params.angle_pixel2.is_finite()
+            || !params.angle_value1.is_finite()
+            || !params.angle_value2.is_finite()
         {
-            return None;
+            return Err(PolarMappingError::NonFiniteInput);
         }
-        if (radius_distance2 - radius_distance1).abs() <= f64::EPSILON {
-            return None;
+        if (params.radius_distance2 - params.radius_distance1).abs() <= f64::EPSILON {
+            return Err(PolarMappingError::CoincidentRadiusPoints);
         }
-        if radius_scale == ScaleKind::Log10 && (radius_value1 <= 0.0 || radius_value2 <= 0.0) {
-            return None;
-        }
-        if !angle_pixel1.is_finite()
-            || !angle_pixel2.is_finite()
-            || !angle_value1.is_finite()
-            || !angle_value2.is_finite()
+        if params.radius_scale == ScaleKind::Log10
+            && (params.radius_value1 <= 0.0 || params.radius_value2 <= 0.0)
         {
-            return None;
+            return Err(PolarMappingError::LogScaleRequiresPositiveRadius);
         }
-        if (angle_value2 - angle_value1).abs() <= f64::EPSILON {
-            return None;
+        if (params.angle_value2 - params.angle_value1).abs() <= f64::EPSILON {
+            return Err(PolarMappingError::EqualAngleValues);
         }
-        let a1 = normalize_angle_rad(angle_pixel1);
-        let a2 = normalize_angle_rad(angle_pixel2);
-        let span = angle_delta(a1, a2, angle_direction);
+        let a1 = normalize_angle_rad(params.angle_pixel1);
+        let a2 = normalize_angle_rad(params.angle_pixel2);
+        let span = angle_delta(a1, a2, params.angle_direction);
         if span <= f64::EPSILON {
-            return None;
+            return Err(PolarMappingError::ZeroAngleSpan);
         }
-        Some(Self {
-            origin,
-            radius_d1: radius_distance1,
-            radius_d2: radius_distance2,
-            radius_v1: radius_value1,
-            radius_v2: radius_value2,
-            radius_scale,
+        Ok(Self {
+            origin: params.origin,
+            radius_d1: params.radius_distance1,
+            radius_d2: params.radius_distance2,
+            radius_v1: params.radius_value1,
+            radius_v2: params.radius_value2,
+            radius_scale: params.radius_scale,
             angle_a1: a1,
             angle_span: span,
-            angle_v1: angle_value1,
-            angle_v2: angle_value2,
-            angle_unit,
-            angle_direction,
+            angle_v1: params.angle_value1,
+            angle_v2: params.angle_value2,
+            angle_unit: params.angle_unit,
+            angle_direction: params.angle_direction,
         })
     }
 

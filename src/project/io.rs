@@ -1,4 +1,4 @@
-use anyhow::{Context as _, bail};
+use anyhow::{Context as _, anyhow, bail};
 use bincode::config::{Config, standard};
 use lz4_flex::block::{compress_prepend_size, decompress_size_prepended};
 use std::fs;
@@ -59,7 +59,10 @@ pub fn load_project(path: &Path) -> anyhow::Result<ProjectLoadOutcome> {
         bail!("Not a Curcat project file: magic signature mismatch");
     }
     let (version_bytes, compressed) = rest.split_at(std::mem::size_of::<u32>());
-    let version = u32::from_le_bytes(version_bytes.try_into().unwrap_or_default());
+    let version_bytes: [u8; 4] = version_bytes
+        .try_into()
+        .map_err(|_| anyhow!("Project header is malformed"))?;
+    let version = u32::from_le_bytes(version_bytes);
     let decompressed =
         decompress_size_prepended(compressed).context("Failed to decompress project payload")?;
     let payload = match version {

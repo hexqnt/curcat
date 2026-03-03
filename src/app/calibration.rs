@@ -1,9 +1,10 @@
 use super::interaction::DragTarget;
 use crate::types::{
     AngleDirection, AngleUnit, AxisMapping, AxisUnit, AxisValue, CoordSystem, PolarMapping,
-    ScaleKind, parse_axis_value,
+    PolarMappingParams, ScaleKind, parse_axis_value,
 };
 use egui::Pos2;
+use std::cell::RefCell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickMode {
@@ -53,56 +54,84 @@ pub struct AxisCalUi {
     pub(super) p2: Option<Pos2>,
     pub(super) v1_text: String,
     pub(super) v2_text: String,
+    parse_cache_v1: RefCell<ParsedAxisValueCache>,
+    parse_cache_v2: RefCell<ParsedAxisValueCache>,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedAxisValueCache {
+    unit: AxisUnit,
+    text: String,
+    value: Option<AxisValue>,
+}
+
+impl ParsedAxisValueCache {
+    const fn new(unit: AxisUnit) -> Self {
+        Self {
+            unit,
+            text: String::new(),
+            value: None,
+        }
+    }
+
+    fn get_or_parse(&mut self, text: &str, unit: AxisUnit) -> Option<AxisValue> {
+        if self.unit != unit || self.text != text {
+            self.unit = unit;
+            self.text.clear();
+            self.text.push_str(text);
+            self.value = parse_axis_value(text, unit);
+        }
+        self.value.clone()
+    }
 }
 
 impl AxisCalUi {
-    pub(super) fn mapping(&self) -> Option<AxisMapping> {
-        let (p1, p2) = (self.p1?, self.p2?);
-        if !Self::points_are_distinct(p1, p2) {
-            return None;
-        }
-        let v1 = parse_axis_value(&self.v1_text, self.unit)?;
-        let v2 = parse_axis_value(&self.v2_text, self.unit)?;
-        if !Self::values_are_valid(self.scale, self.unit, &v1, &v2) {
-            return None;
-        }
-        Some(AxisMapping {
+    pub(super) const fn new(unit: AxisUnit, scale: ScaleKind) -> Self {
+        Self::with_values(unit, scale, None, None, String::new(), String::new())
+    }
+
+    pub(super) const fn with_values(
+        unit: AxisUnit,
+        scale: ScaleKind,
+        p1: Option<Pos2>,
+        p2: Option<Pos2>,
+        v1_text: String,
+        v2_text: String,
+    ) -> Self {
+        Self {
+            unit,
+            scale,
             p1,
             p2,
-            v1,
-            v2,
-            scale: self.scale,
-            unit: self.unit,
-        })
-    }
-
-    fn points_are_distinct(p1: Pos2, p2: Pos2) -> bool {
-        (p2 - p1).length_sq() > f32::EPSILON
-    }
-
-    fn values_are_valid(scale: ScaleKind, unit: AxisUnit, v1: &AxisValue, v2: &AxisValue) -> bool {
-        match (unit, v1, v2) {
-            (AxisUnit::Float, AxisValue::Float(a), AxisValue::Float(b)) => {
-                let finite = a.is_finite() && b.is_finite();
-                if !finite {
-                    return false;
-                }
-                let distinct = (*a - *b).abs() > f64::EPSILON;
-                let positive = scale != ScaleKind::Log10 || (*a > 0.0 && *b > 0.0);
-                distinct && positive
-            }
-            (AxisUnit::DateTime, AxisValue::DateTime(a), AxisValue::DateTime(b)) => {
-                scale == ScaleKind::Linear && a != b
-            }
-            _ => false,
+            v1_text,
+            v2_text,
+            parse_cache_v1: RefCell::new(ParsedAxisValueCache::new(unit)),
+            parse_cache_v2: RefCell::new(ParsedAxisValueCache::new(unit)),
         }
+    }
+
+    fn parsed_values(&self) -> (Option<AxisValue>, Option<AxisValue>) {
+        let v1 = self
+            .parse_cache_v1
+            .borrow_mut()
+            .get_or_parse(&self.v1_text, self.unit);
+        let v2 = self
+            .parse_cache_v2
+            .borrow_mut()
+            .get_or_parse(&self.v2_text, self.unit);
+        (v1, v2)
+    }
+
+    pub(super) fn mapping(&self) -> Option<AxisMapping> {
+        let (p1, p2) = (self.p1?, self.p2?);
+        let (v1, v2) = self.parsed_values();
+        AxisMapping::try_new(p1, p2, v1?, v2?, self.scale, self.unit).ok()
     }
 
     pub(super) fn value_invalid_flags(&self) -> (bool, bool) {
-        let v1 = parse_axis_value(&self.v1_text, self.unit);
-        let v2 = parse_axis_value(&self.v2_text, self.unit);
+        let (v1, v2) = self.parsed_values();
         let invalid_pair = if let (Some(a), Some(b)) = (&v1, &v2) {
-            !Self::values_are_valid(self.scale, self.unit, a, b)
+            AxisMapping::validate_value_pair(self.scale, self.unit, a, b).is_err()
         } else {
             false
         };
@@ -127,37 +156,35 @@ impl PolarCalUi {
             return None;
         }
 
-        let AxisValue::Float(radius_v1) = parse_axis_value(&self.radius.v1_text, AxisUnit::Float)?
+        let (radius_v1, radius_v2) = self.radius.parsed_values();
+        let (AxisValue::Float(radius_v1), AxisValue::Float(radius_v2)) = (radius_v1?, radius_v2?)
         else {
             return None;
         };
-        let AxisValue::Float(radius_v2) = parse_axis_value(&self.radius.v2_text, AxisUnit::Float)?
-        else {
-            return None;
-        };
-        if !AxisCalUi::values_are_valid(
+        if AxisMapping::validate_value_pair(
             self.radius.scale,
             AxisUnit::Float,
             &AxisValue::Float(radius_v1),
             &AxisValue::Float(radius_v2),
-        ) {
+        )
+        .is_err()
+        {
             return None;
         }
 
-        let AxisValue::Float(angle_v1) = parse_axis_value(&self.angle.v1_text, AxisUnit::Float)?
+        let (angle_v1, angle_v2) = self.angle.parsed_values();
+        let (AxisValue::Float(angle_v1), AxisValue::Float(angle_v2)) = (angle_v1?, angle_v2?)
         else {
             return None;
         };
-        let AxisValue::Float(angle_v2) = parse_axis_value(&self.angle.v2_text, AxisUnit::Float)?
-        else {
-            return None;
-        };
-        if !AxisCalUi::values_are_valid(
+        if AxisMapping::validate_value_pair(
             ScaleKind::Linear,
             AxisUnit::Float,
             &AxisValue::Float(angle_v1),
             &AxisValue::Float(angle_v2),
-        ) {
+        )
+        .is_err()
+        {
             return None;
         }
 
@@ -171,19 +198,20 @@ impl PolarCalUi {
         let a1 = f64::from((ap1.y - origin.y).atan2(ap1.x - origin.x));
         let a2 = f64::from((ap2.y - origin.y).atan2(ap2.x - origin.x));
 
-        PolarMapping::new(
+        PolarMapping::try_new(PolarMappingParams {
             origin,
-            d1,
-            d2,
-            radius_v1,
-            radius_v2,
-            self.radius.scale,
-            a1,
-            a2,
-            angle_v1,
-            angle_v2,
-            self.angle_unit,
-            self.angle_direction,
-        )
+            radius_distance1: d1,
+            radius_distance2: d2,
+            radius_value1: radius_v1,
+            radius_value2: radius_v2,
+            radius_scale: self.radius.scale,
+            angle_pixel1: a1,
+            angle_pixel2: a2,
+            angle_value1: angle_v1,
+            angle_value2: angle_v2,
+            angle_unit: self.angle_unit,
+            angle_direction: self.angle_direction,
+        })
+        .ok()
     }
 }

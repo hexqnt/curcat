@@ -1,7 +1,7 @@
 //! Interpolation utilities for resampling picked points.
 
 /// A 2D point in numeric axis space.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct XYPoint {
     pub x: f64,
     pub y: f64,
@@ -277,10 +277,10 @@ fn unique_by_x(points: &[XYPoint]) -> Vec<XYPoint> {
         if let Some(last) = unique.last_mut()
             && (last.x - p.x).abs() <= f64::EPSILON
         {
-            *last = p.clone();
+            *last = *p;
             continue;
         }
-        unique.push(p.clone());
+        unique.push(*p);
     }
     unique
 }

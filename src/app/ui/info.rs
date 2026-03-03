@@ -53,7 +53,7 @@ impl CurcatApp {
                             ui.label("Size: Unknown");
                         }
                         if let Some(modified) = meta.last_modified() {
-                            ui.label(format!("Modified: {}", format_system_time(modified),));
+                            ui.label(format!("Modified: {}", format_system_time(modified)));
                         } else {
                             ui.label("Modified: Unknown");
                         }
