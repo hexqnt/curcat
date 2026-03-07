@@ -1,5 +1,6 @@
 use super::super::icons;
 use crate::app::{CurcatApp, ExportKind, SAMPLE_COUNT_MIN};
+use crate::i18n::TextKey;
 use crate::interp::InterpAlgorithm;
 
 impl CurcatApp {
@@ -22,7 +23,8 @@ impl CurcatApp {
 
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_export_section(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Export points");
+        let i18n = self.i18n();
+        ui.heading(i18n.text(TextKey::ExportPoints));
         let has_points = !self.points.points.is_empty();
         let calibrated = self.calibration_ready();
         let can_export = has_points && calibrated;
@@ -30,39 +32,39 @@ impl CurcatApp {
             ui.radio_value(
                 &mut self.export.export_kind,
                 ExportKind::Interpolated,
-                "Interpolated curve",
+                i18n.text(TextKey::InterpolatedCurve),
             )
-            .on_hover_text("Export evenly spaced samples of the curve");
+            .on_hover_text(i18n.text(TextKey::InterpolatedCurveHover));
             ui.radio_value(
                 &mut self.export.export_kind,
                 ExportKind::RawPoints,
-                "Raw picked points",
+                i18n.text(TextKey::RawPickedPoints),
             )
-            .on_hover_text("Export only the points you clicked, in order");
+            .on_hover_text(i18n.text(TextKey::RawPickedPointsHover));
         });
         ui.add_space(4.0);
 
         match self.export.export_kind {
             ExportKind::Interpolated => {
-                ui.label("Interpolation:")
-                    .on_hover_text("Choose how to interpolate between control points");
+                ui.label(i18n.text(TextKey::Interpolation))
+                    .on_hover_text(i18n.text(TextKey::InterpolationHover));
                 let combo = egui::ComboBox::from_id_salt("interp_algo_combo")
-                    .selected_text(self.export.interp_algorithm.label())
+                    .selected_text(i18n.interp_algorithm_label(self.export.interp_algorithm))
                     .show_ui(ui, |ui| {
                         for algo in InterpAlgorithm::ALL.iter().copied() {
                             ui.selectable_value(
                                 &mut self.export.interp_algorithm,
                                 algo,
-                                algo.label(),
+                                i18n.interp_algorithm_label(algo),
                             );
                         }
                     });
                 combo
                     .response
-                    .on_hover_text("Algorithm used to generate the interpolated samples");
+                    .on_hover_text(i18n.text(TextKey::InterpolationAlgorithmHover));
 
-                ui.label("Samples:")
-                    .on_hover_text("Number of evenly spaced samples to export");
+                ui.label(i18n.text(TextKey::Samples))
+                    .on_hover_text(i18n.text(TextKey::SamplesHover));
                 ui.spacing_mut().slider_width = 150.0;
                 ui.horizontal(|ui| {
                     let max_samples = self.config.export.samples_max_sanitized();
@@ -75,16 +77,20 @@ impl CurcatApp {
                             &mut self.export.sample_count,
                             SAMPLE_COUNT_MIN..=max_samples,
                         )
-                        .text("count"),
+                        .text(i18n.text(TextKey::Count)),
                     );
-                    sresp.on_hover_text(format!(
-                        "Higher values give a denser interpolated curve (max {max_samples})"
-                    ));
+                    let slider_hint = match self.ui.language {
+                        crate::i18n::UiLanguage::En => format!(
+                            "Higher values give a denser interpolated curve (max {max_samples})"
+                        ),
+                        crate::i18n::UiLanguage::Ru => format!(
+                            "Чем больше значение, тем плотнее интерполированная кривая (макс {max_samples})"
+                        ),
+                    };
+                    sresp.on_hover_text(slider_hint);
                     if ui
-                        .button("Auto")
-                        .on_hover_text(
-                            "Automatically choose a sample count based on curve smoothness",
-                        )
+                        .button(i18n.text(TextKey::Auto))
+                        .on_hover_text(i18n.text(TextKey::AutoSamplesHover))
                         .clicked()
                     {
                         self.auto_tune_sample_count();
@@ -92,19 +98,18 @@ impl CurcatApp {
                 });
             }
             ExportKind::RawPoints => {
-                ui.label("Extra columns:")
-                    .on_hover_text("Optional metrics for the picked points");
+                ui.label(i18n.text(TextKey::ExtraColumns))
+                    .on_hover_text(i18n.text(TextKey::ExtraColumnsHover));
                 let dist = ui.checkbox(
                     &mut self.export.raw_include_distances,
-                    "Include distance to previous point",
+                    i18n.text(TextKey::IncludeDistanceToPrev),
                 );
-                dist.on_hover_text(
-                    "Adds a column with distances between consecutive picked points",
+                dist.on_hover_text(i18n.text(TextKey::IncludeDistanceToPrevHover));
+                let ang = ui.checkbox(
+                    &mut self.export.raw_include_angles,
+                    i18n.text(TextKey::IncludeAngleDeg),
                 );
-                let ang = ui.checkbox(&mut self.export.raw_include_angles, "Include angle (deg)");
-                ang.on_hover_text(
-                    "Adds a column with angles at each interior point (first/last stay empty)",
-                );
+                ang.on_hover_text(i18n.text(TextKey::IncludeAngleDegHover));
             }
         }
 
@@ -114,102 +119,84 @@ impl CurcatApp {
         ) {
             let cart = ui.checkbox(
                 &mut self.export.polar_export_include_cartesian,
-                "Include Cartesian x/y columns",
+                i18n.text(TextKey::IncludeCartesianColumns),
             );
-            cart.on_hover_text("Adds x and y columns computed from angle and radius");
+            cart.on_hover_text(i18n.text(TextKey::IncludeCartesianColumnsHover));
         }
 
         ui.separator();
-        let csv_hint = if !has_points {
-            "Add points before exporting to CSV"
-        } else if !calibrated {
-            match self.calibration.coord_system {
-                crate::types::CoordSystem::Cartesian => {
-                    "Complete both axis calibrations before exporting to CSV"
+        let coord_system = self.calibration.coord_system;
+        let export_hint = |format_name: &str, shortcut: &str| -> String {
+            if !has_points {
+                format!(
+                    "{} {format_name}",
+                    i18n.text(TextKey::AddPointsBeforeExport)
+                )
+            } else if !calibrated {
+                match coord_system {
+                    crate::types::CoordSystem::Cartesian => format!(
+                        "{} {format_name}",
+                        i18n.text(TextKey::CompleteCalibrationBeforeExportCartesian)
+                    ),
+                    crate::types::CoordSystem::Polar => format!(
+                        "{} {format_name}",
+                        i18n.text(TextKey::CompleteCalibrationBeforeExportPolar)
+                    ),
                 }
-                crate::types::CoordSystem::Polar => {
-                    "Complete origin, radius, and angle calibration before exporting to CSV"
-                }
+            } else {
+                format!(
+                    "{} {format_name} ({shortcut})",
+                    i18n.text(TextKey::ExportToFormat)
+                )
             }
-        } else {
-            "Export data to CSV (Ctrl+Shift+C)"
         };
         self.export_action_button(
             ui,
             can_export,
-            format!("{} Export CSV…", icons::ICON_EXPORT_CSV),
+            format!(
+                "{} {}",
+                icons::ICON_EXPORT_CSV,
+                i18n.text(TextKey::ExportCsv)
+            ),
             "Ctrl+Shift+C",
-            csv_hint,
+            &export_hint("CSV", "Ctrl+Shift+C"),
             Self::start_export_csv,
         );
 
-        let json_hint = if !has_points {
-            "Add points before exporting to JSON"
-        } else if !calibrated {
-            match self.calibration.coord_system {
-                crate::types::CoordSystem::Cartesian => {
-                    "Complete both axis calibrations before exporting to JSON"
-                }
-                crate::types::CoordSystem::Polar => {
-                    "Complete origin, radius, and angle calibration before exporting to JSON"
-                }
-            }
-        } else {
-            "Export data to JSON (Ctrl+Shift+J)"
-        };
-
         self.export_action_button(
             ui,
             can_export,
-            format!("{} Export JSON…", icons::ICON_EXPORT_JSON),
+            format!(
+                "{} {}",
+                icons::ICON_EXPORT_JSON,
+                i18n.text(TextKey::ExportJson)
+            ),
             "Ctrl+Shift+J",
-            json_hint,
+            &export_hint("JSON", "Ctrl+Shift+J"),
             Self::start_export_json,
         );
-
-        let ron_hint = if !has_points {
-            "Add points before exporting to RON"
-        } else if !calibrated {
-            match self.calibration.coord_system {
-                crate::types::CoordSystem::Cartesian => {
-                    "Complete both axis calibrations before exporting to RON"
-                }
-                crate::types::CoordSystem::Polar => {
-                    "Complete origin, radius, and angle calibration before exporting to RON"
-                }
-            }
-        } else {
-            "Export data to RON (Ctrl+Shift+R)"
-        };
         self.export_action_button(
             ui,
             can_export,
-            format!("{} Export RON…", icons::ICON_EXPORT_RON),
+            format!(
+                "{} {}",
+                icons::ICON_EXPORT_RON,
+                i18n.text(TextKey::ExportRon)
+            ),
             "Ctrl+Shift+R",
-            ron_hint,
+            &export_hint("RON", "Ctrl+Shift+R"),
             Self::start_export_ron,
         );
-
-        let xlsx_hint = if !has_points {
-            "Add points before exporting to Excel"
-        } else if !calibrated {
-            match self.calibration.coord_system {
-                crate::types::CoordSystem::Cartesian => {
-                    "Complete both axis calibrations before exporting to Excel"
-                }
-                crate::types::CoordSystem::Polar => {
-                    "Complete origin, radius, and angle calibration before exporting to Excel"
-                }
-            }
-        } else {
-            "Export data to Excel (Ctrl+Shift+E)"
-        };
         self.export_action_button(
             ui,
             can_export,
-            format!("{} Export Excel…", icons::ICON_EXPORT_XLSX),
+            format!(
+                "{} {}",
+                icons::ICON_EXPORT_XLSX,
+                i18n.text(TextKey::ExportExcel)
+            ),
             "Ctrl+Shift+E",
-            xlsx_hint,
+            &export_hint("Excel", "Ctrl+Shift+E"),
             Self::start_export_xlsx,
         );
     }

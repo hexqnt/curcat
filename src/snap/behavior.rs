@@ -9,15 +9,6 @@ pub enum SnapFeatureSource {
 impl SnapFeatureSource {
     /// Ordered list of feature sources exposed in the UI.
     pub const ALL: [Self; 3] = [Self::LumaGradient, Self::ColorMatch, Self::Hybrid];
-
-    /// Human-friendly label for UI display.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::LumaGradient => "Luma gradient",
-            Self::ColorMatch => "Color mask",
-            Self::Hybrid => "Gradient + color",
-        }
-    }
 }
 
 /// Threshold interpretation when accepting snap candidates.
@@ -25,16 +16,6 @@ impl SnapFeatureSource {
 pub enum SnapThresholdKind {
     Gradient,
     Score,
-}
-
-impl SnapThresholdKind {
-    /// Human-friendly label for UI display.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Gradient => "Gradient only",
-            Self::Score => "Feature score",
-        }
-    }
 }
 
 /// Behavior configuration for snapping (contrast or centerline).

@@ -2,6 +2,7 @@
 
 use super::CurcatApp;
 use crate::export::{ExportExtraColumn, ExportPayload, sequential_distances, turning_angles};
+use crate::i18n::UiLanguage;
 use crate::interp::{XYPoint, auto_sample_count, interpolate_sorted};
 use crate::types::{AngleUnit, AxisUnit, CoordSystem};
 
@@ -30,12 +31,18 @@ impl CurcatApp {
     pub(crate) fn auto_tune_sample_count(&mut self) {
         if !self.calibration_ready() {
             self.set_status(match self.calibration.coord_system {
-                CoordSystem::Cartesian => {
-                    "Complete both axis calibrations before auto-tuning samples."
-                }
-                CoordSystem::Polar => {
-                    "Complete origin, radius, and angle calibration before auto-tuning samples."
-                }
+                CoordSystem::Cartesian => match self.ui.language {
+                    UiLanguage::En => "Complete both axis calibrations before auto-tuning samples.",
+                    UiLanguage::Ru => "Завершите калибровку обеих осей перед автоподбором семплов.",
+                },
+                CoordSystem::Polar => match self.ui.language {
+                    UiLanguage::En => {
+                        "Complete origin, radius, and angle calibration before auto-tuning samples."
+                    }
+                    UiLanguage::Ru => {
+                        "Завершите калибровку начала, радиуса и угла перед автоподбором семплов."
+                    }
+                },
             });
             return;
         }
@@ -57,14 +64,17 @@ impl CurcatApp {
         );
         let nums = self.sorted_numeric_points_cache();
         if nums.len() < 2 {
-            self.set_status("Add at least two points before auto-tuning samples.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Add at least two points before auto-tuning samples.",
+                UiLanguage::Ru => "Добавьте как минимум две точки перед автоподбором семплов.",
+            });
             return;
         }
 
         let suggested =
             auto_sample_count(nums, algo, min_samples, max_samples, rel_tol, ref_samples);
         self.export.sample_count = suggested;
-        self.set_status(format!("Sample count auto-tuned to {suggested}."));
+        self.set_status(self.i18n().format_sample_count_tuned(suggested));
     }
 
     pub(crate) fn build_export_payload(&mut self) -> Result<ExportPayload, &'static str> {

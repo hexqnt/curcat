@@ -4,6 +4,7 @@ use super::super::{
 };
 use super::icons;
 
+use crate::i18n::TextKey;
 use crate::types::{AxisMapping, AxisValue, CoordSystem, PolarMapping};
 use egui::{Color32, Key, PointerButton, Pos2, Sense, Vec2, pos2};
 use std::path::PathBuf;
@@ -252,7 +253,12 @@ impl CurcatApp {
                 self.start_loading_image_from_bytes(name, bytes, last_modified);
             }
             DropAction::FailNoReadable => {
-                self.set_status("Drop failed: no readable bytes/path");
+                self.set_status(match self.ui.language {
+                    crate::i18n::UiLanguage::En => "Drop failed: no readable bytes/path",
+                    crate::i18n::UiLanguage::Ru => {
+                        "Не удалось обработать перетаскивание: нет читаемого пути/байтов"
+                    }
+                });
                 if cfg!(debug_assertions) {
                     eprintln!("[DnD] Drop failed: no readable bytes/path");
                 }
@@ -459,7 +465,7 @@ impl CurcatApp {
             if let Some(field) = target.value_field() {
                 self.queue_value_focus(field);
             }
-            self.set_status(format!("Picked {}.", target.label()));
+            self.set_status(self.i18n().format_picked(target.label()));
         }
     }
 
@@ -1123,10 +1129,20 @@ impl CurcatApp {
                                 } else {
                                     self.set_status(match self.calibration.coord_system {
                                         CoordSystem::Cartesian => {
-                                            "Calibration incomplete: set both X and Y axes before picking points."
+                                            match self.ui.language {
+                                                crate::i18n::UiLanguage::En =>
+                                                    "Calibration incomplete: set both X and Y axes before picking points.",
+                                                crate::i18n::UiLanguage::Ru =>
+                                                    "Калибровка неполная: задайте обе оси X и Y перед установкой точек.",
+                                            }
                                         }
                                         CoordSystem::Polar => {
-                                            "Calibration incomplete: set origin, radius, and angle before picking points."
+                                            match self.ui.language {
+                                                crate::i18n::UiLanguage::En =>
+                                                    "Calibration incomplete: set origin, radius, and angle before picking points.",
+                                                crate::i18n::UiLanguage::Ru =>
+                                                    "Калибровка неполная: задайте начало, радиус и угол перед установкой точек.",
+                                            }
                                         }
                                     });
                                 }
@@ -1201,14 +1217,17 @@ impl CurcatApp {
         } else if self.project.pending_image_task.is_some() {
             ui.centered_and_justified(|ui| {
                 if let Some(task) = self.project.pending_image_task.as_ref() {
-                    ui.label(format!("Loading image: {}…", task.meta.description()));
+                    ui.label(
+                        self.i18n()
+                            .format_loading_image_row(&task.meta.description()),
+                    );
                 } else {
-                    ui.label("Loading image…");
+                    ui.label(self.t(TextKey::LoadingImage));
                 }
             });
         } else {
             ui.centered_and_justified(|ui| {
-                ui.label("Drop an image here, open a file, or paste from clipboard (Ctrl+V).");
+                ui.label(self.t(TextKey::DropHint));
             });
         }
     }
@@ -1274,7 +1293,10 @@ impl CurcatApp {
         if let Some((idx, _)) = best {
             self.points.points.remove(idx);
             self.mark_points_dirty();
-            self.set_status("Point removed.");
+            self.set_status(match self.ui.language {
+                crate::i18n::UiLanguage::En => "Point removed.",
+                crate::i18n::UiLanguage::Ru => "Точка удалена.",
+            });
             true
         } else {
             false

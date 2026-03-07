@@ -2,6 +2,7 @@ use super::super::common::toggle_switch;
 use super::super::icons;
 use super::axis_input::sanitize_axis_text;
 use crate::app::{APP_VERSION, AxisCalUi, AxisValueField, CurcatApp, PickMode, safe_usize_to_f32};
+use crate::i18n::{TextKey, UiLanguage};
 use crate::types::{AngleDirection, AngleUnit, AxisUnit, AxisValue, CoordSystem, ScaleKind};
 use egui::{Color32, Pos2, Rect, RichText};
 
@@ -12,10 +13,12 @@ enum CalibrationPresetKind {
 }
 
 impl CalibrationPresetKind {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Unit => "Unit",
-            Self::Pixels => "Pixels",
+    const fn label(self, lang: UiLanguage) -> &'static str {
+        match (lang, self) {
+            (UiLanguage::En, Self::Unit) => "Unit",
+            (UiLanguage::En, Self::Pixels) => "Pixels",
+            (UiLanguage::Ru, Self::Unit) => "Единицы",
+            (UiLanguage::Ru, Self::Pixels) => "Пиксели",
         }
     }
 
@@ -26,10 +29,18 @@ impl CalibrationPresetKind {
         }
     }
 
-    const fn hover_text(self) -> &'static str {
-        match self {
-            Self::Unit => "Quadrant preset (unit): set axes to 0..1 (signed).",
-            Self::Pixels => "Quadrant preset (px): set axes to 0..size px (signed).",
+    const fn hover_text(self, lang: UiLanguage) -> &'static str {
+        match (lang, self) {
+            (UiLanguage::En, Self::Unit) => "Quadrant preset (unit): set axes to 0..1 (signed).",
+            (UiLanguage::En, Self::Pixels) => {
+                "Quadrant preset (px): set axes to 0..size px (signed)."
+            }
+            (UiLanguage::Ru, Self::Unit) => {
+                "Пресет квадранта (единицы): задать оси как 0..1 (со знаком)."
+            }
+            (UiLanguage::Ru, Self::Pixels) => {
+                "Пресет квадранта (px): задать оси как 0..размер px (со знаком)."
+            }
         }
     }
 }
@@ -55,12 +66,16 @@ impl CalibrationQuadrant {
         }
     }
 
-    const fn hint(self) -> &'static str {
-        match self {
-            Self::I => "Axes: bottom + left (x>=0, y>=0)",
-            Self::II => "Axes: bottom + right (x<=0, y>=0)",
-            Self::III => "Axes: top + right (x<=0, y<=0)",
-            Self::IV => "Axes: top + left (x>=0, y<=0)",
+    const fn hint(self, lang: UiLanguage) -> &'static str {
+        match (lang, self) {
+            (UiLanguage::En, Self::I) => "Axes: bottom + left (x>=0, y>=0)",
+            (UiLanguage::En, Self::II) => "Axes: bottom + right (x<=0, y>=0)",
+            (UiLanguage::En, Self::III) => "Axes: top + right (x<=0, y<=0)",
+            (UiLanguage::En, Self::IV) => "Axes: top + left (x>=0, y<=0)",
+            (UiLanguage::Ru, Self::I) => "Оси: низ + лево (x>=0, y>=0)",
+            (UiLanguage::Ru, Self::II) => "Оси: низ + право (x<=0, y>=0)",
+            (UiLanguage::Ru, Self::III) => "Оси: верх + право (x<=0, y<=0)",
+            (UiLanguage::Ru, Self::IV) => "Оси: верх + лево (x>=0, y<=0)",
         }
     }
 
@@ -80,10 +95,12 @@ enum PolarAxisKind {
 }
 
 impl PolarAxisKind {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Radius => "Radius",
-            Self::Angle => "Angle",
+    const fn label(self, lang: UiLanguage) -> &'static str {
+        match (lang, self) {
+            (UiLanguage::En, Self::Radius) => "Radius",
+            (UiLanguage::En, Self::Angle) => "Angle",
+            (UiLanguage::Ru, Self::Radius) => "Радиус",
+            (UiLanguage::Ru, Self::Angle) => "Угол",
         }
     }
 
@@ -99,6 +116,42 @@ impl PolarAxisKind {
             Self::Radius => "R2",
             Self::Angle => "A2",
         }
+    }
+}
+
+const fn axis_unit_label(lang: UiLanguage, unit: AxisUnit) -> &'static str {
+    match (lang, unit) {
+        (UiLanguage::En, AxisUnit::Float) => "Float",
+        (UiLanguage::En, AxisUnit::DateTime) => "DateTime",
+        (UiLanguage::Ru, AxisUnit::Float) => "Число",
+        (UiLanguage::Ru, AxisUnit::DateTime) => "Дата/время",
+    }
+}
+
+const fn scale_kind_label(lang: UiLanguage, scale: ScaleKind) -> &'static str {
+    match (lang, scale) {
+        (UiLanguage::En, ScaleKind::Linear) => "Linear",
+        (UiLanguage::En, ScaleKind::Log10) => "Log10",
+        (UiLanguage::Ru, ScaleKind::Linear) => "Линейная",
+        (UiLanguage::Ru, ScaleKind::Log10) => "Лог10",
+    }
+}
+
+const fn angle_unit_label(lang: UiLanguage, unit: AngleUnit) -> &'static str {
+    match (lang, unit) {
+        (UiLanguage::En, AngleUnit::Degrees) => "Degrees",
+        (UiLanguage::En, AngleUnit::Radians) => "Radians",
+        (UiLanguage::Ru, AngleUnit::Degrees) => "Градусы",
+        (UiLanguage::Ru, AngleUnit::Radians) => "Радианы",
+    }
+}
+
+const fn angle_direction_label(lang: UiLanguage, direction: AngleDirection) -> &'static str {
+    match (lang, direction) {
+        (UiLanguage::En, AngleDirection::Ccw) => "CCW",
+        (UiLanguage::En, AngleDirection::Cw) => "CW",
+        (UiLanguage::Ru, AngleDirection::Ccw) => "Против часовой",
+        (UiLanguage::Ru, AngleDirection::Cw) => "По часовой",
     }
 }
 
@@ -120,44 +173,55 @@ impl CalibrationUiState {
 
 impl CurcatApp {
     pub(crate) fn ui_side_calibration(&mut self, ui: &mut egui::Ui) {
+        let i18n = self.i18n();
         self.ui_point_input_section(ui);
         ui.separator();
 
-        ui.heading("Calibration");
+        ui.heading(i18n.text(TextKey::Calibration));
         ui.separator();
         ui.horizontal(|ui| {
-            ui.label("Coordinate system:")
-                .on_hover_text("Choose between Cartesian (X/Y) or Polar (angle/radius)");
+            ui.label(i18n.text(TextKey::CoordinateSystem))
+                .on_hover_text(i18n.text(TextKey::CoordinateSystemHover));
             let mut system = self.calibration.coord_system;
             let resp = egui::ComboBox::from_id_salt("coord_system_combo")
                 .selected_text(match system {
-                    CoordSystem::Cartesian => "Cartesian",
-                    CoordSystem::Polar => "Polar",
+                    CoordSystem::Cartesian => i18n.text(TextKey::Cartesian),
+                    CoordSystem::Polar => i18n.text(TextKey::Polar),
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut system, CoordSystem::Cartesian, "Cartesian");
-                    ui.selectable_value(&mut system, CoordSystem::Polar, "Polar");
+                    ui.selectable_value(
+                        &mut system,
+                        CoordSystem::Cartesian,
+                        i18n.text(TextKey::Cartesian),
+                    );
+                    ui.selectable_value(&mut system, CoordSystem::Polar, i18n.text(TextKey::Polar));
                 });
             resp.response
-                .on_hover_text("Coordinate system for calibration and export");
+                .on_hover_text(i18n.text(TextKey::CoordSystemForCalibrationExport));
             if system != self.calibration.coord_system {
                 self.calibration.coord_system = system;
                 self.mark_points_dirty();
                 self.calibration.pick_mode = PickMode::None;
                 self.calibration.pending_value_focus = None;
                 self.set_status(match system {
-                    CoordSystem::Cartesian => "Switched to Cartesian calibration.",
-                    CoordSystem::Polar => "Switched to Polar calibration.",
+                    CoordSystem::Cartesian => match self.ui.language {
+                        UiLanguage::En => "Switched to Cartesian calibration.",
+                        UiLanguage::Ru => "Переключено на декартову калибровку.",
+                    },
+                    CoordSystem::Polar => match self.ui.language {
+                        UiLanguage::En => "Switched to Polar calibration.",
+                        UiLanguage::Ru => "Переключено на полярную калибровку.",
+                    },
                 });
             }
         });
         ui.separator();
         ui.horizontal(|ui| {
             toggle_switch(ui, &mut self.calibration.calibration_angle_snap)
-                .on_hover_text("Snap calibration lines to 15° steps while picking or dragging");
+                .on_hover_text(i18n.text(TextKey::Snap15Hover));
             ui.add_space(4.0);
-            ui.label("15° snap")
-                .on_hover_text("Snap calibration lines to 15° steps while picking or dragging");
+            ui.label(i18n.text(TextKey::Snap15))
+                .on_hover_text(i18n.text(TextKey::Snap15Hover));
             ui.add_space(8.0);
             let has_image = self.image.image.is_some();
             if matches!(self.calibration.coord_system, CoordSystem::Cartesian) {
@@ -185,10 +249,10 @@ impl CurcatApp {
         ui.separator();
         ui.horizontal(|ui| {
             toggle_switch(ui, &mut self.calibration.show_calibration_segments)
-                .on_hover_text("Show calibration lines and point labels on the image");
+                .on_hover_text(i18n.text(TextKey::ShowCalibrationOverlayHover));
             ui.add_space(4.0);
-            ui.label("Show calibration overlay")
-                .on_hover_text("Show or hide calibration lines and point labels on the image");
+            ui.label(i18n.text(TextKey::ShowCalibrationOverlay))
+                .on_hover_text(i18n.text(TextKey::ShowCalibrationOverlayHover));
         });
         ui.separator();
         self.ui_export_section(ui);
@@ -199,7 +263,7 @@ impl CurcatApp {
         }
         ui.separator();
         ui.label(
-            RichText::new(format!("Version {APP_VERSION}"))
+            RichText::new(i18n.format_version(APP_VERSION))
                 .small()
                 .color(Color32::from_gray(160)),
         );
@@ -211,17 +275,20 @@ impl CurcatApp {
         preset: CalibrationPresetKind,
         enabled: bool,
     ) {
+        let lang = self.ui.language;
         ui.add_enabled_ui(enabled, |ui| {
             let menu = ui.menu_button(preset.icon(), |ui| {
                 for quadrant in CalibrationQuadrant::ALL {
-                    let resp = ui.button(quadrant.label()).on_hover_text(quadrant.hint());
+                    let resp = ui
+                        .button(quadrant.label())
+                        .on_hover_text(quadrant.hint(lang));
                     if resp.clicked() {
                         self.apply_calibration_preset(preset, quadrant);
                         ui.close();
                     }
                 }
             });
-            menu.response.on_hover_text(preset.hover_text());
+            menu.response.on_hover_text(preset.hover_text(lang));
         });
     }
 
@@ -236,11 +303,17 @@ impl CurcatApp {
                 safe_usize_to_f32(image.size[1]),
             )
         } else {
-            self.set_status("Load an image before applying calibration presets.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Load an image before applying calibration presets.",
+                UiLanguage::Ru => "Загрузите изображение перед применением пресетов калибровки.",
+            });
             return;
         };
         if width <= f32::EPSILON || height <= f32::EPSILON {
-            self.set_status("Image dimensions are invalid for presets.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Image dimensions are invalid for presets.",
+                UiLanguage::Ru => "Размеры изображения некорректны для пресетов.",
+            });
             return;
         }
 
@@ -281,11 +354,18 @@ impl CurcatApp {
         self.calibration.pending_value_focus = None;
         self.calibration.dragging_handle = None;
         self.mark_points_dirty();
-        self.set_status(format!(
-            "Applied calibration preset: quadrant {} ({})",
-            quadrant.label(),
-            preset.label()
-        ));
+        self.set_status(match self.ui.language {
+            UiLanguage::En => format!(
+                "Applied calibration preset: quadrant {} ({})",
+                quadrant.label(),
+                preset.label(self.ui.language)
+            ),
+            UiLanguage::Ru => format!(
+                "Применён пресет калибровки: квадрант {} ({})",
+                quadrant.label(),
+                preset.label(self.ui.language)
+            ),
+        });
     }
 
     fn format_preset_value(value: f64) -> String {
@@ -324,6 +404,7 @@ impl CurcatApp {
     #[allow(clippy::too_many_arguments)]
     fn render_axis_rows(
         ui: &mut egui::Ui,
+        language: UiLanguage,
         cal: &mut AxisCalUi,
         p1_label: &str,
         p2_label: &str,
@@ -336,6 +417,7 @@ impl CurcatApp {
         let p1_row = Self::render_calibration_row(
             ui,
             p1_label,
+            language,
             cal.unit,
             &mut cal.v1_text,
             p1_field,
@@ -346,6 +428,7 @@ impl CurcatApp {
         let p2_row = Self::render_calibration_row(
             ui,
             p2_label,
+            language,
             cal.unit,
             &mut cal.v2_text,
             p2_field,
@@ -377,9 +460,21 @@ impl CurcatApp {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn axis_cal_group(&mut self, ui: &mut egui::Ui, is_x: bool) {
         let (label, p1_mode, p2_mode, p1_name, p2_name) = if is_x {
-            ("X axis", PickMode::X1, PickMode::X2, "X1", "X2")
+            (
+                self.t(TextKey::XAxis),
+                PickMode::X1,
+                PickMode::X2,
+                "X1",
+                "X2",
+            )
         } else {
-            ("Y axis", PickMode::Y1, PickMode::Y2, "Y1", "Y2")
+            (
+                self.t(TextKey::YAxis),
+                PickMode::Y1,
+                PickMode::Y2,
+                "Y1",
+                "Y2",
+            )
         };
 
         let collapsing = egui::CollapsingHeader::new(label)
@@ -390,6 +485,12 @@ impl CurcatApp {
                         CalibrationUiState::new(self.calibration.pending_value_focus);
                     let mapping_ready;
                     {
+                        let unit_label = self.t(TextKey::Unit);
+                        let unit_hover = self.t(TextKey::UnitHover);
+                        let axis_value_type_hover = self.t(TextKey::AxisValueTypeHover);
+                        let scale_label = self.t(TextKey::Scale);
+                        let scale_hover = self.t(TextKey::ScaleHover);
+                        let axis_scale_hover = self.t(TextKey::AxisScaleHover);
                         let cal = if is_x {
                             &mut self.calibration.cal_x
                         } else {
@@ -397,52 +498,51 @@ impl CurcatApp {
                         };
                         let previous_unit = cal.unit;
                         ui.horizontal(|ui| {
-                            ui.label("Unit:")
-                                .on_hover_text("Value type for the axis (Float/DateTime)");
+                            ui.label(unit_label).on_hover_text(unit_hover);
                             let mut unit = cal.unit;
                             let unit_ir =
                                 egui::ComboBox::from_id_salt(format!("{label}_unit_combo"))
-                                    .selected_text(match unit {
-                                        AxisUnit::Float => "Float",
-                                        AxisUnit::DateTime => "DateTime",
-                                    })
+                                    .selected_text(axis_unit_label(self.ui.language, unit))
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(&mut unit, AxisUnit::Float, "Float");
+                                        ui.selectable_value(
+                                            &mut unit,
+                                            AxisUnit::Float,
+                                            axis_unit_label(self.ui.language, AxisUnit::Float),
+                                        );
                                         ui.selectable_value(
                                             &mut unit,
                                             AxisUnit::DateTime,
-                                            "DateTime",
+                                            axis_unit_label(self.ui.language, AxisUnit::DateTime),
                                         );
                                     });
-                            unit_ir.response.on_hover_text("Choose the axis value type");
+                            unit_ir.response.on_hover_text(axis_value_type_hover);
                             cal.unit = unit;
                             ui.separator();
 
-                            ui.label("Scale:")
-                                .on_hover_text("Axis scale (Linear/Log10)");
+                            ui.label(scale_label).on_hover_text(scale_hover);
                             let mut scale = cal.scale;
                             let allow_log = matches!(cal.unit, AxisUnit::Float);
                             let scale_ir =
                                 egui::ComboBox::from_id_salt(format!("{label}_scale_combo"))
-                                    .selected_text(match scale {
-                                        ScaleKind::Linear => "Linear",
-                                        ScaleKind::Log10 => "Log10",
-                                    })
+                                    .selected_text(scale_kind_label(self.ui.language, scale))
                                     .show_ui(ui, |ui| {
                                         ui.selectable_value(
                                             &mut scale,
                                             ScaleKind::Linear,
-                                            "Linear",
+                                            scale_kind_label(self.ui.language, ScaleKind::Linear),
                                         );
                                         if allow_log {
                                             ui.selectable_value(
                                                 &mut scale,
                                                 ScaleKind::Log10,
-                                                "Log10",
+                                                scale_kind_label(
+                                                    self.ui.language,
+                                                    ScaleKind::Log10,
+                                                ),
                                             );
                                         }
                                     });
-                            scale_ir.response.on_hover_text("Choose the axis scale");
+                            scale_ir.response.on_hover_text(axis_scale_hover);
                             if !allow_log && matches!(scale, ScaleKind::Log10) {
                                 scale = ScaleKind::Linear;
                             }
@@ -455,6 +555,7 @@ impl CurcatApp {
 
                         let _ = Self::render_axis_rows(
                             ui,
+                            self.ui.language,
                             cal,
                             p1_name,
                             p2_name,
@@ -479,17 +580,17 @@ impl CurcatApp {
                         ui,
                         ui_state,
                         mapping_ready,
-                        "Mapping: OK",
-                        "Calibration complete — you can pick points and export",
-                        "Mapping: incomplete or invalid",
-                        "Provide two points and valid values to calibrate",
+                        self.t(TextKey::MappingOk),
+                        self.t(TextKey::MappingOkHover),
+                        self.t(TextKey::MappingIncomplete),
+                        self.t(TextKey::MappingIncompleteHover),
                     );
                 });
             });
         collapsing.header_response.on_hover_text(if is_x {
-            "X axis calibration"
+            self.t(TextKey::XAxisCalibrationHover)
         } else {
-            "Y axis calibration"
+            self.t(TextKey::YAxisCalibrationHover)
         });
     }
 
@@ -497,22 +598,29 @@ impl CurcatApp {
         let has_image = self.image.image.is_some();
         let mut pick_rect = None;
         ui.horizontal(|ui| {
-            ui.label("Origin:")
-                .on_hover_text("Pick the pole (origin) for polar coordinates");
+            ui.label(format!("{}:", self.t(TextKey::Origin)))
+                .on_hover_text(match self.ui.language {
+                    UiLanguage::En => "Pick the pole (origin) for polar coordinates",
+                    UiLanguage::Ru => "Выберите полюс (начало координат) для полярной системы",
+                });
             let pick_resp = ui
                 .add_enabled(
                     has_image,
-                    egui::Button::new(format!("{} Pick Origin", icons::ICON_PICK_POINT)),
+                    egui::Button::new(format!(
+                        "{} {}",
+                        icons::ICON_PICK_POINT,
+                        self.t(TextKey::PickOrigin)
+                    )),
                 )
-                .on_hover_text("Click, then pick the origin on the image");
+                .on_hover_text(self.t(TextKey::PickOriginHover));
             if pick_resp.clicked() {
                 self.begin_pick_mode(PickMode::Origin);
             }
             pick_rect = Some(pick_resp.rect);
 
             let center_resp = ui
-                .add_enabled(has_image, egui::Button::new("Center"))
-                .on_hover_text("Set origin to image center");
+                .add_enabled(has_image, egui::Button::new(self.t(TextKey::Center)))
+                .on_hover_text(self.t(TextKey::CenterOriginHover));
             if center_resp.clicked()
                 && let Some(image) = self.image.image.as_ref()
             {
@@ -520,7 +628,10 @@ impl CurcatApp {
                 let cy = safe_usize_to_f32(image.size[1]) * 0.5;
                 self.calibration.polar_cal.origin = Some(Pos2::new(cx, cy));
                 self.mark_points_dirty();
-                self.set_status("Origin set to image center.");
+                self.set_status(match self.ui.language {
+                    UiLanguage::En => "Origin set to image center.",
+                    UiLanguage::Ru => "Начало координат установлено в центр изображения.",
+                });
             }
 
             if let Some(p) = self.calibration.polar_cal.origin {
@@ -534,7 +645,7 @@ impl CurcatApp {
 
     #[allow(clippy::too_many_lines)]
     fn polar_axis_group(&mut self, ui: &mut egui::Ui, kind: PolarAxisKind) {
-        let label = kind.label();
+        let label = kind.label(self.ui.language);
         let (p1_mode, p2_mode, p1_field, p2_field) = match kind {
             PolarAxisKind::Radius => (
                 PickMode::R1,
@@ -555,101 +666,140 @@ impl CurcatApp {
                 ui.push_id(label, |ui| {
                     let mut ui_state =
                         CalibrationUiState::new(self.calibration.pending_value_focus);
-
-                    let cal = match kind {
-                        PolarAxisKind::Radius => &mut self.calibration.polar_cal.radius,
-                        PolarAxisKind::Angle => &mut self.calibration.polar_cal.angle,
-                    };
-                    let previous_unit = cal.unit;
-                    cal.unit = AxisUnit::Float;
-                    if cal.unit != previous_unit {
-                        sanitize_axis_text(&mut cal.v1_text, cal.unit);
-                        sanitize_axis_text(&mut cal.v2_text, cal.unit);
+                    {
+                        let cal = match kind {
+                            PolarAxisKind::Radius => &mut self.calibration.polar_cal.radius,
+                            PolarAxisKind::Angle => &mut self.calibration.polar_cal.angle,
+                        };
+                        let previous_unit = cal.unit;
+                        cal.unit = AxisUnit::Float;
+                        if cal.unit != previous_unit {
+                            sanitize_axis_text(&mut cal.v1_text, cal.unit);
+                            sanitize_axis_text(&mut cal.v2_text, cal.unit);
+                        }
                     }
 
                     if matches!(kind, PolarAxisKind::Radius) {
+                        let scale_label = self.t(TextKey::Scale);
+                        let scale_hover = self.t(TextKey::RadiusScaleHover);
+                        let scale_choice_hover = self.t(TextKey::RadiusScaleChoiceHover);
                         ui.horizontal(|ui| {
-                            ui.label("Scale:")
-                                .on_hover_text("Radius scale (Linear/Log10)");
+                            ui.label(scale_label).on_hover_text(scale_hover);
+                            let cal = &mut self.calibration.polar_cal.radius;
                             let mut scale = cal.scale;
                             let scale_ir =
                                 egui::ComboBox::from_id_salt(format!("{label}_scale_combo"))
-                                    .selected_text(match scale {
-                                        ScaleKind::Linear => "Linear",
-                                        ScaleKind::Log10 => "Log10",
-                                    })
+                                    .selected_text(scale_kind_label(self.ui.language, scale))
                                     .show_ui(ui, |ui| {
                                         ui.selectable_value(
                                             &mut scale,
                                             ScaleKind::Linear,
-                                            "Linear",
+                                            scale_kind_label(self.ui.language, ScaleKind::Linear),
                                         );
-                                        ui.selectable_value(&mut scale, ScaleKind::Log10, "Log10");
+                                        ui.selectable_value(
+                                            &mut scale,
+                                            ScaleKind::Log10,
+                                            scale_kind_label(self.ui.language, ScaleKind::Log10),
+                                        );
                                     });
-                            scale_ir.response.on_hover_text("Choose the radius scale");
+                            scale_ir.response.on_hover_text(scale_choice_hover);
                             cal.scale = scale;
                         });
                     } else {
-                        cal.scale = ScaleKind::Linear;
+                        self.calibration.polar_cal.angle.scale = ScaleKind::Linear;
+                        let angle_unit_caption = self.t(TextKey::AngleUnit);
+                        let angle_unit_hover = self.t(TextKey::AngleUnitHover);
+                        let direction_label = self.t(TextKey::Direction);
+                        let direction_hover = self.t(TextKey::DirectionHover);
                         ui.horizontal(|ui| {
-                            ui.label("Angle unit:")
-                                .on_hover_text("Units for angle values (degrees or radians)");
+                            ui.label(angle_unit_caption).on_hover_text(angle_unit_hover);
                             let mut unit = self.calibration.polar_cal.angle_unit;
                             egui::ComboBox::from_id_salt(format!("{label}_unit_combo"))
-                                .selected_text(match unit {
-                                    AngleUnit::Degrees => "Degrees",
-                                    AngleUnit::Radians => "Radians",
-                                })
+                                .selected_text(angle_unit_label(self.ui.language, unit))
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut unit, AngleUnit::Degrees, "Degrees");
-                                    ui.selectable_value(&mut unit, AngleUnit::Radians, "Radians");
+                                    ui.selectable_value(
+                                        &mut unit,
+                                        AngleUnit::Degrees,
+                                        angle_unit_label(self.ui.language, AngleUnit::Degrees),
+                                    );
+                                    ui.selectable_value(
+                                        &mut unit,
+                                        AngleUnit::Radians,
+                                        angle_unit_label(self.ui.language, AngleUnit::Radians),
+                                    );
                                 });
                             self.calibration.polar_cal.angle_unit = unit;
                             ui.separator();
-                            ui.label("Direction:")
-                                .on_hover_text("Direction of increasing angle");
+                            ui.label(direction_label).on_hover_text(direction_hover);
                             let mut direction = self.calibration.polar_cal.angle_direction;
                             egui::ComboBox::from_id_salt(format!("{label}_dir_combo"))
-                                .selected_text(direction.label())
+                                .selected_text(angle_direction_label(self.ui.language, direction))
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut direction, AngleDirection::Ccw, "CCW");
-                                    ui.selectable_value(&mut direction, AngleDirection::Cw, "CW");
+                                    ui.selectable_value(
+                                        &mut direction,
+                                        AngleDirection::Ccw,
+                                        angle_direction_label(
+                                            self.ui.language,
+                                            AngleDirection::Ccw,
+                                        ),
+                                    );
+                                    ui.selectable_value(
+                                        &mut direction,
+                                        AngleDirection::Cw,
+                                        angle_direction_label(self.ui.language, AngleDirection::Cw),
+                                    );
                                 });
                             self.calibration.polar_cal.angle_direction = direction;
                         });
                     }
 
-                    let (p1_invalid, p2_invalid) = Self::render_axis_rows(
-                        ui,
-                        cal,
-                        kind.p1_label(),
-                        kind.p2_label(),
-                        p1_field,
-                        p2_field,
-                        p1_mode,
-                        p2_mode,
-                        &mut ui_state,
-                    );
+                    let (p1_invalid, p2_invalid) = {
+                        let cal = match kind {
+                            PolarAxisKind::Radius => &mut self.calibration.polar_cal.radius,
+                            PolarAxisKind::Angle => &mut self.calibration.polar_cal.angle,
+                        };
+                        Self::render_axis_rows(
+                            ui,
+                            self.ui.language,
+                            cal,
+                            kind.p1_label(),
+                            kind.p2_label(),
+                            p1_field,
+                            p2_field,
+                            p1_mode,
+                            p2_mode,
+                            &mut ui_state,
+                        )
+                    };
 
                     let origin_ready = self.calibration.polar_cal.origin.is_some();
                     let values_ready = !p1_invalid && !p2_invalid;
-                    let points_ready = cal.p1.is_some() && cal.p2.is_some();
+                    let points_ready = match kind {
+                        PolarAxisKind::Radius => {
+                            self.calibration.polar_cal.radius.p1.is_some()
+                                && self.calibration.polar_cal.radius.p2.is_some()
+                        }
+                        PolarAxisKind::Angle => {
+                            self.calibration.polar_cal.angle.p1.is_some()
+                                && self.calibration.polar_cal.angle.p2.is_some()
+                        }
+                    };
                     let mapping_ready = origin_ready && values_ready && points_ready;
 
                     self.finish_calibration_panel(
                         ui,
                         ui_state,
                         mapping_ready,
-                        "Mapping: OK",
-                        "Calibration complete for this axis",
-                        "Mapping: incomplete or invalid",
-                        "Provide origin, two points, and valid values",
+                        self.t(TextKey::MappingOk),
+                        self.t(TextKey::MappingOkAxisHover),
+                        self.t(TextKey::MappingIncomplete),
+                        self.t(TextKey::MappingIncompleteAxisHover),
                     );
                 });
             });
         collapsing.header_response.on_hover_text(match kind {
-            PolarAxisKind::Radius => "Radius calibration",
-            PolarAxisKind::Angle => "Angle calibration",
+            PolarAxisKind::Radius => self.t(TextKey::RadiusCalibrationHover),
+            PolarAxisKind::Angle => self.t(TextKey::AngleCalibrationHover),
         });
     }
 }

@@ -1,5 +1,6 @@
 use super::super::icons;
 use crate::app::{AxisValueField, CurcatApp, PickMode};
+use crate::i18n::UiLanguage;
 use crate::types::AxisUnit;
 use egui::{
     Pos2, Rect, Response, TextBuffer, TextEdit,
@@ -106,6 +107,7 @@ impl CurcatApp {
     pub(super) fn render_calibration_row(
         ui: &mut egui::Ui,
         name: &str,
+        language: UiLanguage,
         unit: AxisUnit,
         value_text: &mut String,
         focus_target: AxisValueField,
@@ -118,8 +120,15 @@ impl CurcatApp {
         let mut requested_pick = None;
 
         ui.horizontal(|ui| {
-            ui.label(format!("{name} value:"))
-                .on_hover_text(format!("Value of the calibration point ({name})"));
+            let value_label = match language {
+                UiLanguage::En => format!("{name} value:"),
+                UiLanguage::Ru => format!("Значение {name}:"),
+            };
+            let value_hover = match language {
+                UiLanguage::En => format!("Value of the calibration point ({name})"),
+                UiLanguage::Ru => format!("Значение калибровочной точки ({name})"),
+            };
+            ui.label(value_label).on_hover_text(value_hover);
             let value_resp = {
                 let mut buffer = AxisFilteredText::new(value_text, unit);
                 ui.add_sized(
@@ -128,15 +137,27 @@ impl CurcatApp {
                 )
             };
             let value_resp = value_resp.on_hover_text(match unit {
-                AxisUnit::Float => "Enter a number (e.g., 1.23)",
-                AxisUnit::DateTime => "Enter date/time (e.g., 2024-10-31 12:30)",
+                AxisUnit::Float => match language {
+                    UiLanguage::En => "Enter a number (e.g., 1.23)",
+                    UiLanguage::Ru => "Введите число (например, 1.23)",
+                },
+                AxisUnit::DateTime => match language {
+                    UiLanguage::En => "Enter date/time (e.g., 2024-10-31 12:30)",
+                    UiLanguage::Ru => "Введите дату/время (например, 2024-10-31 12:30)",
+                },
             });
             Self::apply_pending_focus(pending_focus, focus_target, &value_resp, value_text);
             value_rect = Some(value_resp.rect);
 
-            let pick_resp = ui
-                .button(format!("{} Pick {name}", icons::ICON_PICK_POINT))
-                .on_hover_text(format!("Click, then pick the {name} point on the image"));
+            let pick_button = match language {
+                UiLanguage::En => format!("{} Pick {name}", icons::ICON_PICK_POINT),
+                UiLanguage::Ru => format!("{} Выбрать {name}", icons::ICON_PICK_POINT),
+            };
+            let pick_hover = match language {
+                UiLanguage::En => format!("Click, then pick the {name} point on the image"),
+                UiLanguage::Ru => format!("Нажмите и выберите точку {name} на изображении"),
+            };
+            let pick_resp = ui.button(pick_button).on_hover_text(pick_hover);
             if pick_resp.clicked() {
                 requested_pick = Some(pick_mode);
             }

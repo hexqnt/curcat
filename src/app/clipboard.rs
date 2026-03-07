@@ -24,7 +24,7 @@ impl CurcatApp {
                 let name = meta.display_name();
                 let loaded = LoadedImage::from_color_image(ctx, captured.image);
                 self.set_loaded_image(loaded, Some(meta));
-                self.set_status(format!("Loaded {name}"));
+                self.set_status(self.i18n().format_loaded_name(&name));
                 self.image.pending_fit_on_load = self.project.pending_project_apply.is_none();
             }
             Err(err) => self.set_status(err),

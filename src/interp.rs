@@ -21,15 +21,6 @@ const MIN_ABS_TOLERANCE: f64 = 1.0e-9;
 impl InterpAlgorithm {
     /// Ordered list of algorithms exposed in the UI.
     pub const ALL: [Self; 3] = [Self::Linear, Self::StepHold, Self::NaturalCubic];
-
-    /// Human-friendly label for UI display.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Linear => "Linear",
-            Self::StepHold => "Step (previous)",
-            Self::NaturalCubic => "Natural cubic spline",
-        }
-    }
 }
 
 /// Resample already-sorted points into `samples` using the chosen algorithm.

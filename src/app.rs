@@ -1,6 +1,7 @@
 //! Main egui/eframe application state and UI orchestration.
 
 use crate::config::AppConfig;
+use crate::i18n::{I18n, TextKey, UiLanguage};
 use crate::image::{
     ImageFilters, ImageMeta, LoadedImage, apply_image_filters, describe_aspect_ratio,
     flip_color_image_horizontal, flip_color_image_vertical, format_system_time,
@@ -75,6 +76,9 @@ impl Default for CurcatApp {
     #[allow(clippy::too_many_lines)]
     fn default() -> Self {
         let config = AppConfig::load();
+        let language = config
+            .ui_language()
+            .unwrap_or_else(UiLanguage::detect_system);
         let auto_place_cfg = config.auto_place();
         let default_overlay_choices = Self::default_snap_overlay_choices();
         let default_overlay_color = default_overlay_choices
@@ -174,6 +178,7 @@ impl Default for CurcatApp {
                 middle_pan_enabled: false,
             },
             ui: UiState {
+                language,
                 side_open: true,
                 side_position: SidePanelPosition::Right,
                 info_window_open: false,
@@ -189,12 +194,34 @@ impl Default for CurcatApp {
 impl CurcatApp {
     /// Create a new app and optionally queue an initial image load.
     pub fn new_with_initial_path(_ctx: &Context, initial_path: Option<&Path>) -> Self {
+        egui_extras::install_image_loaders(_ctx);
         let mut app = Self::default();
         if let Some(p) = initial_path {
             app.remember_image_dir_from_path(p);
             app.start_loading_image_from_path(p.to_owned());
         }
         app
+    }
+
+    pub(crate) const fn i18n(&self) -> I18n {
+        I18n::new(self.ui.language)
+    }
+
+    pub(crate) const fn t(&self, key: TextKey) -> &'static str {
+        self.i18n().text(key)
+    }
+
+    pub(crate) fn set_ui_language(&mut self, language: UiLanguage) {
+        if self.ui.language == language {
+            return;
+        }
+        self.ui.language = language;
+        if let Err(err) = self.config.persist_ui_language(language) {
+            self.set_status(match self.ui.language {
+                UiLanguage::En => format!("Failed to save language preference: {err}"),
+                UiLanguage::Ru => format!("Не удалось сохранить выбранный язык интерфейса: {err}"),
+            });
+        }
     }
 
     const fn queue_value_focus(&mut self, field: AxisValueField) {
@@ -207,31 +234,67 @@ impl CurcatApp {
 
     fn begin_pick_mode(&mut self, mode: PickMode) {
         self.calibration.pick_mode = mode;
-        if let Some(label) = Self::pick_mode_label(mode) {
-            self.set_status(format!("{label}… (Esc to cancel)"));
+        if let Some(label) = self.pick_mode_label(mode) {
+            self.set_status(self.i18n().format_status_picking(label));
         }
     }
 
     fn cancel_pick_mode(&mut self) {
         if self.calibration.pick_mode != PickMode::None {
             self.calibration.pick_mode = PickMode::None;
-            self.set_status("Picking canceled.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Picking canceled.",
+                UiLanguage::Ru => "Выбор отменён.",
+            });
         }
     }
 
-    const fn pick_mode_label(mode: PickMode) -> Option<&'static str> {
+    fn pick_mode_label(&self, mode: PickMode) -> Option<&'static str> {
         match mode {
-            PickMode::X1 => Some("Picking X1"),
-            PickMode::X2 => Some("Picking X2"),
-            PickMode::Y1 => Some("Picking Y1"),
-            PickMode::Y2 => Some("Picking Y2"),
-            PickMode::Origin => Some("Picking origin"),
-            PickMode::R1 => Some("Picking R1"),
-            PickMode::R2 => Some("Picking R2"),
-            PickMode::A1 => Some("Picking A1"),
-            PickMode::A2 => Some("Picking A2"),
-            PickMode::CurveColor => Some("Pick curve color"),
-            PickMode::AutoTrace => Some("Auto-trace: click start point"),
+            PickMode::X1 => Some(match self.ui.language {
+                UiLanguage::En => "Picking X1",
+                UiLanguage::Ru => "Выбор X1",
+            }),
+            PickMode::X2 => Some(match self.ui.language {
+                UiLanguage::En => "Picking X2",
+                UiLanguage::Ru => "Выбор X2",
+            }),
+            PickMode::Y1 => Some(match self.ui.language {
+                UiLanguage::En => "Picking Y1",
+                UiLanguage::Ru => "Выбор Y1",
+            }),
+            PickMode::Y2 => Some(match self.ui.language {
+                UiLanguage::En => "Picking Y2",
+                UiLanguage::Ru => "Выбор Y2",
+            }),
+            PickMode::Origin => Some(match self.ui.language {
+                UiLanguage::En => "Picking origin",
+                UiLanguage::Ru => "Выбор начала координат",
+            }),
+            PickMode::R1 => Some(match self.ui.language {
+                UiLanguage::En => "Picking R1",
+                UiLanguage::Ru => "Выбор R1",
+            }),
+            PickMode::R2 => Some(match self.ui.language {
+                UiLanguage::En => "Picking R2",
+                UiLanguage::Ru => "Выбор R2",
+            }),
+            PickMode::A1 => Some(match self.ui.language {
+                UiLanguage::En => "Picking A1",
+                UiLanguage::Ru => "Выбор A1",
+            }),
+            PickMode::A2 => Some(match self.ui.language {
+                UiLanguage::En => "Picking A2",
+                UiLanguage::Ru => "Выбор A2",
+            }),
+            PickMode::CurveColor => Some(match self.ui.language {
+                UiLanguage::En => "Pick curve color",
+                UiLanguage::Ru => "Выбор цвета кривой",
+            }),
+            PickMode::AutoTrace => Some(match self.ui.language {
+                UiLanguage::En => "Auto-trace: click start point",
+                UiLanguage::Ru => "Авто-трассировка: выберите стартовую точку",
+            }),
             PickMode::None => None,
         }
     }
@@ -400,12 +463,18 @@ impl CurcatApp {
         if clockwise {
             self.apply_image_transform(
                 ImageTransformOp::RotateCw,
-                Some("Rotated image 90° clockwise."),
+                Some(match self.ui.language {
+                    UiLanguage::En => "Rotated image 90° clockwise.",
+                    UiLanguage::Ru => "Изображение повернуто на 90° по часовой стрелке.",
+                }),
             );
         } else {
             self.apply_image_transform(
                 ImageTransformOp::RotateCcw,
-                Some("Rotated image 90° counter-clockwise."),
+                Some(match self.ui.language {
+                    UiLanguage::En => "Rotated image 90° counter-clockwise.",
+                    UiLanguage::Ru => "Изображение повернуто на 90° против часовой стрелки.",
+                }),
             );
         }
     }
@@ -414,12 +483,18 @@ impl CurcatApp {
         if horizontal {
             self.apply_image_transform(
                 ImageTransformOp::FlipHorizontal,
-                Some("Flipped image horizontally."),
+                Some(match self.ui.language {
+                    UiLanguage::En => "Flipped image horizontally.",
+                    UiLanguage::Ru => "Изображение отражено по горизонтали.",
+                }),
             );
         } else {
             self.apply_image_transform(
                 ImageTransformOp::FlipVertical,
-                Some("Flipped image vertically."),
+                Some(match self.ui.language {
+                    UiLanguage::En => "Flipped image vertically.",
+                    UiLanguage::Ru => "Изображение отражено по вертикали.",
+                }),
             );
         }
     }
@@ -543,7 +618,10 @@ impl CurcatApp {
 
     fn reset_view(&mut self) {
         self.set_zoom_to_pan_target(1.0, Vec2::ZERO);
-        self.set_status("View reset to 100%.");
+        self.set_status(match self.ui.language {
+            UiLanguage::En => "View reset to 100%.",
+            UiLanguage::Ru => "Вид сброшен до 100%.",
+        });
     }
 
     fn fit_image_to_viewport(&mut self) {
@@ -560,20 +638,31 @@ impl CurcatApp {
     fn fit_image_to_viewport_with_status(&mut self, report_status: bool) -> bool {
         let Some(image) = self.image.image.as_ref() else {
             if report_status {
-                self.set_status("Load an image before fitting the view.");
+                self.set_status(match self.ui.language {
+                    UiLanguage::En => "Load an image before fitting the view.",
+                    UiLanguage::Ru => "Загрузите изображение перед вписыванием вида.",
+                });
             }
             return false;
         };
         let Some(viewport) = self.image.last_viewport_size else {
             if report_status {
-                self.set_status("Fit view unavailable: viewport size not ready yet.");
+                self.set_status(match self.ui.language {
+                    UiLanguage::En => "Fit view unavailable: viewport size not ready yet.",
+                    UiLanguage::Ru => {
+                        "Вписывание пока недоступно: размер области просмотра ещё не готов."
+                    }
+                });
             }
             return false;
         };
         let [w, h] = image.size;
         if w == 0 || h == 0 {
             if report_status {
-                self.set_status("Cannot fit an empty image.");
+                self.set_status(match self.ui.language {
+                    UiLanguage::En => "Cannot fit an empty image.",
+                    UiLanguage::Ru => "Нельзя вписать пустое изображение.",
+                });
             }
             return false;
         }
@@ -586,7 +675,7 @@ impl CurcatApp {
         let clamped = fit_zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         self.set_zoom_to_pan_target(clamped, Vec2::ZERO);
         if report_status {
-            self.set_status(format!("Fit view: {:.0}%", clamped * 100.0));
+            self.set_status(self.i18n().format_fit_view(clamped * 100.0));
         }
         true
     }
@@ -658,6 +747,12 @@ impl CurcatApp {
 impl eframe::App for CurcatApp {
     #[allow(clippy::too_many_lines)]
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        let title = match self.ui.language {
+            UiLanguage::En => "Curcat — Graph Digitizer",
+            UiLanguage::Ru => "Curcat — Оцифровка графиков",
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.to_string()));
+
         self.poll_image_loader(ctx);
         self.poll_project_save_job();
         self.poll_snap_build_job();
@@ -796,7 +891,10 @@ impl eframe::App for CurcatApp {
                         close_dialog = true;
                     }
                     DialogPoll::Cancelled => {
-                        self.set_status("Open canceled.");
+                        self.set_status(match self.ui.language {
+                            UiLanguage::En => "Open canceled.",
+                            UiLanguage::Ru => "Открытие отменено.",
+                        });
                         close_dialog = true;
                     }
                     DialogPoll::Closed => close_dialog = true,
@@ -808,7 +906,10 @@ impl eframe::App for CurcatApp {
                         close_dialog = true;
                     }
                     DialogPoll::Cancelled => {
-                        self.set_status("Project open canceled.");
+                        self.set_status(match self.ui.language {
+                            UiLanguage::En => "Project open canceled.",
+                            UiLanguage::Ru => "Открытие проекта отменено.",
+                        });
                         close_dialog = true;
                     }
                     DialogPoll::Closed => close_dialog = true,
@@ -820,7 +921,10 @@ impl eframe::App for CurcatApp {
                         close_dialog = true;
                     }
                     DialogPoll::Cancelled => {
-                        self.set_status("Project save canceled.");
+                        self.set_status(match self.ui.language {
+                            UiLanguage::En => "Project save canceled.",
+                            UiLanguage::Ru => "Сохранение проекта отменено.",
+                        });
                         close_dialog = true;
                     }
                     DialogPoll::Closed => close_dialog = true,
@@ -832,22 +936,33 @@ impl eframe::App for CurcatApp {
                     format,
                 } => {
                     let format = *format;
+                    let format_label = match format {
+                        crate::export::ExportFormat::Csv => "CSV",
+                        crate::export::ExportFormat::Xlsx => "Excel",
+                        crate::export::ExportFormat::Json => "JSON",
+                        crate::export::ExportFormat::Ron => "RON",
+                    };
                     match Self::poll_dialog(ctx, dialog) {
                         DialogPoll::Picked(path) => {
                             picked_export_path = Some(path.clone());
                             match format.export(&path, payload) {
-                                Ok(()) => self.set_status(format!("{} exported.", format.label())),
+                                Ok(()) => {
+                                    self.set_status(self.i18n().format_exported(format_label))
+                                }
                                 Err(e) => {
-                                    self.set_status(format!(
-                                        "{} export failed: {e}",
-                                        format.label()
-                                    ));
+                                    self.set_status(
+                                        self.i18n()
+                                            .format_export_failed(format_label, &e.to_string()),
+                                    );
                                 }
                             }
                             close_dialog = true;
                         }
                         DialogPoll::Cancelled => {
-                            self.set_status("Export canceled.");
+                            self.set_status(match self.ui.language {
+                                UiLanguage::En => "Export canceled.",
+                                UiLanguage::Ru => "Экспорт отменён.",
+                            });
                             close_dialog = true;
                         }
                         DialogPoll::Closed => close_dialog = true,

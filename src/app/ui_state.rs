@@ -1,4 +1,5 @@
 use crate::export::{ExportFormat, ExportPayload};
+use crate::i18n::UiLanguage;
 use egui_file_dialog::FileDialog;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,6 +10,7 @@ pub enum SidePanelPosition {
 
 #[allow(clippy::struct_excessive_bools)]
 pub struct UiState {
+    pub(super) language: UiLanguage,
     pub(super) side_open: bool,
     pub(super) side_position: SidePanelPosition,
     pub(super) info_window_open: bool,

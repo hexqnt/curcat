@@ -34,3 +34,7 @@ image_dim = 12000
 total_pixels = 80000000
 # Memory limit for decoder allocations (bytes)
 alloc_bytes = 536870912
+
+[ui]
+# Optional: force UI language ("en" or "ru")
+language = "en"

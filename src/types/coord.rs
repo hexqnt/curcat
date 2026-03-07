@@ -45,13 +45,3 @@ pub enum AngleDirection {
     /// Clockwise angle increase.
     Cw,
 }
-
-impl AngleDirection {
-    /// Short label used in UI/export metadata.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Ccw => "CCW",
-            Self::Cw => "CW",
-        }
-    }
-}

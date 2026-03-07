@@ -1,4 +1,5 @@
 use super::{CurcatApp, ImageLoadRequest, ImageLoadResult, PendingImageMeta, PendingImageTask};
+use crate::i18n::UiLanguage;
 use crate::image::{LoadedImage, decode_image_from_bytes, decode_image_from_path};
 use egui::{ColorImage, Context};
 use std::path::Path;
@@ -10,7 +11,10 @@ impl CurcatApp {
         if let Some(plan) = self.project.pending_project_apply.as_ref()
             && path != plan.image.path
         {
-            self.set_status("Project loading in progress. Wait until it finishes.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Project loading in progress. Wait until it finishes.",
+                UiLanguage::Ru => "Идёт загрузка проекта. Дождитесь завершения.",
+            });
             return;
         }
         self.remember_image_dir_from_path(&path);
@@ -25,7 +29,10 @@ impl CurcatApp {
         last_modified: Option<std::time::SystemTime>,
     ) {
         if self.project.pending_project_apply.is_some() {
-            self.set_status("Project loading in progress. Wait until it finishes.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Project loading in progress. Wait until it finishes.",
+                UiLanguage::Ru => "Идёт загрузка проекта. Дождитесь завершения.",
+            });
             return;
         }
         let meta = PendingImageMeta::DroppedBytes {
@@ -52,7 +59,7 @@ impl CurcatApp {
             let _ = tx.send(msg);
         });
         self.project.pending_image_task = Some(PendingImageTask { rx, meta });
-        self.set_status(format!("Loading {description}…"));
+        self.set_status(self.i18n().format_loading_image(&description));
     }
 
     pub(crate) fn poll_image_loader(&mut self, ctx: &Context) {
@@ -68,7 +75,10 @@ impl CurcatApp {
             }
             Ok(ImageLoadResult::Error(err)) => {
                 let label = task.meta.description();
-                self.set_status(format!("Failed to load {label}: {err}"));
+                self.set_status(match self.ui.language {
+                    UiLanguage::En => format!("Failed to load {label}: {err}"),
+                    UiLanguage::Ru => format!("Не удалось загрузить {label}: {err}"),
+                });
                 self.project.pending_project_apply = None;
             }
             Err(TryRecvError::Empty) => {
@@ -76,7 +86,10 @@ impl CurcatApp {
             }
             Err(TryRecvError::Disconnected) => {
                 let label = task.meta.description();
-                self.set_status(format!("Loading {label} failed: worker disconnected."));
+                self.set_status(match self.ui.language {
+                    UiLanguage::En => format!("Loading {label} failed: worker disconnected."),
+                    UiLanguage::Ru => format!("Ошибка загрузки {label}: рабочий поток отключился."),
+                });
                 self.project.pending_project_apply = None;
             }
         }
@@ -91,7 +104,7 @@ impl CurcatApp {
         let name = meta.display_name();
         let loaded = LoadedImage::from_color_image(ctx, color);
         self.set_loaded_image(loaded, Some(meta));
-        self.set_status(format!("Loaded {name}"));
+        self.set_status(self.i18n().format_loaded_name(&name));
         self.image.pending_fit_on_load = self.project.pending_project_apply.is_none();
     }
 

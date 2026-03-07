@@ -1,20 +1,24 @@
 use super::super::{CurcatApp, NativeDialog};
 use crate::export::ExportFormat;
+use crate::i18n::UiLanguage;
 use egui_file_dialog::FileDialog;
 use std::path::Path;
 
 impl CurcatApp {
     pub(crate) fn open_image_dialog(&mut self) {
-        let mut dialog = Self::make_open_dialog(self.project.last_image_dir.as_deref());
+        let mut dialog = self.make_open_dialog(self.project.last_image_dir.as_deref());
         dialog.pick_file();
         self.project.active_dialog = Some(NativeDialog::Open(dialog));
     }
 
     pub(crate) fn open_project_dialog(&mut self) {
         let mut dialog = FileDialog::new()
-            .title("Open project")
-            .add_file_filter_extensions("Curcat project", vec!["curcat"])
-            .default_file_filter("Curcat project");
+            .title(self.t(crate::i18n::TextKey::OpenProjectDialogTitle))
+            .add_file_filter_extensions(
+                self.t(crate::i18n::TextKey::CurcatProjectFilterLabel),
+                vec!["curcat"],
+            )
+            .default_file_filter(self.t(crate::i18n::TextKey::CurcatProjectFilterLabel));
         if let Some(dir) = self.project.last_project_dir.as_deref() {
             dialog = dialog.initial_directory(dir.to_path_buf());
         }
@@ -28,9 +32,9 @@ impl CurcatApp {
             .last_project_path
             .as_ref()
             .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
-            .unwrap_or_else(|| "project.curcat".to_string());
+            .unwrap_or_else(|| self.t(crate::i18n::TextKey::DefaultProjectName).to_string());
         let mut dialog = Self::make_save_dialog(
-            "Save project",
+            self.t(crate::i18n::TextKey::SaveProjectDialogTitle),
             &default_name,
             &["curcat"],
             self.project.last_project_dir.as_deref(),
@@ -58,8 +62,18 @@ impl CurcatApp {
     pub(crate) fn start_export(&mut self, format: ExportFormat) {
         match self.build_export_payload() {
             Ok(payload) => {
+                let dialog_title = match (self.ui.language, format) {
+                    (UiLanguage::En, ExportFormat::Csv) => "Export CSV",
+                    (UiLanguage::En, ExportFormat::Xlsx) => "Export Excel",
+                    (UiLanguage::En, ExportFormat::Json) => "Export JSON",
+                    (UiLanguage::En, ExportFormat::Ron) => "Export RON",
+                    (UiLanguage::Ru, ExportFormat::Csv) => "Экспорт CSV",
+                    (UiLanguage::Ru, ExportFormat::Xlsx) => "Экспорт Excel",
+                    (UiLanguage::Ru, ExportFormat::Json) => "Экспорт JSON",
+                    (UiLanguage::Ru, ExportFormat::Ron) => "Экспорт RON",
+                };
                 let mut dialog = Self::make_save_dialog(
-                    format.dialog_title(),
+                    dialog_title,
                     format.default_filename(),
                     &[format.extension()],
                     self.project.last_export_dir.as_deref(),
@@ -75,14 +89,14 @@ impl CurcatApp {
         }
     }
 
-    pub(crate) fn make_open_dialog(initial_dir: Option<&Path>) -> FileDialog {
+    pub(crate) fn make_open_dialog(&self, initial_dir: Option<&Path>) -> FileDialog {
         // Keep in sync with enabled `image` crate features.
         // Add separate presets for frequent formats.
         let mut dialog = FileDialog::new()
-            .title("Open image")
+            .title(self.t(crate::i18n::TextKey::OpenImageDialogTitle))
             // Combined filter
             .add_file_filter_extensions(
-                "All images",
+                self.t(crate::i18n::TextKey::ImageFilterAll),
                 vec![
                     "png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "tga", "tiff", "tif", "pnm",
                     "pbm", "pgm", "ppm", "hdr", "dds",
@@ -93,7 +107,7 @@ impl CurcatApp {
             .add_file_filter_extensions("JPEG/JPG", vec!["jpg", "jpeg"])
             .add_file_filter_extensions("BMP", vec!["bmp"])
             .add_file_filter_extensions("TIFF", vec!["tiff", "tif"])
-            .default_file_filter("All images");
+            .default_file_filter(self.t(crate::i18n::TextKey::ImageFilterAll));
         if let Some(dir) = initial_dir {
             dialog = dialog.initial_directory(dir.to_path_buf());
         }

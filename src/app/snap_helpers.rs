@@ -1,6 +1,7 @@
 //! Helpers for snap-map creation, color analysis, and snapping workflow.
 
 use super::{CurcatApp, PointInputMode, SnapBuildJob, safe_usize_to_f32};
+use crate::i18n::UiLanguage;
 use crate::snap::{SnapBehavior, SnapMapCache, derive_snap_overlay_palette};
 use egui::{Color32, ColorImage, Pos2, Vec2};
 use std::sync::mpsc::{self, TryRecvError};
@@ -197,12 +198,21 @@ impl CurcatApp {
         if let Some(color) = self.sample_image_color(pixel) {
             self.snap.snap_target_color = color;
             self.mark_snap_maps_dirty();
-            self.set_status(format!(
-                "Picked curve color #{:02X}{:02X}{:02X}",
-                color[0], color[1], color[2]
-            ));
+            self.set_status(match self.ui.language {
+                UiLanguage::En => format!(
+                    "Picked curve color #{:02X}{:02X}{:02X}",
+                    color[0], color[1], color[2]
+                ),
+                UiLanguage::Ru => format!(
+                    "Выбран цвет кривой #{:02X}{:02X}{:02X}",
+                    color[0], color[1], color[2]
+                ),
+            });
         } else {
-            self.set_status("Unable to pick color at cursor.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Unable to pick color at cursor.",
+                UiLanguage::Ru => "Не удалось выбрать цвет под курсором.",
+            });
         }
     }
 

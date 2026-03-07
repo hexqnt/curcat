@@ -1,32 +1,34 @@
 use super::super::common::toggle_switch;
 use crate::app::snap_helpers::SNAP_SWATCH_SIZE;
 use crate::app::{CurcatApp, PickMode, PointInputMode};
+use crate::i18n::TextKey;
 use crate::snap::{SnapFeatureSource, SnapThresholdKind};
 use egui::{Color32, CornerRadius, RichText, StrokeKind, Vec2};
 
 impl CurcatApp {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_point_input_section(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Point input");
+        let i18n = self.i18n();
+        ui.heading(i18n.text(TextKey::PointInput));
         ui.horizontal(|ui| {
             ui.radio_value(
                 &mut self.snap.point_input_mode,
                 PointInputMode::Free,
-                "Free",
+                i18n.text(TextKey::Free),
             )
-            .on_hover_text("Place points exactly where you click");
+            .on_hover_text(i18n.text(TextKey::FreeHover));
             ui.radio_value(
                 &mut self.snap.point_input_mode,
                 PointInputMode::ContrastSnap,
-                "Contrast snap",
+                i18n.text(TextKey::ContrastSnap),
             )
-            .on_hover_text("Snap to the nearest high-contrast area inside the search radius");
+            .on_hover_text(i18n.text(TextKey::ContrastSnapHover));
             ui.radio_value(
                 &mut self.snap.point_input_mode,
                 PointInputMode::CenterlineSnap,
-                "Centerline snap",
+                i18n.text(TextKey::CenterlineSnap),
             )
-            .on_hover_text("Snap to the centerline of the color-matched curve");
+            .on_hover_text(i18n.text(TextKey::CenterlineSnapHover));
         });
 
         match self.snap.point_input_mode {
@@ -35,17 +37,16 @@ impl CurcatApp {
                 self.ui_snap_radius_slider(ui);
                 self.ui_snap_overlay_color_selector(ui);
                 ui.add_space(4.0);
-                ui.label("Feature source").on_hover_text(
-                    "Choose what the snapper looks at when searching for a candidate",
-                );
+                ui.label(i18n.text(TextKey::FeatureSource))
+                    .on_hover_text(i18n.text(TextKey::FeatureSourceHover));
                 egui::ComboBox::from_id_salt("snap_feature_source")
-                    .selected_text(self.snap.snap_feature_source.label())
+                    .selected_text(i18n.snap_feature_source_label(self.snap.snap_feature_source))
                     .show_ui(ui, |ui| {
                         for variant in SnapFeatureSource::ALL {
                             ui.selectable_value(
                                 &mut self.snap.snap_feature_source,
                                 variant,
-                                variant.label(),
+                                i18n.snap_feature_source_label(variant),
                             );
                         }
                     });
@@ -56,21 +57,21 @@ impl CurcatApp {
                     self.ui_curve_color_controls(ui);
                 }
                 ui.add_space(4.0);
-                ui.label("Threshold mode")
-                    .on_hover_text("Select how the detector decides if a pixel is strong enough");
+                ui.label(i18n.text(TextKey::ThresholdMode))
+                    .on_hover_text(i18n.text(TextKey::ThresholdModeHover));
                 ui.horizontal(|ui| {
                     ui.radio_value(
                         &mut self.snap.snap_threshold_kind,
                         SnapThresholdKind::Gradient,
-                        SnapThresholdKind::Gradient.label(),
+                        i18n.snap_threshold_kind_label(SnapThresholdKind::Gradient),
                     )
-                    .on_hover_text("Compare threshold against raw gradient strength");
+                    .on_hover_text(i18n.text(TextKey::GradientOnlyHover));
                     ui.radio_value(
                         &mut self.snap.snap_threshold_kind,
                         SnapThresholdKind::Score,
-                        SnapThresholdKind::Score.label(),
+                        i18n.snap_threshold_kind_label(SnapThresholdKind::Score),
                     )
-                    .on_hover_text("Compare threshold against combined feature score");
+                    .on_hover_text(i18n.text(TextKey::FeatureScoreHover));
                 });
                 let threshold_range =
                     if matches!(self.snap.snap_threshold_kind, SnapThresholdKind::Gradient) {
@@ -80,37 +81,30 @@ impl CurcatApp {
                     };
                 ui.add(
                     egui::Slider::new(&mut self.snap.contrast_threshold, threshold_range)
-                        .text("threshold")
+                        .text(i18n.text(TextKey::Threshold))
                         .clamping(egui::SliderClamping::Always),
                 )
-                .on_hover_text("Higher = snap only to strong candidates");
+                .on_hover_text(i18n.text(TextKey::ThresholdHigherHint));
             }
             PointInputMode::CenterlineSnap => {
                 self.ui_snap_radius_slider(ui);
                 self.ui_snap_overlay_color_selector(ui);
-                ui.label("Centerline detects flat color interiors")
-                    .on_hover_text(
-                        "Pick the curve color to help the detector focus on the intended line",
-                    );
+                ui.label(i18n.text(TextKey::CenterlineDetectsFlat))
+                    .on_hover_text(i18n.text(TextKey::CenterlineDetectsFlatHover));
                 self.ui_curve_color_controls(ui);
                 ui.add_space(4.0);
-                ui.label("Strength threshold")
-                    .on_hover_text("Rejects weak centerline matches");
+                ui.label(i18n.text(TextKey::StrengthThreshold))
+                    .on_hover_text(i18n.text(TextKey::StrengthThresholdHover));
                 ui.spacing_mut().slider_width = 150.0;
                 ui.add(
                     egui::Slider::new(&mut self.snap.centerline_threshold, 0.0..=255.0)
-                        .text("threshold")
+                        .text(i18n.text(TextKey::Threshold))
                         .clamping(egui::SliderClamping::Always),
                 )
-                .on_hover_text("Higher = snap only to well-defined line centers");
+                .on_hover_text(i18n.text(TextKey::HigherOnlyWellDefined));
                 ui.scope(|ui| {
                     ui.style_mut().spacing.item_spacing.x = 4.0;
-                    ui.label(
-                        RichText::new(
-                            "Best results come from sampling the curve color before snapping.",
-                        )
-                        .small(),
-                    );
+                    ui.label(RichText::new(i18n.text(TextKey::BestResultsColorSample)).small());
                 });
             }
         }
@@ -120,31 +114,24 @@ impl CurcatApp {
         ) {
             ui.scope(|ui| {
                 ui.style_mut().spacing.item_spacing.x = 4.0;
-                ui.label(
-                    RichText::new(
-                        "The preview circle in the image shows the area that will be scanned.",
-                    )
-                    .small(),
-                );
+                ui.label(RichText::new(i18n.text(TextKey::PreviewCircleHint)).small());
             });
         }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            toggle_switch(ui, &mut self.points.show_curve_segments).on_hover_text(
-                "Show or hide the lines that connect picked points (sorted by X value).",
-            );
+            toggle_switch(ui, &mut self.points.show_curve_segments)
+                .on_hover_text(i18n.text(TextKey::ShowPointConnectionsHover));
             ui.add_space(4.0);
-            ui.label("Show point connections").on_hover_text(
-                "Show or hide the lines between picked points (not calibration lines).",
-            );
+            ui.label(i18n.text(TextKey::ShowPointConnections))
+                .on_hover_text(i18n.text(TextKey::ShowPointConnectionsHover));
         });
     }
 
     fn ui_snap_radius_slider(&mut self, ui: &mut egui::Ui) {
+        let i18n = self.i18n();
         ui.add_space(4.0);
-        ui.label("Search radius (px)").on_hover_text(
-            "Measured in image pixels; smaller values keep snapping near the cursor",
-        );
+        ui.label(i18n.text(TextKey::SearchRadiusPx))
+            .on_hover_text(i18n.text(TextKey::SearchRadiusHover));
         ui.spacing_mut().slider_width = 150.0;
         ui.add(
             egui::Slider::new(&mut self.snap.contrast_search_radius, 3.0..=60.0)
@@ -152,22 +139,23 @@ impl CurcatApp {
                 .clamping(egui::SliderClamping::Always)
                 .text("px"),
         )
-        .on_hover_text("Radius used to look for snap candidates");
+        .on_hover_text(i18n.text(TextKey::RadiusUsedToLookForCandidates));
     }
 
     fn ui_curve_color_controls(&mut self, ui: &mut egui::Ui) {
+        let i18n = self.i18n();
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("Curve color:");
+            ui.label(i18n.text(TextKey::CurveColor));
             let color_button = ui
                 .color_edit_button_srgba(&mut self.snap.snap_target_color)
-                .on_hover_text("Target color for the curve");
+                .on_hover_text(i18n.text(TextKey::CurveColorHover));
             if color_button.changed() {
                 self.mark_snap_maps_dirty();
             }
             if ui
-                .button("Pick from image")
-                .on_hover_text("Click, then select a pixel on the image")
+                .button(i18n.text(TextKey::PickFromImage))
+                .on_hover_text(i18n.text(TextKey::PickFromImageHover))
                 .clicked()
             {
                 self.begin_pick_mode(PickMode::CurveColor);
@@ -176,22 +164,23 @@ impl CurcatApp {
         let tol_resp = ui
             .add(
                 egui::Slider::new(&mut self.snap.snap_color_tolerance, 5.0..=150.0)
-                    .text("tolerance")
+                    .text(i18n.text(TextKey::Tolerance))
                     .clamping(egui::SliderClamping::Always),
             )
-            .on_hover_text("How far the pixel color may deviate from the picked color");
+            .on_hover_text(i18n.text(TextKey::ToleranceHover));
         if tol_resp.changed() {
             self.mark_snap_maps_dirty();
         }
     }
 
     fn ui_snap_overlay_color_selector(&mut self, ui: &mut egui::Ui) {
+        let i18n = self.i18n();
         if self.snap.snap_overlay_choices.is_empty() {
             return;
         }
         ui.add_space(4.0);
-        ui.label("Snap overlay color")
-            .on_hover_text("Choices are derived from the image to keep the snap preview visible");
+        ui.label(i18n.text(TextKey::SnapOverlayColor))
+            .on_hover_text(i18n.text(TextKey::SnapOverlayColorHover));
         ui.horizontal_wrapped(|ui| {
             ui.style_mut().spacing.item_spacing.x = 6.0;
             for (idx, color) in self.snap.snap_overlay_choices.iter().enumerate() {

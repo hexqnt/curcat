@@ -1,4 +1,5 @@
 use crate::app::CurcatApp;
+use crate::i18n::TextKey;
 use crate::image::ImageFilters;
 use egui::RichText;
 
@@ -9,7 +10,7 @@ impl CurcatApp {
         }
 
         let mut open = self.ui.image_filters_window_open;
-        egui::Window::new("Image filters")
+        egui::Window::new(self.t(TextKey::ImageFiltersWindow))
             .open(&mut open)
             .resizable(false)
             .collapsible(false)
@@ -20,7 +21,8 @@ impl CurcatApp {
     }
 
     fn ui_image_filters_section(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Affects display and snapping only.").small());
+        let i18n = self.i18n();
+        ui.label(RichText::new(i18n.text(TextKey::FiltersAffectDisplayOnly)).small());
         ui.add_space(4.0);
 
         let has_image = self.image.image.is_some();
@@ -32,29 +34,36 @@ impl CurcatApp {
             changed |= ui
                 .add(
                     egui::Slider::new(&mut self.image.filters.brightness, -1.0..=1.0)
-                        .text("brightness"),
+                        .text(i18n.text(TextKey::Brightness)),
                 )
                 .changed();
             changed |= ui
                 .add(
                     egui::Slider::new(&mut self.image.filters.contrast, -1.0..=1.0)
-                        .text("contrast"),
+                        .text(i18n.text(TextKey::Contrast)),
                 )
                 .changed();
             changed |= ui
-                .add(egui::Slider::new(&mut self.image.filters.gamma, 0.2..=3.0).text("gamma"))
+                .add(
+                    egui::Slider::new(&mut self.image.filters.gamma, 0.2..=3.0)
+                        .text(i18n.text(TextKey::Gamma)),
+                )
                 .changed();
             changed |= ui
-                .checkbox(&mut self.image.filters.invert, "invert")
+                .checkbox(&mut self.image.filters.invert, i18n.text(TextKey::Invert))
                 .changed();
 
             ui.horizontal(|ui| {
                 changed |= ui
-                    .checkbox(&mut self.image.filters.threshold_enabled, "threshold")
+                    .checkbox(
+                        &mut self.image.filters.threshold_enabled,
+                        i18n.text(TextKey::ThresholdEnabled),
+                    )
                     .changed();
                 let resp = ui.add_enabled(
                     self.image.filters.threshold_enabled,
-                    egui::Slider::new(&mut self.image.filters.threshold, 0.0..=1.0).text("level"),
+                    egui::Slider::new(&mut self.image.filters.threshold, 0.0..=1.0)
+                        .text(i18n.text(TextKey::Level)),
                 );
                 if resp.changed() {
                     changed = true;
@@ -64,18 +73,18 @@ impl CurcatApp {
             changed |= ui
                 .add(
                     egui::Slider::new(&mut self.image.filters.blur_radius, 0..=12)
-                        .text("blur radius"),
+                        .text(i18n.text(TextKey::BlurRadius)),
                 )
                 .changed();
 
-            if ui.button("Reset filters").clicked() {
+            if ui.button(i18n.text(TextKey::ResetFilters)).clicked() {
                 self.image.filters = ImageFilters::default();
                 changed = true;
             }
         });
 
         if !has_image {
-            ui.label(RichText::new("Load an image to adjust filters.").small());
+            ui.label(RichText::new(i18n.text(TextKey::LoadImageToAdjustFilters)).small());
         }
 
         if changed && has_image {

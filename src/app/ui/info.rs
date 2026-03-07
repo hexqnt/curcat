@@ -2,15 +2,17 @@ use super::super::{
     CurcatApp, describe_aspect_ratio, format_system_time, human_readable_bytes, total_pixel_count,
 };
 use super::stats::{AxisKind, axis_length, format_span};
+use crate::i18n::TextKey;
 use crate::types::{AxisUnit, AxisValue, CoordSystem, PolarMapping};
 use egui::{Color32, RichText};
 
 impl CurcatApp {
     pub(crate) fn ui_status_bar(&self, ui: &mut egui::Ui) {
         let points_count = self.points.points.len();
+        let i18n = self.i18n();
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new(format!("Points: {points_count}"))
+                RichText::new(i18n.format_points_count(points_count))
                     .small()
                     .color(Color32::from_gray(180)),
             );
@@ -31,61 +33,76 @@ impl CurcatApp {
             return;
         }
 
-        egui::Window::new("Image info")
+        let i18n = self.i18n();
+        egui::Window::new(i18n.text(TextKey::ImageInfoWindow))
             .open(&mut self.ui.info_window_open)
             .resizable(false)
             .collapsible(false)
             .show(ctx, |ui| {
                 if let Some(image) = &self.image.image {
-                    ui.heading("File");
+                    ui.heading(i18n.text(TextKey::FileSection));
                     if let Some(meta) = self.image.meta.as_ref() {
-                        ui.label(format!("Source: {}", meta.source_label()));
-                        ui.label(format!("Name: {}", meta.display_name()));
+                        let source_label = match (self.ui.language, meta.source_label()) {
+                            (crate::i18n::UiLanguage::Ru, "File on disk") => "Файл на диске",
+                            (crate::i18n::UiLanguage::Ru, "Dropped bytes") => "Перетащенные байты",
+                            (crate::i18n::UiLanguage::Ru, "Clipboard") => "Буфер обмена",
+                            _ => meta.source_label(),
+                        };
+                        let display_name = match (self.ui.language, meta.display_name().as_str()) {
+                            (crate::i18n::UiLanguage::Ru, "Clipboard image") => {
+                                "Изображение из буфера обмена".to_string()
+                            }
+                            (crate::i18n::UiLanguage::Ru, "Unnamed drop") => {
+                                "Перетащенный файл без имени".to_string()
+                            }
+                            _ => meta.display_name(),
+                        };
+                        ui.label(i18n.format_source(source_label));
+                        ui.label(i18n.format_name(&display_name));
                         if let Some(path) = meta.path() {
-                            ui.label(format!("Path: {}", path.display()));
+                            ui.label(i18n.format_path(&path.display().to_string()));
                         }
                         if let Some(bytes) = meta.byte_len() {
-                            ui.label(format!(
-                                "Size: {} ({bytes} bytes)",
-                                human_readable_bytes(bytes),
-                            ));
+                            let size_hint = match self.ui.language {
+                                crate::i18n::UiLanguage::En => {
+                                    format!("{} ({bytes} bytes)", human_readable_bytes(bytes))
+                                }
+                                crate::i18n::UiLanguage::Ru => {
+                                    format!("{} ({bytes} байт)", human_readable_bytes(bytes))
+                                }
+                            };
+                            ui.label(i18n.format_size(&size_hint));
                         } else {
-                            ui.label("Size: Unknown");
+                            ui.label(i18n.format_size(i18n.text(TextKey::SizeUnknown)));
                         }
                         if let Some(modified) = meta.last_modified() {
-                            ui.label(format!("Modified: {}", format_system_time(modified)));
+                            ui.label(i18n.format_modified(&format_system_time(modified)));
                         } else {
-                            ui.label("Modified: Unknown");
+                            ui.label(i18n.format_modified(i18n.text(TextKey::ModifiedUnknown)));
                         }
                     } else {
-                        ui.label("No captured file metadata for this image.");
+                        ui.label(i18n.text(TextKey::NoFileMetadataForImage));
                     }
 
                     ui.add_space(6.0);
-                    ui.heading("Image");
+                    ui.heading(i18n.text(TextKey::ImageSection));
                     let [w, h] = image.size;
-                    ui.label(format!("Dimensions: {w} × {h} px"));
+                    ui.label(i18n.format_dimensions(w, h));
                     if let Some(aspect_text) = describe_aspect_ratio(image.size) {
-                        ui.label(format!("Aspect ratio: {aspect_text}"));
+                        ui.label(i18n.format_aspect_ratio(&aspect_text));
                     } else {
-                        ui.label("Aspect ratio: n/a");
+                        ui.label(i18n.format_aspect_ratio(i18n.text(TextKey::AspectRatioNa)));
                     }
                     let total_pixels = total_pixel_count(image.size);
-                    ui.label(format!(
-                        "Pixels: {total_pixels} ({:.2} MP)",
-                        total_pixels as f64 / 1_000_000.0
-                    ));
+                    ui.label(i18n.format_pixels(total_pixels, total_pixels as f64 / 1_000_000.0));
                     let rgba_bytes = total_pixels.saturating_mul(4);
-                    ui.label(format!(
-                        "RGBA memory estimate: {} ({rgba_bytes} bytes)",
-                        human_readable_bytes(rgba_bytes),
+                    ui.label(i18n.format_rgba_memory_estimate(
+                        &human_readable_bytes(rgba_bytes),
+                        rgba_bytes,
                     ));
-                    ui.label(format!(
-                        "Current zoom: {}",
-                        Self::format_zoom(self.image.zoom)
-                    ));
+                    ui.label(i18n.format_current_zoom(&Self::format_zoom(self.image.zoom)));
                 } else {
-                    ui.label("Load an image to inspect its metadata.");
+                    ui.label(i18n.text(TextKey::LoadImageToInspectMetadata));
                 }
             });
     }
@@ -105,15 +122,16 @@ impl CurcatApp {
         );
 
         let mut open = self.ui.points_info_window_open;
-        egui::Window::new("Points info")
+        let i18n = self.i18n();
+        egui::Window::new(i18n.text(TextKey::PointsInfoWindow))
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
                 let total = self.points.points.len();
-                ui.heading("Points");
-                ui.label(format!("Placed: {total}"));
+                ui.heading(i18n.text(TextKey::Points));
+                ui.label(i18n.format_placed_points(total));
                 if total == 0 {
-                    ui.label("Add points to see stats.");
+                    ui.label(i18n.text(TextKey::AddPointsToSeeStats));
                     return;
                 }
 
@@ -124,29 +142,36 @@ impl CurcatApp {
                     .filter(|p| p.x_numeric.is_some() && p.y_numeric.is_some())
                     .count();
                 if calibrated != total {
-                    ui.label(
-                        RichText::new(format!("Calibrated pairs: {calibrated} (need both axes)"))
-                            .weak(),
-                    );
+                    ui.label(RichText::new(i18n.format_calibrated_pairs(calibrated)).weak());
                 }
 
                 ui.add_space(6.0);
-                ui.heading("Ranges");
+                ui.heading(i18n.text(TextKey::Ranges));
                 match self.calibration.coord_system {
                     crate::types::CoordSystem::Cartesian => {
-                        self.render_axis_stats(ui, "X axis", AxisKind::X, x_mapping.as_ref());
-                        self.render_axis_stats(ui, "Y axis", AxisKind::Y, y_mapping.as_ref());
+                        self.render_axis_stats(
+                            ui,
+                            i18n.text(TextKey::XAxis),
+                            AxisKind::X,
+                            x_mapping.as_ref(),
+                        );
+                        self.render_axis_stats(
+                            ui,
+                            i18n.text(TextKey::YAxis),
+                            AxisKind::Y,
+                            y_mapping.as_ref(),
+                        );
                     }
                     crate::types::CoordSystem::Polar => {
                         self.render_polar_axis_stats(
                             ui,
-                            "Angle",
+                            i18n.text(TextKey::Angle),
                             AxisKind::X,
                             polar_mapping.as_ref(),
                         );
                         self.render_polar_axis_stats(
                             ui,
-                            "Radius",
+                            i18n.text(TextKey::Radius),
                             AxisKind::Y,
                             polar_mapping.as_ref(),
                         );
@@ -154,11 +179,11 @@ impl CurcatApp {
                 }
 
                 ui.add_space(6.0);
-                ui.heading("Calibration");
+                ui.heading(i18n.text(TextKey::CalibrationSection));
                 self.render_calibration_stats(ui, polar_mapping.as_ref());
 
                 ui.add_space(6.0);
-                ui.heading("Geometry");
+                ui.heading(i18n.text(TextKey::Geometry));
                 self.render_geometry_stats(ui);
             });
         self.ui.points_info_window_open = open;
@@ -175,37 +200,39 @@ impl CurcatApp {
     ) {
         let numeric_range = mapping.and_then(|_| self.axis_numeric_range(axis));
         let pixel_range = self.axis_pixel_range(axis);
+        let out_of_range = match self.ui.language {
+            crate::i18n::UiLanguage::En => "out of range",
+            crate::i18n::UiLanguage::Ru => "вне диапазона",
+        };
 
         if let (Some(range), Some(map)) = (numeric_range, mapping) {
             let min = AxisValue::from_scalar_seconds(map.unit, range.min)
-                .map_or_else(|| "out of range".to_string(), |v| v.format());
+                .map_or_else(|| out_of_range.to_string(), |v| v.format());
             let max = AxisValue::from_scalar_seconds(map.unit, range.max)
-                .map_or_else(|| "out of range".to_string(), |v| v.format());
+                .map_or_else(|| out_of_range.to_string(), |v| v.format());
             let span = format_span(map.unit, range.span());
-            ui.label(format!("{label}: {min} … {max} (Δ {span})"));
+            ui.label(self.i18n().format_axis_range(label, &min, &max, &span));
             if let Some(pix) = pixel_range {
                 ui.label(
-                    RichText::new(format!(
-                        "{label} pixels: {:.1} … {:.1} (Δ {:.1} px)",
+                    RichText::new(self.i18n().format_axis_pixels(
+                        label,
                         pix.min,
                         pix.max,
-                        pix.span()
+                        pix.span(),
                     ))
                     .weak(),
                 );
             }
         } else if let Some(pix) = pixel_range {
-            ui.label(format!(
-                "{label} (px): {:.1} … {:.1} (Δ {:.1} px)",
-                pix.min,
-                pix.max,
-                pix.span()
-            ));
+            ui.label(
+                self.i18n()
+                    .format_axis_pixels_only(label, pix.min, pix.max, pix.span()),
+            );
             if mapping.is_none() {
-                ui.label(RichText::new("Calibrate this axis to see numeric values.").weak());
+                ui.label(RichText::new(self.t(TextKey::CalibrateAxisToSeeNumericValues)).weak());
             }
         } else {
-            ui.label(format!("{label}: no data"));
+            ui.label(format!("{label}: {}", self.t(TextKey::NoData)));
         }
     }
 
@@ -215,32 +242,32 @@ impl CurcatApp {
                 let x_len = axis_length(&self.calibration.cal_x);
                 let y_len = axis_length(&self.calibration.cal_y);
                 if let Some(len) = x_len {
-                    ui.label(format!("X axis length: {len:.1} px"));
+                    ui.label(self.i18n().format_x_axis_length(len));
                 } else {
-                    ui.label(RichText::new("X axis not set").weak());
+                    ui.label(RichText::new(self.t(TextKey::XAxisNotSet)).weak());
                 }
                 if let Some(len) = y_len {
-                    ui.label(format!("Y axis length: {len:.1} px"));
+                    ui.label(self.i18n().format_y_axis_length(len));
                 } else {
-                    ui.label(RichText::new("Y axis not set").weak());
+                    ui.label(RichText::new(self.t(TextKey::YAxisNotSet)).weak());
                 }
 
                 if let Some(ortho) = self.axis_orthogonality() {
-                    ui.label(format!(
-                        "Angle between axes: {:.2}° (offset {:.2}° from 90°)",
-                        ortho.actual_deg, ortho.delta_from_right_deg
-                    ));
+                    ui.label(
+                        self.i18n()
+                            .format_axes_angle(ortho.actual_deg, ortho.delta_from_right_deg),
+                    );
                 } else {
                     ui.label(
-                        RichText::new("Add both calibration axes to measure orthogonality.").weak(),
+                        RichText::new(self.t(TextKey::AddBothAxesToMeasureOrthogonality)).weak(),
                     );
                 }
             }
             CoordSystem::Polar => {
                 if let Some(origin) = self.calibration.polar_cal.origin {
-                    ui.label(format!("Origin: @ ({:.1}, {:.1})", origin.x, origin.y));
+                    ui.label(self.i18n().format_origin_coords(origin.x, origin.y));
                 } else {
-                    ui.label(RichText::new("Origin not set").weak());
+                    ui.label(RichText::new(self.t(TextKey::OriginNotSet)).weak());
                 }
 
                 let (rp1, rp2) = (
@@ -251,14 +278,12 @@ impl CurcatApp {
                     if let Some(origin) = self.calibration.polar_cal.origin {
                         let d1 = (p1 - origin).length();
                         let d2 = (p2 - origin).length();
-                        ui.label(format!("Radius points: R1 {d1:.1} px, R2 {d2:.1} px"));
+                        ui.label(self.i18n().format_radius_points(d1, d2));
                     } else {
-                        ui.label(
-                            RichText::new("Radius points set (origin needed for lengths).").weak(),
-                        );
+                        ui.label(RichText::new(self.t(TextKey::RadiusPointsSetNeedOrigin)).weak());
                     }
                 } else {
-                    ui.label(RichText::new("Radius points not set").weak());
+                    ui.label(RichText::new(self.t(TextKey::RadiusPointsNotSet)).weak());
                 }
 
                 let (ap1, ap2) = (
@@ -289,16 +314,20 @@ impl CurcatApp {
                             AxisValue::DateTime(_) => 0.0,
                         };
                         ui.label(format!(
-                            "Angle values: {} … {} {}",
-                            AxisValue::Float(v1).format(),
-                            AxisValue::Float(v2).format(),
-                            unit.label()
+                            "{}",
+                            self.i18n().format_angle_values(
+                                &AxisValue::Float(v1).format(),
+                                &AxisValue::Float(v2).format(),
+                                unit.label(),
+                            )
                         ));
                     } else {
-                        ui.label(RichText::new("Angle points set (values invalid).").weak());
+                        ui.label(
+                            RichText::new(self.t(TextKey::AnglePointsSetValuesInvalid)).weak(),
+                        );
                     }
                 } else {
-                    ui.label(RichText::new("Angle points not set").weak());
+                    ui.label(RichText::new(self.t(TextKey::AnglePointsNotSet)).weak());
                 }
             }
         }
@@ -326,29 +355,29 @@ impl CurcatApp {
                 AxisKind::Y => "",
             };
             if unit.is_empty() {
-                ui.label(format!("{label}: {min} … {max} (Δ {span})"));
+                ui.label(self.i18n().format_axis_range(label, &min, &max, &span));
             } else {
                 ui.label(format!("{label}: {min} … {max} (Δ {span} {unit})"));
             }
         } else {
-            ui.label(format!("{label}: no data"));
+            ui.label(format!("{label}: {}", self.t(TextKey::NoData)));
         }
     }
 
     fn render_geometry_stats(&self, ui: &mut egui::Ui) {
         if let Some((xr, yr)) = self.pixel_bounds() {
-            ui.label(format!(
-                "Pixel bounds: x {:.1}…{:.1}, y {:.1}…{:.1}",
-                xr.min, xr.max, yr.min, yr.max
-            ));
-            ui.label(format!("Span: {:.1} × {:.1} px", xr.span(), yr.span()));
+            ui.label(
+                self.i18n()
+                    .format_pixel_bounds(xr.min, xr.max, yr.min, yr.max),
+            );
+            ui.label(self.i18n().format_span(xr.span(), yr.span()));
         } else {
-            ui.label(RichText::new("No points for geometry stats.").weak());
+            ui.label(RichText::new(self.t(TextKey::NoPointsForGeometryStats)).weak());
         }
 
         if let Some((avg, total)) = self.pixel_step_stats() {
-            ui.label(format!("Average step: {avg:.1} px"));
-            ui.label(RichText::new(format!("Total polyline length: {total:.1} px")).weak());
+            ui.label(self.i18n().format_average_step(avg));
+            ui.label(RichText::new(self.i18n().format_total_polyline_length(total)).weak());
         }
     }
 }

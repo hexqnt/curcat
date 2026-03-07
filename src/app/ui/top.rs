@@ -1,6 +1,7 @@
 use super::super::CurcatApp;
 use super::common::toggle_switch;
 use super::icons;
+use crate::i18n::{TextKey, UiLanguage};
 use egui::containers::menu::MenuButton;
 
 impl CurcatApp {
@@ -8,6 +9,7 @@ impl CurcatApp {
         ui.horizontal(|ui| {
             // Use egui's built-in theme toggle so icon matches current mode.
             egui::widgets::global_theme_preference_switch(ui);
+            self.ui_language_selector(ui);
             ui.separator();
 
             let has_image = self.image.image.is_some();
@@ -37,139 +39,196 @@ impl CurcatApp {
         });
     }
 
-    fn ui_file_menu(&mut self, ui: &mut egui::Ui, can_save_project: bool) -> egui::Response {
-        let file_menu = ui.menu_button(format!("{} File", icons::ICON_MENU), |ui| {
-            if ui
-                .add(egui::Button::new("Open image…").shortcut_text("Ctrl+O"))
-                .on_hover_text("Open an image (Ctrl+O). You can also drag & drop into the center.")
-                .clicked()
-            {
-                self.open_image_dialog();
-                ui.close();
-            }
+    fn flag_image(lang: UiLanguage, size: egui::Vec2) -> egui::Image<'static> {
+        let source = match lang {
+            UiLanguage::En => egui::include_image!("../../../assets/flags/us.svg"),
+            UiLanguage::Ru => egui::include_image!("../../../assets/flags/ru.svg"),
+        };
+        egui::Image::new(source).fit_to_exact_size(size)
+    }
 
-            if ui
-                .add(egui::Button::new("Paste image").shortcut_text("Ctrl+V"))
-                .on_hover_text("Paste image from clipboard (Ctrl+V)")
-                .clicked()
-            {
-                self.paste_image_from_clipboard(ui.ctx());
-                ui.close();
-            }
-
-            ui.separator();
-
-            if ui
-                .add(egui::Button::new("Load project…").shortcut_text("Ctrl+Shift+P"))
-                .on_hover_text("Load a saved Curcat project (Ctrl+Shift+P)")
-                .clicked()
-            {
-                self.open_project_dialog();
-                ui.close();
-            }
-
-            if ui
-                .add_enabled(
-                    can_save_project,
-                    egui::Button::new("Save project").shortcut_text("Ctrl+S"),
-                )
-                .on_hover_text("Save the current session as a Curcat project (Ctrl+S)")
-                .clicked()
-            {
-                self.save_project_dialog();
-                ui.close();
-            }
+    fn ui_language_selector(&mut self, ui: &mut egui::Ui) {
+        let button =
+            egui::Button::image(Self::flag_image(self.ui.language, egui::vec2(18.0, 12.0)))
+                .min_size(egui::vec2(24.0, 20.0));
+        let (response, _) = MenuButton::from_button(button).ui(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.style_mut().spacing.item_spacing.x = 6.0;
+                for lang in UiLanguage::ALL {
+                    let selected = lang == self.ui.language;
+                    let button =
+                        egui::Button::image(Self::flag_image(lang, egui::vec2(22.0, 14.0)))
+                            .frame(selected)
+                            .min_size(egui::vec2(28.0, 20.0));
+                    if ui.add(button).clicked() {
+                        self.set_ui_language(lang);
+                        ui.close();
+                    }
+                }
+            });
         });
+        response.on_hover_text(self.t(TextKey::LanguageSwitcherHover));
+    }
+
+    fn ui_file_menu(&mut self, ui: &mut egui::Ui, can_save_project: bool) -> egui::Response {
+        let file_menu = ui.menu_button(
+            format!("{} {}", icons::ICON_MENU, self.t(TextKey::File)),
+            |ui| {
+                if ui
+                    .add(egui::Button::new(self.t(TextKey::OpenImage)).shortcut_text("Ctrl+O"))
+                    .on_hover_text(self.t(TextKey::OpenImageHover))
+                    .clicked()
+                {
+                    self.open_image_dialog();
+                    ui.close();
+                }
+
+                if ui
+                    .add(egui::Button::new(self.t(TextKey::PasteImage)).shortcut_text("Ctrl+V"))
+                    .on_hover_text(self.t(TextKey::PasteImageHover))
+                    .clicked()
+                {
+                    self.paste_image_from_clipboard(ui.ctx());
+                    ui.close();
+                }
+
+                ui.separator();
+
+                if ui
+                    .add(
+                        egui::Button::new(self.t(TextKey::LoadProject))
+                            .shortcut_text("Ctrl+Shift+P"),
+                    )
+                    .on_hover_text(self.t(TextKey::LoadProjectHover))
+                    .clicked()
+                {
+                    self.open_project_dialog();
+                    ui.close();
+                }
+
+                if ui
+                    .add_enabled(
+                        can_save_project,
+                        egui::Button::new(self.t(TextKey::SaveProject)).shortcut_text("Ctrl+S"),
+                    )
+                    .on_hover_text(self.t(TextKey::SaveProjectHover))
+                    .clicked()
+                {
+                    self.save_project_dialog();
+                    ui.close();
+                }
+            },
+        );
         file_menu.response
     }
 
     fn ui_side_toggle(&mut self, ui: &mut egui::Ui) {
         let side_label = if self.ui.side_open {
-            "Hide side"
+            self.t(TextKey::HideSide)
         } else {
-            "Show side"
+            self.t(TextKey::ShowSide)
         };
         let button = egui::Button::new(format!("{} {side_label}", icons::ICON_SIDE_TOGGLE))
             .shortcut_text("Ctrl+B");
         let (response, _) = MenuButton::from_button(button).ui(ui, |ui| {
             let toggle_label = if self.ui.side_open {
-                "Hide side panel"
+                self.t(TextKey::HideSidePanel)
             } else {
-                "Show side panel"
+                self.t(TextKey::ShowSidePanel)
             };
             if ui.button(toggle_label).clicked() {
                 self.ui.side_open = !self.ui.side_open;
                 ui.close();
             }
             ui.separator();
-            ui.label("Side panel position");
+            ui.label(self.t(TextKey::SidePanelPosition));
             let left_selected = self.ui.side_position == super::super::SidePanelPosition::Left;
-            if ui.selectable_label(left_selected, "Left").clicked() {
+            if ui
+                .selectable_label(left_selected, self.t(TextKey::Left))
+                .clicked()
+            {
                 self.ui.side_position = super::super::SidePanelPosition::Left;
                 ui.close();
             }
-            if ui.selectable_label(!left_selected, "Right").clicked() {
+            if ui
+                .selectable_label(!left_selected, self.t(TextKey::Right))
+                .clicked()
+            {
                 self.ui.side_position = super::super::SidePanelPosition::Right;
                 ui.close();
             }
         });
-        response.on_hover_text("Toggle side panel (Ctrl+B) and set position");
+        response.on_hover_text(self.t(TextKey::ToggleSidePanelHover));
     }
 
     fn ui_stats_info_buttons(&mut self, ui: &mut egui::Ui, has_image: bool) {
         let stats_resp = ui
             .add(egui::Button::new(format!(
-                "{} Points stats",
-                icons::ICON_STATS
+                "{} {}",
+                icons::ICON_STATS,
+                self.t(TextKey::PointsStats)
             )))
-            .on_hover_text("Show stats for picked points");
+            .on_hover_text(self.t(TextKey::PointsStatsHover));
         if stats_resp.clicked() {
             self.ui.points_info_window_open = true;
         }
         let filters_resp = ui
             .add(
-                egui::Button::new(format!("{} Filters", icons::ICON_FILTERS))
-                    .shortcut_text("Ctrl+Shift+F"),
+                egui::Button::new(format!(
+                    "{} {}",
+                    icons::ICON_FILTERS,
+                    self.t(TextKey::Filters)
+                ))
+                .shortcut_text("Ctrl+Shift+F"),
             )
-            .on_hover_text("Show image filters (Ctrl+Shift+F)");
+            .on_hover_text(self.t(TextKey::FiltersHover));
         if filters_resp.clicked() {
             self.ui.image_filters_window_open = true;
         }
         let trace_resp = ui
             .add(
-                egui::Button::new(format!("{} Auto-trace", icons::ICON_AUTO_TRACE))
-                    .shortcut_text("Ctrl+Shift+T"),
+                egui::Button::new(format!(
+                    "{} {}",
+                    icons::ICON_AUTO_TRACE,
+                    self.t(TextKey::AutoTrace)
+                ))
+                .shortcut_text("Ctrl+Shift+T"),
             )
-            .on_hover_text("Show auto-trace controls (Ctrl+Shift+T)");
+            .on_hover_text(self.t(TextKey::AutoTraceHover));
         if trace_resp.clicked() {
             self.ui.auto_trace_window_open = true;
         }
         let info_resp = ui
             .add_enabled(
                 has_image,
-                egui::Button::new(format!("{} Image info", icons::ICON_INFO))
-                    .shortcut_text("Ctrl+I"),
+                egui::Button::new(format!(
+                    "{} {}",
+                    icons::ICON_INFO,
+                    self.t(TextKey::ImageInfo)
+                ))
+                .shortcut_text("Ctrl+I"),
             )
-            .on_hover_text("Show file & image details (Ctrl+I)");
+            .on_hover_text(self.t(TextKey::ImageInfoHover));
         if info_resp.clicked() && has_image {
             self.ui.info_window_open = true;
         }
     }
 
     fn ui_transform_buttons(&mut self, ui: &mut egui::Ui, has_image: bool) {
-        let info_hover = |ui: &mut egui::Ui, action: &str| {
-            ui.label("Transforms image, points, and calibration together.");
+        let info_hover = |ui: &mut egui::Ui, action: &str, title: &str| {
+            ui.label(title);
             ui.label(action);
         };
-        let info_button = |ui: &mut egui::Ui, label: String, action: &str| {
+        let info_button = |ui: &mut egui::Ui, label: String, action: &str, title: &str| {
             ui.add_enabled(has_image, egui::Button::new(label))
-                .on_hover_ui(|ui| info_hover(ui, action))
+                .on_hover_ui(|ui| info_hover(ui, action, title))
         };
 
         if info_button(
             ui,
             format!("{} 90°", icons::ICON_ROTATE_CCW),
-            "Rotate 90° counter-clockwise.",
+            self.t(TextKey::Rotate90Ccw),
+            self.t(TextKey::TransformsTogether),
         )
         .clicked()
         {
@@ -178,7 +237,8 @@ impl CurcatApp {
         if info_button(
             ui,
             format!("{} 90°", icons::ICON_ROTATE_CW),
-            "Rotate 90° clockwise.",
+            self.t(TextKey::Rotate90Cw),
+            self.t(TextKey::TransformsTogether),
         )
         .clicked()
         {
@@ -186,8 +246,9 @@ impl CurcatApp {
         }
         if info_button(
             ui,
-            format!("{} Flip H", icons::ICON_FLIP_H),
-            "Flip horizontally.",
+            format!("{} {}", icons::ICON_FLIP_H, self.t(TextKey::FlipH)),
+            self.t(TextKey::FlipHorizontally),
+            self.t(TextKey::TransformsTogether),
         )
         .clicked()
         {
@@ -195,8 +256,9 @@ impl CurcatApp {
         }
         if info_button(
             ui,
-            format!("{} Flip V", icons::ICON_FLIP_V),
-            "Flip vertically.",
+            format!("{} {}", icons::ICON_FLIP_V, self.t(TextKey::FlipV)),
+            self.t(TextKey::FlipVertically),
+            self.t(TextKey::TransformsTogether),
         )
         .clicked()
         {
@@ -205,8 +267,8 @@ impl CurcatApp {
     }
 
     fn ui_zoom_controls(&mut self, ui: &mut egui::Ui) {
-        ui.label("Zoom:")
-            .on_hover_text("Choose a preset zoom level");
+        ui.label(self.t(TextKey::Zoom))
+            .on_hover_text(self.t(TextKey::ZoomHover));
         let zoom_ir = egui::ComboBox::from_id_salt("zoom_combo")
             .selected_text(Self::format_zoom(self.image.zoom))
             .show_ui(ui, |ui| {
@@ -218,20 +280,29 @@ impl CurcatApp {
                     }
                 }
             });
-        zoom_ir.response.on_hover_text("Zoom presets (percent)");
+        zoom_ir
+            .response
+            .on_hover_text(self.t(TextKey::ZoomPresetsHover));
         if ui
-            .add(egui::Button::new(format!("{} Fit", icons::ICON_FIT)).shortcut_text("Ctrl+F"))
-            .on_hover_text("Fit the image into the viewport (Ctrl+F)")
+            .add(
+                egui::Button::new(format!("{} {}", icons::ICON_FIT, self.t(TextKey::Fit)))
+                    .shortcut_text("Ctrl+F"),
+            )
+            .on_hover_text(self.t(TextKey::FitHover))
             .clicked()
         {
             self.fit_image_to_viewport();
         }
         if ui
             .add(
-                egui::Button::new(format!("{} Reset view", icons::ICON_RESET_VIEW))
-                    .shortcut_text("Ctrl+R"),
+                egui::Button::new(format!(
+                    "{} {}",
+                    icons::ICON_RESET_VIEW,
+                    self.t(TextKey::ResetView)
+                ))
+                .shortcut_text("Ctrl+R"),
             )
-            .on_hover_text("Reset zoom to 100% and pan to origin (Ctrl+R)")
+            .on_hover_text(self.t(TextKey::ResetViewHover))
             .clicked()
         {
             self.reset_view();
@@ -240,10 +311,10 @@ impl CurcatApp {
 
     fn ui_middle_pan_toggle(&mut self, ui: &mut egui::Ui) {
         let toggle_response = toggle_switch(ui, &mut self.interaction.middle_pan_enabled)
-            .on_hover_text("Pan with middle mouse button");
+            .on_hover_text(self.t(TextKey::PanWithMiddleButton));
         ui.add_space(4.0);
-        ui.label("MMB pan")
-            .on_hover_text("Enable/disable middle-button panning");
+        ui.label(self.t(TextKey::MmbPan))
+            .on_hover_text(self.t(TextKey::MmbPanHover));
         if toggle_response.changed() && !self.interaction.middle_pan_enabled {
             self.image.touch_pan_active = false;
             self.image.touch_pan_last = None;
@@ -254,19 +325,24 @@ impl CurcatApp {
         let resp_clear = ui
             .add_enabled(
                 has_points,
-                egui::Button::new(format!("{} Clear points", icons::ICON_CLEAR))
-                    .shortcut_text("Ctrl+Shift+D"),
+                egui::Button::new(format!(
+                    "{} {}",
+                    icons::ICON_CLEAR,
+                    self.t(TextKey::ClearPoints)
+                ))
+                .shortcut_text("Ctrl+Shift+D"),
             )
-            .on_hover_text("Clear all points (Ctrl+Shift+D)");
+            .on_hover_text(self.t(TextKey::ClearPointsHover));
         if resp_clear.clicked() {
             self.clear_all_points();
         }
         let resp_undo = ui
             .add_enabled(
                 has_points,
-                egui::Button::new(format!("{} Undo", icons::ICON_UNDO)).shortcut_text("Ctrl+Z"),
+                egui::Button::new(format!("{} {}", icons::ICON_UNDO, self.t(TextKey::Undo)))
+                    .shortcut_text("Ctrl+Z"),
             )
-            .on_hover_text("Undo last point (Ctrl+Z)");
+            .on_hover_text(self.t(TextKey::UndoHover));
         if resp_undo.clicked() {
             self.undo_last_point();
         }

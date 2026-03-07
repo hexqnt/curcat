@@ -1,4 +1,5 @@
 use super::{CurcatApp, PickedPoint};
+use crate::i18n::UiLanguage;
 use crate::snap::SnapBehavior;
 use crate::types::CoordSystem;
 use crate::util::safe_usize_to_f32;
@@ -9,16 +10,6 @@ pub enum AutoTraceDirection {
     Forward,
     Backward,
     Both,
-}
-
-impl AutoTraceDirection {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Forward => "Forward (+X)",
-            Self::Backward => "Backward (-X)",
-            Self::Both => "Both",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,19 +60,35 @@ impl AutoTraceConfig {
 impl CurcatApp {
     pub(crate) fn auto_trace_from(&mut self, pixel_hint: Pos2) {
         if self.image.image.is_none() {
-            self.set_status("Auto-trace requires an image.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Auto-trace requires an image.",
+                UiLanguage::Ru => "Для авто-трассировки нужно изображение.",
+            });
             return;
         }
         if !self.calibration_ready() {
-            self.set_status("Auto-trace requires completed calibration.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Auto-trace requires completed calibration.",
+                UiLanguage::Ru => "Для авто-трассировки нужна завершённая калибровка.",
+            });
             return;
         }
         if !matches!(self.calibration.coord_system, CoordSystem::Cartesian) {
-            self.set_status("Auto-trace currently supports Cartesian calibration only.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Auto-trace currently supports Cartesian calibration only.",
+                UiLanguage::Ru => {
+                    "Авто-трассировка сейчас поддерживает только декартову калибровку."
+                }
+            });
             return;
         }
         let Some(behavior) = self.current_snap_behavior() else {
-            self.set_status("Auto-trace requires snapping (Contrast/Centerline).");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Auto-trace requires snapping (Contrast/Centerline).",
+                UiLanguage::Ru => {
+                    "Для авто-трассировки нужен режим привязки (Contrast/Centerline)."
+                }
+            });
             return;
         };
         let cfg = self.interaction.auto_trace_cfg.sanitized();
@@ -105,7 +112,12 @@ impl CurcatApp {
             .unwrap_or(Vec2::X);
         let Some(start) = self.find_snap_point_with_radius(pixel_hint, cfg.search_radius, behavior)
         else {
-            self.set_status("Auto-trace failed: no snap candidate near the click.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Auto-trace failed: no snap candidate near the click.",
+                UiLanguage::Ru => {
+                    "Авто-трассировка не удалась: рядом с кликом нет кандидата привязки."
+                }
+            });
             return;
         };
 
@@ -142,7 +154,10 @@ impl CurcatApp {
         }
 
         if deduped.is_empty() {
-            self.set_status("Auto-trace found no points.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Auto-trace found no points.",
+                UiLanguage::Ru => "Авто-трассировка не нашла точек.",
+            });
             return;
         }
 
@@ -150,7 +165,7 @@ impl CurcatApp {
             self.points.points.push(PickedPoint::new(*p));
         }
         self.mark_points_dirty();
-        self.set_status(format!("Auto-trace added {} points.", deduped.len()));
+        self.set_status(self.i18n().format_auto_trace_added(deduped.len()));
     }
 
     fn auto_trace_direction(

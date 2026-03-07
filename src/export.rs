@@ -56,24 +56,6 @@ pub enum ExportFormat {
 }
 
 impl ExportFormat {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Csv => "CSV",
-            Self::Xlsx => "Excel",
-            Self::Json => "JSON",
-            Self::Ron => "RON",
-        }
-    }
-
-    pub const fn dialog_title(self) -> &'static str {
-        match self {
-            Self::Csv => "Export CSV",
-            Self::Xlsx => "Export Excel",
-            Self::Json => "Export JSON",
-            Self::Ron => "Export RON",
-        }
-    }
-
     pub const fn default_filename(self) -> &'static str {
         match self {
             Self::Csv => "curve.csv",

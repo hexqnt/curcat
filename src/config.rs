@@ -2,6 +2,7 @@ use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::i18n::UiLanguage;
 use directories::{BaseDirs, ProjectDirs};
 use egui::{Color32, Stroke};
 use serde::{
@@ -239,6 +240,19 @@ impl ExportConfig {
 /// Root application configuration loaded from TOML.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct UiConfig {
+    pub language: Option<UiLanguage>,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self { language: None }
+    }
+}
+
+/// Root application configuration loaded from TOML.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub curve_line: StrokeStyle,
     pub curve_points: PointStyle,
@@ -249,6 +263,7 @@ pub struct AppConfig {
     pub attention_highlight: StrokeStyle,
     pub export: ExportConfig,
     pub auto_place: AutoPlaceConfig,
+    pub ui: UiConfig,
 }
 
 impl Default for AppConfig {
@@ -266,6 +281,7 @@ impl Default for AppConfig {
             },
             export: ExportConfig::default(),
             auto_place: AutoPlaceConfig::default(),
+            ui: UiConfig::default(),
         }
     }
 }
@@ -301,6 +317,33 @@ impl AppConfig {
         self.auto_place.sanitized()
     }
 
+    /// Return language override from config, if any.
+    pub const fn ui_language(&self) -> Option<UiLanguage> {
+        self.ui.language
+    }
+
+    /// Persist UI language to disk (`[ui] language = ...`) and keep it in memory.
+    pub fn persist_ui_language(&mut self, language: UiLanguage) -> std::io::Result<()> {
+        self.ui.language = Some(language);
+        self.save_to_default_path().map(|_| ())
+    }
+
+    fn save_to_default_path(&self) -> std::io::Result<PathBuf> {
+        let path = Self::save_path().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "No writable configuration directory is available",
+            )
+        })?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let encoded = toml::to_string_pretty(self)
+            .map_err(|err| std::io::Error::other(format!("Failed to serialize config: {err}")))?;
+        fs::write(&path, encoded)?;
+        Ok(path)
+    }
+
     fn candidate_paths() -> Vec<PathBuf> {
         let mut paths = Vec::new();
 
@@ -319,6 +362,18 @@ impl AppConfig {
         }
 
         paths
+    }
+
+    fn save_path() -> Option<PathBuf> {
+        if let Some(proj_dirs) = ProjectDirs::from("dev", "Curcat", "Curcat") {
+            return Some(proj_dirs.config_dir().join(CONFIG_FILE_NAME));
+        }
+        if let Some(base_dirs) = BaseDirs::new() {
+            return Some(base_dirs.config_dir().join("curcat").join(CONFIG_FILE_NAME));
+        }
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|parent| parent.join(CONFIG_FILE_NAME)))
     }
 }
 
@@ -483,5 +538,26 @@ mod tests {
             wrapper.color.to_color32().to_srgba_unmultiplied(),
             [0xC8, 0x50, 0x50, 0xFF]
         );
+    }
+
+    #[test]
+    fn parses_ui_language_from_table() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
+                [ui]
+                language = "ru"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.ui.language, Some(UiLanguage::Ru));
+    }
+
+    #[test]
+    fn serializes_ui_language_as_lowercase_code() {
+        let mut cfg = AppConfig::default();
+        cfg.ui.language = Some(UiLanguage::En);
+        let text = toml::to_string(&cfg).unwrap();
+        assert!(text.contains("[ui]"));
+        assert!(text.contains("language = \"en\""));
     }
 }

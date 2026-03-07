@@ -2,6 +2,7 @@ use super::{
     AxisCalUi, CurcatApp, MAX_ZOOM, MIN_ZOOM, NativeDialog, PendingImageTask, PickMode,
     PickedPoint, PolarCalUi, ZoomIntent,
 };
+use crate::i18n::UiLanguage;
 use crate::image::ImageTransformRecord;
 use crate::project;
 use crate::types::{AxisUnit, ScaleKind};
@@ -196,14 +197,20 @@ impl CurcatApp {
 
     pub(super) fn handle_project_save(&mut self, path: &Path) {
         if self.project.pending_project_save.is_some() {
-            self.set_status("Project save already in progress.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Project save already in progress.",
+                UiLanguage::Ru => "Сохранение проекта уже выполняется.",
+            });
             return;
         }
         self.project.last_project_path = Some(path.to_path_buf());
         self.project.last_project_dir = path.parent().map(Path::to_path_buf);
         match self.build_project_save_request(path) {
             Ok(request) => self.start_project_save_job(request),
-            Err(err) => self.set_status(format!("Project save failed: {err}")),
+            Err(err) => self.set_status(match self.ui.language {
+                UiLanguage::En => format!("Project save failed: {err}"),
+                UiLanguage::Ru => format!("Ошибка сохранения проекта: {err}"),
+            }),
         }
     }
 
@@ -217,7 +224,10 @@ impl CurcatApp {
             let _ = tx.send(result);
         });
         self.project.pending_project_save = Some(PendingProjectSave { rx });
-        self.set_status("Saving project…");
+        self.set_status(match self.ui.language {
+            UiLanguage::En => "Saving project…",
+            UiLanguage::Ru => "Сохранение проекта…",
+        });
     }
 
     pub(super) fn poll_project_save_job(&mut self) {
@@ -226,16 +236,25 @@ impl CurcatApp {
         };
         match job.rx.try_recv() {
             Ok(ProjectSaveResult::Success) => {
-                self.set_status("Project saved.");
+                self.set_status(match self.ui.language {
+                    UiLanguage::En => "Project saved.",
+                    UiLanguage::Ru => "Проект сохранён.",
+                });
             }
             Ok(ProjectSaveResult::Error(err)) => {
-                self.set_status(format!("Project save failed: {err}"));
+                self.set_status(match self.ui.language {
+                    UiLanguage::En => format!("Project save failed: {err}"),
+                    UiLanguage::Ru => format!("Ошибка сохранения проекта: {err}"),
+                });
             }
             Err(TryRecvError::Empty) => {
                 self.project.pending_project_save = Some(job);
             }
             Err(TryRecvError::Disconnected) => {
-                self.set_status("Project save failed: worker disconnected.");
+                self.set_status(match self.ui.language {
+                    UiLanguage::En => "Project save failed: worker disconnected.",
+                    UiLanguage::Ru => "Ошибка сохранения проекта: рабочий поток отключился.",
+                });
             }
         }
     }
@@ -247,7 +266,10 @@ impl CurcatApp {
         self.project.last_project_path = Some(path.clone());
         match project::load_project(&path) {
             Ok(outcome) => self.handle_loaded_project(path, outcome),
-            Err(err) => self.set_status(format!("Failed to load project: {err}")),
+            Err(err) => self.set_status(match self.ui.language {
+                UiLanguage::En => format!("Failed to load project: {err}"),
+                UiLanguage::Ru => format!("Не удалось загрузить проект: {err}"),
+            }),
         }
     }
 
@@ -265,7 +287,12 @@ impl CurcatApp {
                 warnings: outcome.warnings,
                 plan,
             });
-            self.set_status("Project has warnings. Confirm to continue loading.");
+            self.set_status(match self.ui.language {
+                UiLanguage::En => "Project has warnings. Confirm to continue loading.",
+                UiLanguage::Ru => {
+                    "В проекте есть предупреждения. Подтвердите продолжение загрузки."
+                }
+            });
         }
     }
 
@@ -274,23 +301,44 @@ impl CurcatApp {
         self.project.project_prompt = None;
         let status = {
             let source_label = match plan.image.source {
-                project::ImagePathSource::Absolute => "absolute path",
-                project::ImagePathSource::Relative => "relative path",
+                project::ImagePathSource::Absolute => match self.ui.language {
+                    UiLanguage::En => "absolute path",
+                    UiLanguage::Ru => "абсолютный путь",
+                },
+                project::ImagePathSource::Relative => match self.ui.language {
+                    UiLanguage::En => "relative path",
+                    UiLanguage::Ru => "относительный путь",
+                },
             };
             if plan.image.checksum_matches {
-                format!(
-                    "Loading project v{} image from {source_label}…",
-                    plan.version
-                )
+                match self.ui.language {
+                    UiLanguage::En => {
+                        format!(
+                            "Loading project v{} image from {source_label}…",
+                            plan.version
+                        )
+                    }
+                    UiLanguage::Ru => {
+                        format!(
+                            "Загрузка изображения проекта v{} из источника: {source_label}…",
+                            plan.version
+                        )
+                    }
+                }
             } else {
                 let expected = plan.payload.image_crc32;
                 let actual = plan
                     .image
                     .actual_checksum
                     .map_or_else(|| "unknown".to_string(), |v| format!("{v:#010x}"));
-                format!(
-                    "Image checksum mismatch (expected {expected:#010x}, got {actual}). Loading from {source_label}…"
-                )
+                match self.ui.language {
+                    UiLanguage::En => format!(
+                        "Image checksum mismatch (expected {expected:#010x}, got {actual}). Loading from {source_label}…"
+                    ),
+                    UiLanguage::Ru => format!(
+                        "Контрольная сумма изображения не совпадает (ожидалось {expected:#010x}, получено {actual}). Загрузка из источника: {source_label}…"
+                    ),
+                }
             }
         };
         self.project.pending_project_apply = Some(plan);
@@ -373,53 +421,83 @@ impl CurcatApp {
 
         if plan.image.checksum_matches {
             let source_label = match plan.image.source {
-                project::ImagePathSource::Absolute => "absolute path",
-                project::ImagePathSource::Relative => "relative path",
+                project::ImagePathSource::Absolute => match self.ui.language {
+                    UiLanguage::En => "absolute path",
+                    UiLanguage::Ru => "абсолютный путь",
+                },
+                project::ImagePathSource::Relative => match self.ui.language {
+                    UiLanguage::En => "relative path",
+                    UiLanguage::Ru => "относительный путь",
+                },
             };
-            self.set_status(format!(
-                "Project v{} loaded ({source_label}).",
-                plan.version
-            ));
+            self.set_status(match self.ui.language {
+                UiLanguage::En => format!("Project v{} loaded ({source_label}).", plan.version),
+                UiLanguage::Ru => format!("Проект v{} загружен ({source_label}).", plan.version),
+            });
         } else {
             let expected = plan.payload.image_crc32;
             let actual = plan
                 .image
                 .actual_checksum
                 .map_or_else(|| "unknown".to_string(), |v| format!("{v:#010x}"));
-            self.set_status(format!(
-                "Project v{} loaded with checksum warning (expected {expected:#010x}, got {actual}).",
-                plan.version
-            ));
+            self.set_status(match self.ui.language {
+                UiLanguage::En => format!(
+                    "Project v{} loaded with checksum warning (expected {expected:#010x}, got {actual}).",
+                    plan.version
+                ),
+                UiLanguage::Ru => format!(
+                    "Проект v{} загружен с предупреждением по контрольной сумме (ожидалось {expected:#010x}, получено {actual}).",
+                    plan.version
+                ),
+            });
         }
     }
 
-    pub(super) fn project_warning_text(warn: &project::ProjectWarning) -> String {
-        let source_label = |source: &project::ImagePathSource| match source {
-            project::ImagePathSource::Absolute => "Absolute path",
-            project::ImagePathSource::Relative => "Relative path",
-        };
+    pub(super) fn project_warning_text(&self, warn: &project::ProjectWarning) -> String {
+        let source_label =
+            |source: &project::ImagePathSource, lang: UiLanguage| match (lang, source) {
+                (UiLanguage::En, project::ImagePathSource::Absolute) => "Absolute path",
+                (UiLanguage::En, project::ImagePathSource::Relative) => "Relative path",
+                (UiLanguage::Ru, project::ImagePathSource::Absolute) => "Абсолютный путь",
+                (UiLanguage::Ru, project::ImagePathSource::Relative) => "Относительный путь",
+            };
 
         match warn {
             project::ProjectWarning::MissingImage {
                 path,
                 source,
                 reason,
-            } => format!(
-                "Missing image ({}) at {}: {}",
-                source_label(source),
-                path.display(),
-                reason
-            ),
+            } => match self.ui.language {
+                UiLanguage::En => format!(
+                    "Missing image ({}) at {}: {}",
+                    source_label(source, self.ui.language),
+                    path.display(),
+                    reason
+                ),
+                UiLanguage::Ru => format!(
+                    "Изображение не найдено ({}) по пути {}: {}",
+                    source_label(source, self.ui.language),
+                    path.display(),
+                    reason
+                ),
+            },
             project::ProjectWarning::ChecksumMismatch {
                 path,
                 source,
                 expected,
                 actual,
-            } => format!(
-                "Checksum mismatch ({}) at {}: expected {expected:#010x}, got {actual:#010x}",
-                source_label(source),
-                path.display()
-            ),
+            } => match self.ui.language {
+                UiLanguage::En => format!(
+                    "Checksum mismatch ({}) at {}: expected {expected:#010x}, got {actual:#010x}",
+                    source_label(source, self.ui.language),
+                    path.display()
+                ),
+                UiLanguage::Ru => format!(
+                    "Несовпадение контрольной суммы ({}) по пути {}: ожидалось {expected:#010x}, получено {actual:#010x}",
+                    source_label(source, self.ui.language),
+                    path.display()
+                ),
+            },
         }
     }
 }

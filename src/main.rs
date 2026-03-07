@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod export;
+mod i18n;
 mod image;
 mod interp;
 mod project;
