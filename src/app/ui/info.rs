@@ -7,23 +7,31 @@ use crate::types::{AxisUnit, AxisValue, CoordSystem, PolarMapping};
 use egui::{Color32, RichText};
 
 impl CurcatApp {
-    pub(crate) fn ui_status_bar(&self, ui: &mut egui::Ui) {
+    pub(crate) fn ui_status_bar(&mut self, ui: &mut egui::Ui) {
         let points_count = self.points.points.len();
         let i18n = self.i18n();
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(i18n.format_points_count(points_count))
-                    .small()
-                    .color(Color32::from_gray(180)),
-            );
-            if let Some(msg) = &self.ui.last_status {
-                ui.separator();
+            ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(msg.as_str())
+                    RichText::new(i18n.format_points_count(points_count))
                         .small()
-                        .color(Color32::from_gray(200)),
+                        .color(Color32::from_gray(180)),
                 );
-            }
+                if let Some(msg) = &self.ui.last_status {
+                    ui.separator();
+                    ui.label(
+                        RichText::new(msg.as_str())
+                            .small()
+                            .color(Color32::from_gray(200)),
+                    );
+                }
+            });
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.ui_language_selector(ui);
+                ui.add_space(6.0);
+                egui::widgets::global_theme_preference_switch(ui);
+            });
         });
     }
 

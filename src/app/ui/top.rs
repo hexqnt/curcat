@@ -7,11 +7,6 @@ use egui::containers::menu::MenuButton;
 impl CurcatApp {
     pub(crate) fn ui_top(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            // Use egui's built-in theme toggle so icon matches current mode.
-            egui::widgets::global_theme_preference_switch(ui);
-            self.ui_language_selector(ui);
-            ui.separator();
-
             let has_image = self.image.image.is_some();
             let can_save_project = self.image.meta.as_ref().and_then(|m| m.path()).is_some();
             let file_menu_response = self.ui_file_menu(ui, can_save_project);
@@ -25,7 +20,7 @@ impl CurcatApp {
             self.ui_side_toggle(ui);
             ui.separator();
 
-            self.ui_stats_info_buttons(ui, has_image);
+            self.ui_appearance_menu(ui, has_image);
             self.ui_transform_buttons(ui, has_image);
 
             let has_points = !self.points.points.is_empty();
@@ -47,7 +42,7 @@ impl CurcatApp {
         egui::Image::new(source).fit_to_exact_size(size)
     }
 
-    fn ui_language_selector(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn ui_language_selector(&mut self, ui: &mut egui::Ui) {
         let button =
             egui::Button::image(Self::flag_image(self.ui.language, egui::vec2(18.0, 12.0)))
                 .min_size(egui::vec2(24.0, 20.0));
@@ -161,57 +156,71 @@ impl CurcatApp {
         response.on_hover_text(self.t(TextKey::ToggleSidePanelHover));
     }
 
-    fn ui_stats_info_buttons(&mut self, ui: &mut egui::Ui, has_image: bool) {
-        let stats_resp = ui
-            .add(egui::Button::new(format!(
-                "{} {}",
-                icons::ICON_STATS,
-                self.t(TextKey::PointsStats)
-            )))
-            .on_hover_text(self.t(TextKey::PointsStatsHover));
-        if stats_resp.clicked() {
-            self.ui.points_info_window_open = true;
-        }
-        let filters_resp = ui
-            .add(
-                egui::Button::new(format!(
-                    "{} {}",
-                    icons::ICON_FILTERS,
-                    self.t(TextKey::Filters)
-                ))
-                .shortcut_text("Ctrl+Shift+F"),
-            )
-            .on_hover_text(self.t(TextKey::FiltersHover));
-        if filters_resp.clicked() {
-            self.ui.image_filters_window_open = true;
-        }
-        let trace_resp = ui
-            .add(
-                egui::Button::new(format!(
-                    "{} {}",
-                    icons::ICON_AUTO_TRACE,
-                    self.t(TextKey::AutoTrace)
-                ))
-                .shortcut_text("Ctrl+Shift+T"),
-            )
-            .on_hover_text(self.t(TextKey::AutoTraceHover));
-        if trace_resp.clicked() {
-            self.ui.auto_trace_window_open = true;
-        }
-        let info_resp = ui
-            .add_enabled(
-                has_image,
-                egui::Button::new(format!(
-                    "{} {}",
-                    icons::ICON_INFO,
-                    self.t(TextKey::ImageInfo)
-                ))
-                .shortcut_text("Ctrl+I"),
-            )
-            .on_hover_text(self.t(TextKey::ImageInfoHover));
-        if info_resp.clicked() && has_image {
-            self.ui.info_window_open = true;
-        }
+    fn ui_appearance_menu(&mut self, ui: &mut egui::Ui, has_image: bool) {
+        let button = egui::Button::new(format!(
+            "{} {}",
+            icons::ICON_MENU,
+            self.t(TextKey::Appearance)
+        ));
+        let menu_cfg = egui::containers::menu::MenuConfig::new()
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        let _ = MenuButton::from_button(button)
+            .config(menu_cfg)
+            .ui(ui, |ui| {
+                let points_label =
+                    format!("{} {}", icons::ICON_STATS, self.t(TextKey::PointsStats));
+                let points_hover = self.t(TextKey::PointsStatsHover);
+                let filters_label = format!("{} {}", icons::ICON_FILTERS, self.t(TextKey::Filters));
+                let filters_hover = self.t(TextKey::FiltersHover);
+                let trace_label =
+                    format!("{} {}", icons::ICON_AUTO_TRACE, self.t(TextKey::AutoTrace));
+                let trace_hover = self.t(TextKey::AutoTraceHover);
+                let info_label = format!("{} {}", icons::ICON_INFO, self.t(TextKey::ImageInfo));
+                let info_hover = self.t(TextKey::ImageInfoHover);
+
+                Self::ui_toggle_menu_item(
+                    ui,
+                    &mut self.ui.points_info_window_open,
+                    points_label,
+                    points_hover,
+                );
+
+                Self::ui_toggle_menu_item(
+                    ui,
+                    &mut self.ui.image_filters_window_open,
+                    filters_label,
+                    filters_hover,
+                );
+
+                Self::ui_toggle_menu_item(
+                    ui,
+                    &mut self.ui.auto_trace_window_open,
+                    trace_label,
+                    trace_hover,
+                );
+
+                ui.add_enabled_ui(has_image || self.ui.info_window_open, |ui| {
+                    Self::ui_toggle_menu_item(
+                        ui,
+                        &mut self.ui.info_window_open,
+                        info_label,
+                        info_hover,
+                    );
+                });
+            });
+    }
+
+    fn ui_toggle_menu_item(ui: &mut egui::Ui, state: &mut bool, label: String, hover: &str) {
+        ui.horizontal(|ui| {
+            let _toggle_resp = toggle_switch(ui, state).on_hover_text(hover);
+            ui.add_space(4.0);
+            let label_resp = ui
+                .add(egui::Label::new(label).sense(egui::Sense::click()))
+                .on_hover_text(hover);
+            if label_resp.clicked() {
+                *state = !*state;
+            }
+        });
     }
 
     fn ui_transform_buttons(&mut self, ui: &mut egui::Ui, has_image: bool) {

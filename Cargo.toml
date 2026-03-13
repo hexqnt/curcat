@@ -7,7 +7,6 @@ description = "Digitize curves from chart images; calibrate axes, interpolate, e
 repository = "https://github.com/hexqnt/curcat"
 homepage = "https://github.com/hexqnt/curcat"
 readme = "Readme.md"
-rust-version = "1.90"
 keywords = ["digitizer", "chart", "graph", "egui", "calibration"]
 categories = ["graphics", "visualization", "gui"]
 
@@ -43,7 +42,7 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ron = "0.12"
-toml = "1.0.6"
+toml = "1.0"
 directories = "6.0"
 rust_xlsxwriter = { version = "0.94", features = ["ryu"] }
 egui-file-dialog = { version = "0.12" }
@@ -58,6 +57,8 @@ egui_extras = { version = "0.33", features = ["svg"] }
 opt-level = 3
 lto = true
 codegen-units = 1
+strip = true
+panic = "abort"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

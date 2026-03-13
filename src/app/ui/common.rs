@@ -5,6 +5,21 @@ use crate::util::rounded_u8;
 use super::super::{AxisCalUi, CurcatApp};
 use egui::{Color32, CornerRadius, StrokeKind, pos2};
 
+/// Отрисовать секцию боковой панели как отдельную карточку.
+pub fn side_section_card<R>(
+    ui: &mut egui::Ui,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    egui::Frame::group(ui.style())
+        .fill(ui.visuals().faint_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .inner_margin(8)
+        .show(ui, |ui| {
+            ui.take_available_width();
+            add_contents(ui)
+        })
+}
+
 impl CurcatApp {
     /// Compute a pulsing highlight color based on the UI time.
     #[allow(clippy::cast_possible_truncation)]

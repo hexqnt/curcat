@@ -45,6 +45,7 @@ impl UiLanguage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TextKey {
     File,
+    Appearance,
     OpenImage,
     OpenImageHover,
     PasteImage,
@@ -290,8 +291,9 @@ pub enum TextKey {
 
 impl TextKey {
     #[cfg(test)]
-    pub const ALL: [Self; 242] = [
+    pub const ALL: [Self; 243] = [
         Self::File,
+        Self::Appearance,
         Self::OpenImage,
         Self::OpenImageHover,
         Self::PasteImage,
@@ -813,6 +815,7 @@ const fn choose_text(lang: UiLanguage, en: &'static str, ru: Option<&'static str
 const fn en_text(key: TextKey) -> &'static str {
     match key {
         TextKey::File => "File",
+        TextKey::Appearance => "Appearance",
         TextKey::OpenImage => "Open image…",
         TextKey::OpenImageHover => {
             "Open an image (Ctrl+O). You can also drag & drop into the center."
@@ -1100,6 +1103,7 @@ const fn en_text(key: TextKey) -> &'static str {
 const fn ru_text(key: TextKey) -> Option<&'static str> {
     match key {
         TextKey::File => Some("Файл"),
+        TextKey::Appearance => Some("Вид"),
         TextKey::OpenImage => Some("Открыть изображение…"),
         TextKey::OpenImageHover => {
             Some("Открыть изображение (Ctrl+O). Можно также перетащить его в центр.")
