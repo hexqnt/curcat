@@ -44,6 +44,7 @@ pub struct CalibrationState {
     pub(super) calibration_angle_snap: bool,
     pub(super) show_calibration_segments: bool,
     pub(super) dragging_handle: Option<DragTarget>,
+    pub(super) drag_last_pixel: Option<Pos2>,
 }
 
 #[derive(Debug, Clone)]

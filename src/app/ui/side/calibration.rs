@@ -364,6 +364,7 @@ impl CurcatApp {
         self.calibration.pick_mode = PickMode::None;
         self.calibration.pending_value_focus = None;
         self.calibration.dragging_handle = None;
+        self.calibration.drag_last_pixel = None;
         self.mark_points_dirty();
         self.set_status(match self.ui.language {
             UiLanguage::En => format!(

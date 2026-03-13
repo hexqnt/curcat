@@ -132,6 +132,7 @@ impl Default for CurcatApp {
                 calibration_angle_snap: false,
                 show_calibration_segments: true,
                 dragging_handle: None,
+                drag_last_pixel: None,
             },
             points: PointsState {
                 points: Vec::new(),

@@ -20,6 +20,40 @@ fn format_overlay_value(value: &AxisValue) -> String {
     }
 }
 
+fn line_drag_hit_distance(pointer: Pos2, start: Pos2, end: Pos2) -> Option<f32> {
+    let segment = end - start;
+    let segment_len_sq = segment.length_sq();
+    if segment_len_sq <= f32::EPSILON {
+        return None;
+    }
+    let segment_len = segment_len_sq.sqrt();
+    let end_gap = super::super::CAL_LINE_DRAG_END_GAP;
+    if segment_len <= 2.0 * end_gap {
+        return None;
+    }
+
+    let t = (pointer - start).dot(segment) / segment_len_sq;
+    let along = t * segment_len;
+    if along < end_gap || along > segment_len - end_gap {
+        return None;
+    }
+
+    let closest = start + segment * t;
+    let dist = pointer.distance(closest);
+    (dist <= super::super::CAL_LINE_DRAG_HIT_RADIUS).then_some(dist)
+}
+
+fn clamp_line_drag_delta(delta: Vec2, p1: Pos2, p2: Pos2, image_size: Vec2) -> Vec2 {
+    let min_delta_x = -p1.x.min(p2.x);
+    let max_delta_x = image_size.x - p1.x.max(p2.x);
+    let min_delta_y = -p1.y.min(p2.y);
+    let max_delta_y = image_size.y - p1.y.max(p2.y);
+    Vec2::new(
+        delta.x.clamp(min_delta_x, max_delta_x),
+        delta.y.clamp(min_delta_y, max_delta_y),
+    )
+}
+
 #[derive(Clone, Copy)]
 #[allow(clippy::struct_excessive_bools)]
 struct PointerState {
@@ -101,7 +135,7 @@ impl CalTarget {
             DragTarget::PolarR2 => Some(Self::R2),
             DragTarget::PolarA1 => Some(Self::A1),
             DragTarget::PolarA2 => Some(Self::A2),
-            DragTarget::CurvePoint(_) => None,
+            DragTarget::CalXLine | DragTarget::CalYLine | DragTarget::CurvePoint(_) => None,
         }
     }
 
@@ -1057,6 +1091,32 @@ impl CurcatApp {
                                     consider(target, screen);
                                 }
                             }
+                            if let (Some(p1), Some(p2)) =
+                                (self.calibration.cal_x.p1, self.calibration.cal_x.p2)
+                            {
+                                let a = rect.min + p1.to_vec2() * self.image.zoom;
+                                let b = rect.min + p2.to_vec2() * self.image.zoom;
+                                if let Some(dist) = line_drag_hit_distance(pos, a, b)
+                                    && best
+                                        .as_ref()
+                                        .is_none_or(|(_, best_dist)| dist < *best_dist)
+                                {
+                                    best = Some((DragTarget::CalXLine, dist));
+                                }
+                            }
+                            if let (Some(p1), Some(p2)) =
+                                (self.calibration.cal_y.p1, self.calibration.cal_y.p2)
+                            {
+                                let a = rect.min + p1.to_vec2() * self.image.zoom;
+                                let b = rect.min + p2.to_vec2() * self.image.zoom;
+                                if let Some(dist) = line_drag_hit_distance(pos, a, b)
+                                    && best
+                                        .as_ref()
+                                        .is_none_or(|(_, best_dist)| dist < *best_dist)
+                                {
+                                    best = Some((DragTarget::CalYLine, dist));
+                                }
+                            }
                         }
                         CoordSystem::Polar => {
                             for (target, maybe_pixel) in [
@@ -1074,7 +1134,9 @@ impl CurcatApp {
                         }
                     }
 
-                    self.calibration.dragging_handle = best.map(|(target, _)| target);
+                    let picked = best.map(|(target, _)| target);
+                    self.calibration.dragging_handle = picked;
+                    self.calibration.drag_last_pixel = picked.map(|_| to_pixel(pos));
                 }
 
                 if let Some(target) = self.calibration.dragging_handle {
@@ -1085,6 +1147,32 @@ impl CurcatApp {
                                 if let Some(point) = self.points.points.get_mut(idx) {
                                     point.pixel = pixel;
                                     self.mark_points_dirty();
+                                }
+                            }
+                            DragTarget::CalXLine => {
+                                if let (Some(p1), Some(p2)) =
+                                    (self.calibration.cal_x.p1, self.calibration.cal_x.p2)
+                                {
+                                    let prev = self.calibration.drag_last_pixel.unwrap_or(pixel);
+                                    let delta = clamp_line_drag_delta(pixel - prev, p1, p2, base_size);
+                                    if delta.length_sq() > f32::EPSILON {
+                                        self.calibration.cal_x.p1 = Some(p1 + delta);
+                                        self.calibration.cal_x.p2 = Some(p2 + delta);
+                                        x_mapping = self.calibration.cal_x.mapping();
+                                    }
+                                }
+                            }
+                            DragTarget::CalYLine => {
+                                if let (Some(p1), Some(p2)) =
+                                    (self.calibration.cal_y.p1, self.calibration.cal_y.p2)
+                                {
+                                    let prev = self.calibration.drag_last_pixel.unwrap_or(pixel);
+                                    let delta = clamp_line_drag_delta(pixel - prev, p1, p2, base_size);
+                                    if delta.length_sq() > f32::EPSILON {
+                                        self.calibration.cal_y.p1 = Some(p1 + delta);
+                                        self.calibration.cal_y.p2 = Some(p2 + delta);
+                                        y_mapping = self.calibration.cal_y.mapping();
+                                    }
                                 }
                             }
                             _ => {
@@ -1101,9 +1189,11 @@ impl CurcatApp {
                                 }
                             }
                         }
+                        self.calibration.drag_last_pixel = Some(pixel);
                     }
                     if !pointer_state.shift_pressed || !pointer_state.primary_down {
                         self.calibration.dragging_handle = None;
+                        self.calibration.drag_last_pixel = None;
                     }
                 } else if response.clicked_by(PointerButton::Secondary)
                     && matches!(self.calibration.pick_mode, PickMode::None)
@@ -1454,5 +1544,67 @@ impl CurcatApp {
         self.push_curve_point_snapped(snapped);
         self.interaction.auto_place_state.last_snapped_point = Some((snapped, now));
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clamp_line_drag_delta, line_drag_hit_distance};
+    use egui::{Pos2, Vec2, pos2, vec2};
+
+    fn assert_vec2_close(actual: Vec2, expected: Vec2) {
+        assert!((actual.x - expected.x).abs() <= f32::EPSILON);
+        assert!((actual.y - expected.y).abs() <= f32::EPSILON);
+    }
+
+    fn assert_point_in_bounds(point: Pos2, bounds: Vec2) {
+        assert!(point.x >= 0.0 && point.x <= bounds.x);
+        assert!(point.y >= 0.0 && point.y <= bounds.y);
+    }
+
+    #[test]
+    fn line_drag_hit_accepts_middle_segment() {
+        let hit = line_drag_hit_distance(pos2(50.0, 3.0), pos2(0.0, 0.0), pos2(100.0, 0.0));
+        assert!(hit.is_some());
+    }
+
+    #[test]
+    fn line_drag_hit_rejects_end_gap_zone() {
+        let hit = line_drag_hit_distance(pos2(4.0, 0.0), pos2(0.0, 0.0), pos2(100.0, 0.0));
+        assert!(hit.is_none());
+    }
+
+    #[test]
+    fn line_drag_hit_rejects_short_segment() {
+        let hit = line_drag_hit_distance(pos2(8.0, 0.0), pos2(0.0, 0.0), pos2(16.0, 0.0));
+        assert!(hit.is_none());
+    }
+
+    #[test]
+    fn line_drag_hit_rejects_far_pointer() {
+        let hit = line_drag_hit_distance(pos2(50.0, 20.0), pos2(0.0, 0.0), pos2(100.0, 0.0));
+        assert!(hit.is_none());
+    }
+
+    #[test]
+    fn clamp_line_drag_delta_keeps_delta_when_inside_bounds() {
+        let delta = clamp_line_drag_delta(
+            vec2(5.0, -8.0),
+            pos2(10.0, 20.0),
+            pos2(30.0, 60.0),
+            vec2(100.0, 100.0),
+        );
+        assert_vec2_close(delta, vec2(5.0, -8.0));
+    }
+
+    #[test]
+    fn clamp_line_drag_delta_limits_shift_to_image_bounds() {
+        let p1 = pos2(2.0, 5.0);
+        let p2 = pos2(10.0, 15.0);
+        let bounds = vec2(20.0, 40.0);
+        let delta = clamp_line_drag_delta(vec2(-10.0, 50.0), p1, p2, bounds);
+        assert_vec2_close(delta, vec2(-2.0, 25.0));
+        assert_point_in_bounds(p1 + delta, bounds);
+        assert_point_in_bounds(p2 + delta, bounds);
     }
 }
