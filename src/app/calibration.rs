@@ -6,6 +6,26 @@ use crate::types::{
 use egui::Pos2;
 use std::cell::RefCell;
 
+#[derive(Debug, Clone, Copy)]
+pub struct CalSnapGuide {
+    pub(super) start: Pos2,
+    pub(super) end: Pos2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalSnapEndpoint {
+    X1,
+    X2,
+    Y1,
+    Y2,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CalIntSnapSticky {
+    pub(super) endpoint: CalSnapEndpoint,
+    pub(super) point: Pos2,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickMode {
     None,
@@ -34,6 +54,7 @@ pub enum AxisValueField {
     A2,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct CalibrationState {
     pub(super) pick_mode: PickMode,
     pub(super) pending_value_focus: Option<AxisValueField>,
@@ -42,9 +63,15 @@ pub struct CalibrationState {
     pub(super) polar_cal: PolarCalUi,
     pub(super) coord_system: CoordSystem,
     pub(super) calibration_angle_snap: bool,
+    pub(super) snap_ext: bool,
+    pub(super) snap_vh: bool,
+    pub(super) snap_end: bool,
+    pub(super) snap_int: bool,
     pub(super) show_calibration_segments: bool,
     pub(super) dragging_handle: Option<DragTarget>,
     pub(super) drag_last_pixel: Option<Pos2>,
+    pub(super) snap_guides: [Option<CalSnapGuide>; super::constants::CAL_SNAP_GUIDE_SLOTS],
+    pub(super) int_snap_sticky: Option<CalIntSnapSticky>,
 }
 
 #[derive(Debug, Clone)]

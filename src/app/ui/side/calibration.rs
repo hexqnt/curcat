@@ -4,6 +4,7 @@ use super::axis_input::sanitize_axis_text;
 use crate::app::{APP_VERSION, AxisCalUi, AxisValueField, CurcatApp, PickMode, safe_usize_to_f32};
 use crate::i18n::{TextKey, UiLanguage};
 use crate::types::{AngleDirection, AngleUnit, AxisUnit, AxisValue, CoordSystem, ScaleKind};
+use egui::containers::menu::MenuButton;
 use egui::{Color32, Pos2, Rect, RichText};
 
 #[derive(Clone, Copy)]
@@ -172,6 +173,7 @@ impl CalibrationUiState {
 }
 
 impl CurcatApp {
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_side_calibration(&mut self, ui: &mut egui::Ui) {
         let i18n = self.i18n();
         side_section_card(ui, |ui| {
@@ -210,6 +212,7 @@ impl CurcatApp {
                     self.mark_points_dirty();
                     self.calibration.pick_mode = PickMode::None;
                     self.calibration.pending_value_focus = None;
+                    self.clear_calibration_snap_runtime();
                     self.set_status(match system {
                         CoordSystem::Cartesian => match self.ui.language {
                             UiLanguage::En => "Switched to Cartesian calibration.",
@@ -224,14 +227,11 @@ impl CurcatApp {
             });
             ui.separator();
             ui.horizontal(|ui| {
-                toggle_switch(ui, &mut self.calibration.calibration_angle_snap)
-                    .on_hover_text(i18n.text(TextKey::Snap15Hover));
-                ui.add_space(4.0);
-                ui.label(i18n.text(TextKey::Snap15))
-                    .on_hover_text(i18n.text(TextKey::Snap15Hover));
+                let cartesian = matches!(self.calibration.coord_system, CoordSystem::Cartesian);
+                self.ui_calibration_snap_menu(ui, cartesian);
                 ui.add_space(8.0);
                 let has_image = self.image.image.is_some();
-                if matches!(self.calibration.coord_system, CoordSystem::Cartesian) {
+                if cartesian {
                     self.ui_quadrant_preset_menu(ui, CalibrationPresetKind::Unit, has_image);
                     self.ui_quadrant_preset_menu(ui, CalibrationPresetKind::Pixels, has_image);
                 }
@@ -303,6 +303,135 @@ impl CurcatApp {
         });
     }
 
+    fn ui_calibration_snap_toggle(ui: &mut egui::Ui, enabled: &mut bool, label: &str, hover: &str) {
+        toggle_switch(ui, enabled).on_hover_text(hover);
+        ui.add_space(2.0);
+        ui.label(RichText::new(label).small().monospace())
+            .on_hover_text(hover);
+    }
+
+    fn ui_calibration_snap_group_toggle(
+        ui: &mut egui::Ui,
+        group_enabled: &mut bool,
+        label: &str,
+        hover: &str,
+    ) {
+        toggle_switch(ui, group_enabled).on_hover_text(hover);
+        ui.add_space(4.0);
+        let label_resp = ui
+            .add(egui::Label::new(RichText::new(label).strong()).sense(egui::Sense::click()))
+            .on_hover_text(hover);
+        if label_resp.clicked() {
+            *group_enabled = !*group_enabled;
+        }
+    }
+
+    fn ui_calibration_snap_menu(&mut self, ui: &mut egui::Ui, cartesian: bool) {
+        let i18n = self.i18n();
+        let active_count = usize::from(self.calibration.calibration_angle_snap)
+            + if cartesian {
+                [
+                    self.calibration.snap_ext,
+                    self.calibration.snap_vh,
+                    self.calibration.snap_end,
+                    self.calibration.snap_int,
+                ]
+                .into_iter()
+                .filter(|enabled| *enabled)
+                .count()
+            } else {
+                0
+            };
+        let total = if cartesian { 5 } else { 1 };
+        let button = egui::Button::new(format!(
+            "{} {} ({active_count}/{total})",
+            icons::ICON_MENU,
+            i18n.text(TextKey::CalSnapMenu)
+        ));
+        let menu_cfg = egui::containers::menu::MenuConfig::new()
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        let (response, _) = MenuButton::from_button(button)
+            .config(menu_cfg)
+            .ui(ui, |ui| {
+                ui.horizontal(|ui| {
+                    Self::ui_calibration_snap_toggle(
+                        ui,
+                        &mut self.calibration.calibration_angle_snap,
+                        i18n.text(TextKey::Snap15),
+                        i18n.text(TextKey::Snap15Hover),
+                    );
+                });
+                if !cartesian {
+                    return;
+                }
+
+                ui.separator();
+
+                let mut point_group = self.calibration.snap_end || self.calibration.snap_int;
+                ui.horizontal(|ui| {
+                    Self::ui_calibration_snap_group_toggle(
+                        ui,
+                        &mut point_group,
+                        i18n.text(TextKey::CalSnapPointGroup),
+                        i18n.text(TextKey::CalSnapPointGroupHover),
+                    );
+                });
+                if point_group != (self.calibration.snap_end || self.calibration.snap_int) {
+                    self.calibration.snap_end = point_group;
+                    self.calibration.snap_int = point_group;
+                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    Self::ui_calibration_snap_toggle(
+                        ui,
+                        &mut self.calibration.snap_end,
+                        i18n.text(TextKey::CalSnapEnd),
+                        i18n.text(TextKey::CalSnapEndHover),
+                    );
+                    ui.add_space(8.0);
+                    Self::ui_calibration_snap_toggle(
+                        ui,
+                        &mut self.calibration.snap_int,
+                        i18n.text(TextKey::CalSnapInt),
+                        i18n.text(TextKey::CalSnapIntHover),
+                    );
+                });
+
+                ui.separator();
+
+                let mut line_group = self.calibration.snap_ext || self.calibration.snap_vh;
+                ui.horizontal(|ui| {
+                    Self::ui_calibration_snap_group_toggle(
+                        ui,
+                        &mut line_group,
+                        i18n.text(TextKey::CalSnapLineGroup),
+                        i18n.text(TextKey::CalSnapLineGroupHover),
+                    );
+                });
+                if line_group != (self.calibration.snap_ext || self.calibration.snap_vh) {
+                    self.calibration.snap_ext = line_group;
+                    self.calibration.snap_vh = line_group;
+                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    Self::ui_calibration_snap_toggle(
+                        ui,
+                        &mut self.calibration.snap_ext,
+                        i18n.text(TextKey::CalSnapExt),
+                        i18n.text(TextKey::CalSnapExtHover),
+                    );
+                    ui.add_space(8.0);
+                    Self::ui_calibration_snap_toggle(
+                        ui,
+                        &mut self.calibration.snap_vh,
+                        i18n.text(TextKey::CalSnapVh),
+                        i18n.text(TextKey::CalSnapVhHover),
+                    );
+                });
+            });
+        response.on_hover_text(i18n.text(TextKey::CalSnapMenuHover));
+    }
+
     fn apply_calibration_preset(
         &mut self,
         preset: CalibrationPresetKind,
@@ -363,8 +492,7 @@ impl CurcatApp {
 
         self.calibration.pick_mode = PickMode::None;
         self.calibration.pending_value_focus = None;
-        self.calibration.dragging_handle = None;
-        self.calibration.drag_last_pixel = None;
+        self.clear_calibration_drag_runtime();
         self.mark_points_dirty();
         self.set_status(match self.ui.language {
             UiLanguage::En => format!(

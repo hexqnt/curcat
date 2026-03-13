@@ -39,7 +39,10 @@ mod ui_state;
 
 pub use crate::util::safe_usize_to_f32;
 pub use auto_trace::{AutoTraceConfig, AutoTraceDirection};
-pub use calibration::{AxisCalUi, AxisValueField, CalibrationState, PickMode, PolarCalUi};
+pub use calibration::{
+    AxisCalUi, AxisValueField, CalIntSnapSticky, CalSnapEndpoint, CalSnapGuide, CalibrationState,
+    PickMode, PolarCalUi,
+};
 pub use constants::*;
 pub use export_state::{ExportKind, ExportState, SAMPLE_COUNT_MIN};
 pub use image_state::{
@@ -130,9 +133,15 @@ impl Default for CurcatApp {
                 },
                 coord_system: CoordSystem::Cartesian,
                 calibration_angle_snap: false,
+                snap_ext: true,
+                snap_vh: true,
+                snap_end: true,
+                snap_int: true,
                 show_calibration_segments: true,
                 dragging_handle: None,
                 drag_last_pixel: None,
+                snap_guides: [None; CAL_SNAP_GUIDE_SLOTS],
+                int_snap_sticky: None,
             },
             points: PointsState {
                 points: Vec::new(),
@@ -210,6 +219,17 @@ impl CurcatApp {
 
     pub(crate) const fn t(&self, key: TextKey) -> &'static str {
         self.i18n().text(key)
+    }
+
+    const fn clear_calibration_snap_runtime(&mut self) {
+        self.calibration.snap_guides = [None; CAL_SNAP_GUIDE_SLOTS];
+        self.calibration.int_snap_sticky = None;
+    }
+
+    const fn clear_calibration_drag_runtime(&mut self) {
+        self.calibration.dragging_handle = None;
+        self.calibration.drag_last_pixel = None;
+        self.clear_calibration_snap_runtime();
     }
 
     pub(crate) fn set_ui_language(&mut self, language: UiLanguage) {
@@ -332,7 +352,7 @@ impl CurcatApp {
         self.calibration.polar_cal.angle.v2_text.clear();
         self.calibration.pick_mode = PickMode::None;
         self.calibration.pending_value_focus = None;
-        self.calibration.dragging_handle = None;
+        self.clear_calibration_drag_runtime();
     }
 
     fn update_filtered_texture(&mut self) {
@@ -362,7 +382,6 @@ impl CurcatApp {
         self.reset_calibrations();
         self.points.points.clear();
         self.mark_points_dirty();
-        self.calibration.dragging_handle = None;
         self.image.touch_pan_active = false;
         self.image.touch_pan_last = None;
         self.image.pan = Vec2::ZERO;
@@ -372,7 +391,7 @@ impl CurcatApp {
     }
 
     fn reset_after_image_transform(&mut self) {
-        self.calibration.dragging_handle = None;
+        self.clear_calibration_drag_runtime();
         self.image.touch_pan_active = false;
         self.image.touch_pan_last = None;
         self.after_image_pixels_changed();

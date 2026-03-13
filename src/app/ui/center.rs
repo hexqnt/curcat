@@ -1,6 +1,6 @@
 use super::super::{
-    AutoPlaceState, AxisValueField, CurcatApp, DragTarget, PickMode, PointInputMode,
-    PrimaryPressInfo, safe_usize_to_f32,
+    AutoPlaceState, AxisValueField, CalIntSnapSticky, CalSnapEndpoint, CalSnapGuide, CurcatApp,
+    DragTarget, PickMode, PointInputMode, PrimaryPressInfo, safe_usize_to_f32,
 };
 use super::icons;
 
@@ -52,6 +52,289 @@ fn clamp_line_drag_delta(delta: Vec2, p1: Pos2, p2: Pos2, image_size: Vec2) -> V
         delta.x.clamp(min_delta_x, max_delta_x),
         delta.y.clamp(min_delta_y, max_delta_y),
     )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CalibrationSnapKind {
+    None,
+    End,
+    Intersection,
+    Extension,
+    VerticalHorizontal,
+    Angle15,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SnapCriterion {
+    End,
+    Intersection,
+    Extension,
+    VerticalHorizontal,
+}
+
+#[derive(Clone, Copy, Default)]
+struct SnapCriteriaHits(u8);
+
+impl SnapCriteriaHits {
+    const END: u8 = 1 << 0;
+    const INTERSECTION: u8 = 1 << 1;
+    const EXTENSION: u8 = 1 << 2;
+    const VERTICAL_HORIZONTAL: u8 = 1 << 3;
+
+    const fn bit(criterion: SnapCriterion) -> u8 {
+        match criterion {
+            SnapCriterion::End => Self::END,
+            SnapCriterion::Intersection => Self::INTERSECTION,
+            SnapCriterion::Extension => Self::EXTENSION,
+            SnapCriterion::VerticalHorizontal => Self::VERTICAL_HORIZONTAL,
+        }
+    }
+
+    const fn mark(&mut self, criterion: SnapCriterion) {
+        self.0 |= Self::bit(criterion);
+    }
+
+    const fn has_other_than(self, criterion: SnapCriterion) -> bool {
+        self.0 & !Self::bit(criterion) != 0
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CalibrationSnapResult {
+    snapped_pixel: Pos2,
+    snap_kind: CalibrationSnapKind,
+    guides: [Option<CalSnapGuide>; super::super::CAL_SNAP_GUIDE_SLOTS],
+    sticky_armed: bool,
+}
+
+#[derive(Clone, Copy)]
+struct CalibrationSnapCandidate {
+    snapped_pixel: Pos2,
+    snap_kind: CalibrationSnapKind,
+    criterion: SnapCriterion,
+    distance_screen_sq: f32,
+    priority: u8,
+    guides: [Option<CalSnapGuide>; super::super::CAL_SNAP_GUIDE_SLOTS],
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CartesianEndpointId {
+    X1,
+    X2,
+    Y1,
+    Y2,
+}
+
+impl CartesianEndpointId {
+    const fn to_snap_endpoint(self) -> CalSnapEndpoint {
+        match self {
+            Self::X1 => CalSnapEndpoint::X1,
+            Self::X2 => CalSnapEndpoint::X2,
+            Self::Y1 => CalSnapEndpoint::Y1,
+            Self::Y2 => CalSnapEndpoint::Y2,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CartesianEndpoint {
+    id: CartesianEndpointId,
+    pixel: Pos2,
+}
+
+#[derive(Clone, Copy)]
+struct LineIntersection {
+    point: Pos2,
+    lhs_t: f32,
+    rhs_t: f32,
+}
+
+#[derive(Clone, Copy)]
+struct EndpointSnapContext {
+    target: CartesianEndpointId,
+    pointer: Pos2,
+    image_size: Vec2,
+    zoom_sq: f32,
+    end_radius_sq: f32,
+    int_radius_sq: f32,
+    ext_radius_sq: f32,
+    vh_radius_sq: f32,
+    sticky_int_radius_sq: f32,
+    endpoints: [Option<CartesianEndpoint>; 4],
+    x_line: Option<(Pos2, Pos2)>,
+    y_line: Option<(Pos2, Pos2)>,
+    intersection: Option<(LineIntersection, Pos2, Pos2, Pos2, Pos2)>,
+}
+
+const fn empty_calibration_guides() -> [Option<CalSnapGuide>; super::super::CAL_SNAP_GUIDE_SLOTS] {
+    [None; super::super::CAL_SNAP_GUIDE_SLOTS]
+}
+
+fn push_calibration_guide(
+    guides: &mut [Option<CalSnapGuide>; super::super::CAL_SNAP_GUIDE_SLOTS],
+    segment: CalSnapGuide,
+) {
+    for slot in guides {
+        if slot.is_none() {
+            *slot = Some(segment);
+            break;
+        }
+    }
+}
+
+fn try_push_calibration_guide(
+    guides: &mut [Option<CalSnapGuide>; super::super::CAL_SNAP_GUIDE_SLOTS],
+    start: Pos2,
+    end: Pos2,
+) {
+    if start.distance(end) <= f32::EPSILON {
+        return;
+    }
+    push_calibration_guide(guides, CalSnapGuide { start, end });
+}
+
+fn point_in_image_bounds(point: Pos2, image_size: Vec2) -> bool {
+    point.x >= 0.0 && point.x <= image_size.x && point.y >= 0.0 && point.y <= image_size.y
+}
+
+fn point_matches_any_endpoint(
+    point: Pos2,
+    endpoints: &[Option<CartesianEndpoint>; 4],
+    zoom_sq: f32,
+) -> bool {
+    let duplicate_eps_sq = super::super::CAL_ENDPOINT_DUPLICATE_EPS_SCREEN
+        * super::super::CAL_ENDPOINT_DUPLICATE_EPS_SCREEN;
+    endpoints
+        .iter()
+        .flatten()
+        .any(|endpoint| endpoint.pixel.distance_sq(point) * zoom_sq <= duplicate_eps_sq)
+}
+
+fn screen_distance_sq_if_within(
+    a: Pos2,
+    b: Pos2,
+    zoom_sq: f32,
+    snap_radius_sq: f32,
+) -> Option<f32> {
+    let distance_screen_sq = a.distance_sq(b) * zoom_sq;
+    (distance_screen_sq <= snap_radius_sq).then_some(distance_screen_sq)
+}
+
+fn projection_to_line(point: Pos2, start: Pos2, end: Pos2) -> Option<(Pos2, f32)> {
+    let dir = end - start;
+    let denom = dir.length_sq();
+    if denom <= f32::EPSILON {
+        return None;
+    }
+    let t = (point - start).dot(dir) / denom;
+    Some((start + dir * t, t))
+}
+
+fn normalized_direction(start: Pos2, end: Pos2) -> Option<Vec2> {
+    let dir = end - start;
+    let len = dir.length();
+    if len <= f32::EPSILON {
+        return None;
+    }
+    Some(dir / len)
+}
+
+fn cross(a: Vec2, b: Vec2) -> f32 {
+    a.x.mul_add(b.y, -a.y * b.x)
+}
+
+fn line_intersection(
+    lhs_start: Pos2,
+    lhs_end: Pos2,
+    rhs_start: Pos2,
+    rhs_end: Pos2,
+) -> Option<LineIntersection> {
+    let lhs = lhs_end - lhs_start;
+    let rhs = rhs_end - rhs_start;
+    let denom = cross(lhs, rhs);
+    if denom.abs() <= f32::EPSILON {
+        return None;
+    }
+    let delta = rhs_start - lhs_start;
+    let lhs_t = cross(delta, rhs) / denom;
+    let rhs_t = cross(delta, lhs) / denom;
+    Some(LineIntersection {
+        point: lhs_start + lhs * lhs_t,
+        lhs_t,
+        rhs_t,
+    })
+}
+
+fn build_intersection_guides(
+    x1: Pos2,
+    x2: Pos2,
+    y1: Pos2,
+    y2: Pos2,
+    intersection: LineIntersection,
+) -> [Option<CalSnapGuide>; super::super::CAL_SNAP_GUIDE_SLOTS] {
+    let mut guides = empty_calibration_guides();
+    if intersection.lhs_t < 0.0 || intersection.lhs_t > 1.0 {
+        let start = if intersection.lhs_t < 0.0 { x1 } else { x2 };
+        push_calibration_guide(
+            &mut guides,
+            CalSnapGuide {
+                start,
+                end: intersection.point,
+            },
+        );
+    }
+    if intersection.rhs_t < 0.0 || intersection.rhs_t > 1.0 {
+        let start = if intersection.rhs_t < 0.0 { y1 } else { y2 };
+        push_calibration_guide(
+            &mut guides,
+            CalSnapGuide {
+                start,
+                end: intersection.point,
+            },
+        );
+    }
+    guides
+}
+
+fn update_best_calibration_candidate(
+    best: &mut Option<CalibrationSnapCandidate>,
+    candidate: CalibrationSnapCandidate,
+) {
+    const GUIDE_MERGE_DIST_EPS_SQ: f32 = 0.25;
+    const GUIDE_MERGE_POINT_EPS_SQ: f32 = 0.25;
+
+    fn has_guides(guides: &[Option<CalSnapGuide>; super::super::CAL_SNAP_GUIDE_SLOTS]) -> bool {
+        guides.iter().any(Option::is_some)
+    }
+
+    let tie_eps_sq = super::super::CAL_SNAP_TIE_EPS_SCREEN * super::super::CAL_SNAP_TIE_EPS_SCREEN;
+
+    if let Some(current) = best {
+        let replace = candidate.distance_screen_sq + tie_eps_sq < current.distance_screen_sq
+            || ((candidate.distance_screen_sq - current.distance_screen_sq).abs() <= tie_eps_sq
+                && candidate.priority < current.priority);
+        if replace {
+            *best = Some(candidate);
+            return;
+        }
+
+        let same_snap_point =
+            candidate.snapped_pixel.distance_sq(current.snapped_pixel) <= GUIDE_MERGE_POINT_EPS_SQ;
+        let same_pointer_distance = (candidate.distance_screen_sq - current.distance_screen_sq)
+            .abs()
+            <= GUIDE_MERGE_DIST_EPS_SQ;
+        if same_snap_point
+            && same_pointer_distance
+            && !has_guides(&current.guides)
+            && has_guides(&candidate.guides)
+        {
+            let mut merged = *current;
+            merged.guides = candidate.guides;
+            *best = Some(merged);
+        }
+    } else {
+        *best = Some(candidate);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -423,6 +706,589 @@ impl CurcatApp {
         }
     }
 
+    const fn cartesian_endpoint_target_id(target: CalTarget) -> Option<CartesianEndpointId> {
+        match target {
+            CalTarget::X1 => Some(CartesianEndpointId::X1),
+            CalTarget::X2 => Some(CartesianEndpointId::X2),
+            CalTarget::Y1 => Some(CartesianEndpointId::Y1),
+            CalTarget::Y2 => Some(CartesianEndpointId::Y2),
+            CalTarget::Origin | CalTarget::R1 | CalTarget::R2 | CalTarget::A1 | CalTarget::A2 => {
+                None
+            }
+        }
+    }
+
+    fn cartesian_calibration_endpoints(&self) -> [Option<CartesianEndpoint>; 4] {
+        [
+            self.calibration.cal_x.p1.map(|pixel| CartesianEndpoint {
+                id: CartesianEndpointId::X1,
+                pixel,
+            }),
+            self.calibration.cal_x.p2.map(|pixel| CartesianEndpoint {
+                id: CartesianEndpointId::X2,
+                pixel,
+            }),
+            self.calibration.cal_y.p1.map(|pixel| CartesianEndpoint {
+                id: CartesianEndpointId::Y1,
+                pixel,
+            }),
+            self.calibration.cal_y.p2.map(|pixel| CartesianEndpoint {
+                id: CartesianEndpointId::Y2,
+                pixel,
+            }),
+        ]
+    }
+
+    fn endpoint_snap_context(
+        &self,
+        target: CartesianEndpointId,
+        pointer: Pos2,
+        image_size: Vec2,
+    ) -> EndpointSnapContext {
+        let endpoints = self.cartesian_calibration_endpoints();
+        let x_line = self.calibration.cal_x.p1.zip(self.calibration.cal_x.p2);
+        let y_line = self.calibration.cal_y.p1.zip(self.calibration.cal_y.p2);
+        let intersection = if let (Some((x1, x2)), Some((y1, y2))) = (x_line, y_line) {
+            line_intersection(x1, x2, y1, y2)
+                .filter(|value| point_in_image_bounds(value.point, image_size))
+                .map(|value| (value, x1, x2, y1, y2))
+        } else {
+            None
+        };
+        let zoom_sq = self.image.zoom * self.image.zoom;
+        let end_radius_sq =
+            super::super::CAL_ENDPOINT_SNAP_RADIUS_END * super::super::CAL_ENDPOINT_SNAP_RADIUS_END;
+        let int_radius_sq =
+            super::super::CAL_ENDPOINT_SNAP_RADIUS_INT * super::super::CAL_ENDPOINT_SNAP_RADIUS_INT;
+        let ext_radius_sq =
+            super::super::CAL_ENDPOINT_SNAP_RADIUS_EXT * super::super::CAL_ENDPOINT_SNAP_RADIUS_EXT;
+        let vh_radius_sq =
+            super::super::CAL_ENDPOINT_SNAP_RADIUS_VH * super::super::CAL_ENDPOINT_SNAP_RADIUS_VH;
+        let sticky_int_radius =
+            super::super::CAL_ENDPOINT_SNAP_RADIUS_INT * super::super::CAL_INT_SNAP_STICKY_FACTOR;
+        EndpointSnapContext {
+            target,
+            pointer,
+            image_size,
+            zoom_sq,
+            end_radius_sq,
+            int_radius_sq,
+            ext_radius_sq,
+            vh_radius_sq,
+            sticky_int_radius_sq: sticky_int_radius * sticky_int_radius,
+            endpoints,
+            x_line,
+            y_line,
+            intersection,
+        }
+    }
+
+    fn add_snap_candidate(
+        best: &mut Option<CalibrationSnapCandidate>,
+        criteria_hits: &mut SnapCriteriaHits,
+        candidate: CalibrationSnapCandidate,
+    ) {
+        criteria_hits.mark(candidate.criterion);
+        update_best_calibration_candidate(best, candidate);
+    }
+
+    fn collect_end_snap_candidates(
+        ctx: &EndpointSnapContext,
+        best: &mut Option<CalibrationSnapCandidate>,
+        criteria_hits: &mut SnapCriteriaHits,
+    ) {
+        for endpoint in ctx.endpoints.iter().flatten() {
+            if endpoint.id == ctx.target {
+                continue;
+            }
+            if let Some(distance_screen_sq) = screen_distance_sq_if_within(
+                ctx.pointer,
+                endpoint.pixel,
+                ctx.zoom_sq,
+                ctx.end_radius_sq,
+            ) {
+                Self::add_snap_candidate(
+                    best,
+                    criteria_hits,
+                    CalibrationSnapCandidate {
+                        snapped_pixel: endpoint.pixel,
+                        snap_kind: CalibrationSnapKind::End,
+                        criterion: SnapCriterion::End,
+                        distance_screen_sq,
+                        priority: 0,
+                        guides: empty_calibration_guides(),
+                    },
+                );
+            }
+        }
+    }
+
+    fn collect_intersection_snap_candidate(
+        ctx: &EndpointSnapContext,
+        best: &mut Option<CalibrationSnapCandidate>,
+        criteria_hits: &mut SnapCriteriaHits,
+    ) {
+        if let Some((intersection, x1, x2, y1, y2)) = ctx.intersection
+            && let Some(distance_screen_sq) = screen_distance_sq_if_within(
+                ctx.pointer,
+                intersection.point,
+                ctx.zoom_sq,
+                ctx.int_radius_sq,
+            )
+        {
+            Self::add_snap_candidate(
+                best,
+                criteria_hits,
+                CalibrationSnapCandidate {
+                    snapped_pixel: intersection.point,
+                    snap_kind: CalibrationSnapKind::Intersection,
+                    criterion: SnapCriterion::Intersection,
+                    distance_screen_sq,
+                    priority: 1,
+                    guides: build_intersection_guides(x1, x2, y1, y2, intersection),
+                },
+            );
+        }
+    }
+
+    fn collect_extension_line_projection_candidates(
+        ctx: &EndpointSnapContext,
+        best: &mut Option<CalibrationSnapCandidate>,
+        criteria_hits: &mut SnapCriteriaHits,
+    ) {
+        for (line_start, line_end) in [ctx.x_line, ctx.y_line].into_iter().flatten() {
+            if let Some((projected, t)) = projection_to_line(ctx.pointer, line_start, line_end) {
+                if (0.0..=1.0).contains(&t) || !point_in_image_bounds(projected, ctx.image_size) {
+                    continue;
+                }
+                if let Some(distance_screen_sq) = screen_distance_sq_if_within(
+                    ctx.pointer,
+                    projected,
+                    ctx.zoom_sq,
+                    ctx.ext_radius_sq,
+                ) {
+                    let start = if t < 0.0 { line_start } else { line_end };
+                    let mut guides = empty_calibration_guides();
+                    push_calibration_guide(
+                        &mut guides,
+                        CalSnapGuide {
+                            start,
+                            end: projected,
+                        },
+                    );
+                    Self::add_snap_candidate(
+                        best,
+                        criteria_hits,
+                        CalibrationSnapCandidate {
+                            snapped_pixel: projected,
+                            snap_kind: CalibrationSnapKind::Extension,
+                            criterion: SnapCriterion::Extension,
+                            distance_screen_sq,
+                            priority: 2,
+                            guides,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    fn extension_dirs(ctx: &EndpointSnapContext) -> [Option<Vec2>; 2] {
+        [
+            ctx.y_line
+                .and_then(|(start, end)| normalized_direction(start, end)),
+            ctx.x_line
+                .and_then(|(start, end)| normalized_direction(start, end)),
+        ]
+    }
+
+    fn collect_extension_rotated_projection_candidates(
+        ctx: &EndpointSnapContext,
+        ext_dirs: [Option<Vec2>; 2],
+        best: &mut Option<CalibrationSnapCandidate>,
+        criteria_hits: &mut SnapCriteriaHits,
+    ) {
+        // Поворотный аналог V/H: локальные направляющие по углам калибровочных осей.
+        // Это остаётся частью EXT и использует те же пороги/приоритеты.
+        for dir in ext_dirs.iter().flatten().copied() {
+            for endpoint in ctx.endpoints.iter().flatten() {
+                if endpoint.id == ctx.target {
+                    continue;
+                }
+                let projected = endpoint.pixel + dir * (ctx.pointer - endpoint.pixel).dot(dir);
+                if !point_in_image_bounds(projected, ctx.image_size)
+                    || point_matches_any_endpoint(projected, &ctx.endpoints, ctx.zoom_sq)
+                {
+                    continue;
+                }
+                if let Some(distance_screen_sq) = screen_distance_sq_if_within(
+                    ctx.pointer,
+                    projected,
+                    ctx.zoom_sq,
+                    ctx.ext_radius_sq,
+                ) {
+                    let mut guides = empty_calibration_guides();
+                    try_push_calibration_guide(&mut guides, endpoint.pixel, projected);
+                    Self::add_snap_candidate(
+                        best,
+                        criteria_hits,
+                        CalibrationSnapCandidate {
+                            snapped_pixel: projected,
+                            snap_kind: CalibrationSnapKind::Extension,
+                            criterion: SnapCriterion::Extension,
+                            distance_screen_sq,
+                            priority: 2,
+                            guides,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    fn collect_extension_rotated_intersection_candidates(
+        ctx: &EndpointSnapContext,
+        ext_dirs: [Option<Vec2>; 2],
+        best: &mut Option<CalibrationSnapCandidate>,
+        criteria_hits: &mut SnapCriteriaHits,
+    ) {
+        if let [Some(first_dir), Some(second_dir)] = ext_dirs {
+            for first_endpoint in ctx.endpoints.iter().flatten() {
+                if first_endpoint.id == ctx.target {
+                    continue;
+                }
+                for second_endpoint in ctx.endpoints.iter().flatten() {
+                    if second_endpoint.id == ctx.target {
+                        continue;
+                    }
+                    if second_endpoint.id == first_endpoint.id {
+                        continue;
+                    }
+                    let Some(intersection) = line_intersection(
+                        first_endpoint.pixel,
+                        first_endpoint.pixel + first_dir,
+                        second_endpoint.pixel,
+                        second_endpoint.pixel + second_dir,
+                    ) else {
+                        continue;
+                    };
+                    if !point_in_image_bounds(intersection.point, ctx.image_size)
+                        || point_matches_any_endpoint(
+                            intersection.point,
+                            &ctx.endpoints,
+                            ctx.zoom_sq,
+                        )
+                    {
+                        continue;
+                    }
+                    if let Some(distance_screen_sq) = screen_distance_sq_if_within(
+                        ctx.pointer,
+                        intersection.point,
+                        ctx.zoom_sq,
+                        ctx.ext_radius_sq,
+                    ) {
+                        let mut guides = empty_calibration_guides();
+                        try_push_calibration_guide(
+                            &mut guides,
+                            first_endpoint.pixel,
+                            intersection.point,
+                        );
+                        try_push_calibration_guide(
+                            &mut guides,
+                            second_endpoint.pixel,
+                            intersection.point,
+                        );
+                        Self::add_snap_candidate(
+                            best,
+                            criteria_hits,
+                            CalibrationSnapCandidate {
+                                snapped_pixel: intersection.point,
+                                snap_kind: CalibrationSnapKind::Extension,
+                                criterion: SnapCriterion::Extension,
+                                distance_screen_sq,
+                                priority: 2,
+                                guides,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_extension_snap_candidates(
+        ctx: &EndpointSnapContext,
+        best: &mut Option<CalibrationSnapCandidate>,
+        criteria_hits: &mut SnapCriteriaHits,
+    ) {
+        Self::collect_extension_line_projection_candidates(ctx, best, criteria_hits);
+        let ext_dirs = Self::extension_dirs(ctx);
+        Self::collect_extension_rotated_projection_candidates(ctx, ext_dirs, best, criteria_hits);
+        Self::collect_extension_rotated_intersection_candidates(ctx, ext_dirs, best, criteria_hits);
+    }
+
+    fn collect_vh_snap_candidates(
+        ctx: &EndpointSnapContext,
+        best: &mut Option<CalibrationSnapCandidate>,
+        criteria_hits: &mut SnapCriteriaHits,
+    ) {
+        for endpoint_x in ctx.endpoints.iter().flatten() {
+            if endpoint_x.id == ctx.target {
+                continue;
+            }
+            let vertical = pos2(endpoint_x.pixel.x, ctx.pointer.y);
+            if point_matches_any_endpoint(vertical, &ctx.endpoints, ctx.zoom_sq) {
+                continue;
+            }
+            if let Some(distance_screen_sq) =
+                screen_distance_sq_if_within(ctx.pointer, vertical, ctx.zoom_sq, ctx.vh_radius_sq)
+            {
+                let mut guides = empty_calibration_guides();
+                try_push_calibration_guide(&mut guides, endpoint_x.pixel, vertical);
+                Self::add_snap_candidate(
+                    best,
+                    criteria_hits,
+                    CalibrationSnapCandidate {
+                        snapped_pixel: vertical,
+                        snap_kind: CalibrationSnapKind::VerticalHorizontal,
+                        criterion: SnapCriterion::VerticalHorizontal,
+                        distance_screen_sq,
+                        priority: 3,
+                        guides,
+                    },
+                );
+            }
+        }
+        for endpoint_y in ctx.endpoints.iter().flatten() {
+            if endpoint_y.id == ctx.target {
+                continue;
+            }
+            let horizontal = pos2(ctx.pointer.x, endpoint_y.pixel.y);
+            if point_matches_any_endpoint(horizontal, &ctx.endpoints, ctx.zoom_sq) {
+                continue;
+            }
+            if let Some(distance_screen_sq) =
+                screen_distance_sq_if_within(ctx.pointer, horizontal, ctx.zoom_sq, ctx.vh_radius_sq)
+            {
+                let mut guides = empty_calibration_guides();
+                try_push_calibration_guide(&mut guides, endpoint_y.pixel, horizontal);
+                Self::add_snap_candidate(
+                    best,
+                    criteria_hits,
+                    CalibrationSnapCandidate {
+                        snapped_pixel: horizontal,
+                        snap_kind: CalibrationSnapKind::VerticalHorizontal,
+                        criterion: SnapCriterion::VerticalHorizontal,
+                        distance_screen_sq,
+                        priority: 3,
+                        guides,
+                    },
+                );
+            }
+        }
+        for endpoint_x in ctx.endpoints.iter().flatten() {
+            if endpoint_x.id == ctx.target {
+                continue;
+            }
+            for endpoint_y in ctx.endpoints.iter().flatten() {
+                if endpoint_y.id == ctx.target {
+                    continue;
+                }
+                if endpoint_y.id == endpoint_x.id {
+                    continue;
+                }
+                let both = pos2(endpoint_x.pixel.x, endpoint_y.pixel.y);
+                if point_matches_any_endpoint(both, &ctx.endpoints, ctx.zoom_sq) {
+                    continue;
+                }
+                if let Some(distance_screen_sq) =
+                    screen_distance_sq_if_within(ctx.pointer, both, ctx.zoom_sq, ctx.vh_radius_sq)
+                {
+                    let mut guides = empty_calibration_guides();
+                    try_push_calibration_guide(&mut guides, endpoint_x.pixel, both);
+                    try_push_calibration_guide(&mut guides, endpoint_y.pixel, both);
+                    Self::add_snap_candidate(
+                        best,
+                        criteria_hits,
+                        CalibrationSnapCandidate {
+                            snapped_pixel: both,
+                            snap_kind: CalibrationSnapKind::VerticalHorizontal,
+                            criterion: SnapCriterion::VerticalHorizontal,
+                            distance_screen_sq,
+                            priority: 3,
+                            guides,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    fn try_sticky_intersection_snap(
+        &mut self,
+        ctx: &EndpointSnapContext,
+        target_snap_endpoint: CalSnapEndpoint,
+    ) -> Option<CalibrationSnapResult> {
+        if !self.calibration.snap_int {
+            self.calibration.int_snap_sticky = None;
+            return None;
+        }
+        let sticky = self.calibration.int_snap_sticky?;
+        if sticky.endpoint != target_snap_endpoint {
+            self.calibration.int_snap_sticky = None;
+            return None;
+        }
+        if screen_distance_sq_if_within(
+            ctx.pointer,
+            sticky.point,
+            ctx.zoom_sq,
+            ctx.sticky_int_radius_sq,
+        )
+        .is_none()
+        {
+            self.calibration.int_snap_sticky = None;
+            return None;
+        }
+        if let Some((intersection, x1, x2, y1, y2)) = ctx.intersection {
+            return Some(CalibrationSnapResult {
+                snapped_pixel: intersection.point,
+                snap_kind: CalibrationSnapKind::Intersection,
+                guides: build_intersection_guides(x1, x2, y1, y2, intersection),
+                sticky_armed: true,
+            });
+        }
+        Some(CalibrationSnapResult {
+            snapped_pixel: sticky.point,
+            snap_kind: CalibrationSnapKind::Intersection,
+            guides: empty_calibration_guides(),
+            sticky_armed: true,
+        })
+    }
+
+    fn endpoint_snap_reference(
+        &mut self,
+        target: CartesianEndpointId,
+        pointer: Pos2,
+        image_size: Vec2,
+    ) -> Option<CalibrationSnapResult> {
+        let ctx = self.endpoint_snap_context(target, pointer, image_size);
+        let target_snap_endpoint = target.to_snap_endpoint();
+        if let Some(result) = self.try_sticky_intersection_snap(&ctx, target_snap_endpoint) {
+            return Some(result);
+        }
+
+        let mut best: Option<CalibrationSnapCandidate> = None;
+        let mut criteria_hits = SnapCriteriaHits::default();
+        if self.calibration.snap_end {
+            Self::collect_end_snap_candidates(&ctx, &mut best, &mut criteria_hits);
+        }
+        if self.calibration.snap_int {
+            Self::collect_intersection_snap_candidate(&ctx, &mut best, &mut criteria_hits);
+        }
+        if self.calibration.snap_ext {
+            Self::collect_extension_snap_candidates(&ctx, &mut best, &mut criteria_hits);
+        }
+        if self.calibration.snap_vh {
+            Self::collect_vh_snap_candidates(&ctx, &mut best, &mut criteria_hits);
+        }
+        best.map(|candidate| CalibrationSnapResult {
+            snapped_pixel: candidate.snapped_pixel,
+            snap_kind: candidate.snap_kind,
+            guides: candidate.guides,
+            sticky_armed: matches!(candidate.criterion, SnapCriterion::Intersection)
+                && criteria_hits.has_other_than(SnapCriterion::Intersection),
+        })
+    }
+
+    const fn snap_angle_anchor(&self, target: CalTarget) -> Option<Pos2> {
+        match target {
+            CalTarget::X1 => self.calibration.cal_x.p2,
+            CalTarget::X2 => self.calibration.cal_x.p1,
+            CalTarget::Y1 => self.calibration.cal_y.p2,
+            CalTarget::Y2 => self.calibration.cal_y.p1,
+            CalTarget::R1 | CalTarget::R2 | CalTarget::A1 | CalTarget::A2 => {
+                self.calibration.polar_cal.origin
+            }
+            CalTarget::Origin => None,
+        }
+    }
+
+    fn calibration_snap_result(
+        &mut self,
+        target: CalTarget,
+        candidate: Pos2,
+        image_size: Vec2,
+    ) -> CalibrationSnapResult {
+        if !self.calibration.snap_int {
+            self.calibration.int_snap_sticky = None;
+        }
+        if matches!(target, CalTarget::Origin) {
+            self.calibration.int_snap_sticky = None;
+            return CalibrationSnapResult {
+                snapped_pixel: candidate,
+                snap_kind: CalibrationSnapKind::None,
+                guides: empty_calibration_guides(),
+                sticky_armed: false,
+            };
+        }
+
+        if matches!(self.calibration.coord_system, CoordSystem::Cartesian)
+            && let Some(endpoint_target) = Self::cartesian_endpoint_target_id(target)
+            && let Some(result) =
+                self.endpoint_snap_reference(endpoint_target, candidate, image_size)
+        {
+            if matches!(result.snap_kind, CalibrationSnapKind::Intersection) && result.sticky_armed
+            {
+                self.calibration.int_snap_sticky = Some(CalIntSnapSticky {
+                    endpoint: endpoint_target.to_snap_endpoint(),
+                    point: result.snapped_pixel,
+                });
+            } else {
+                self.calibration.int_snap_sticky = None;
+            }
+            return result;
+        }
+
+        let snapped =
+            self.snap_calibration_angle(candidate, self.snap_angle_anchor(target), image_size);
+        let snap_kind = if snapped.distance(candidate) > f32::EPSILON {
+            CalibrationSnapKind::Angle15
+        } else {
+            CalibrationSnapKind::None
+        };
+        self.calibration.int_snap_sticky = None;
+        CalibrationSnapResult {
+            snapped_pixel: snapped,
+            snap_kind,
+            guides: empty_calibration_guides(),
+            sticky_armed: false,
+        }
+    }
+
+    fn update_calibration_pick_preview_guides(
+        &mut self,
+        hover_pixel: Option<Pos2>,
+        image_size: Vec2,
+    ) {
+        let Some(hover_pixel) = hover_pixel else {
+            return;
+        };
+        let Some(target) = CalTarget::from_pick_mode(self.calibration.pick_mode) else {
+            return;
+        };
+        if Self::cartesian_endpoint_target_id(target).is_none() {
+            return;
+        }
+        let result = self.calibration_snap_result(target, hover_pixel, image_size);
+        let has_visual_snap = !matches!(
+            result.snap_kind,
+            CalibrationSnapKind::None | CalibrationSnapKind::Angle15
+        );
+        if has_visual_snap && result.guides.iter().any(Option::is_some) {
+            self.calibration.snap_guides = result.guides;
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn apply_calibration_point(
         &mut self,
@@ -439,21 +1305,18 @@ impl CurcatApp {
         } else {
             pixel
         };
-        let snapped = if matches!(target, CalTarget::Origin) {
-            pixel
-        } else {
-            let snap_ref = match target {
-                CalTarget::X1 => self.calibration.cal_x.p2,
-                CalTarget::X2 => self.calibration.cal_x.p1,
-                CalTarget::Y1 => self.calibration.cal_y.p2,
-                CalTarget::Y2 => self.calibration.cal_y.p1,
-                CalTarget::R1 | CalTarget::R2 | CalTarget::A1 | CalTarget::A2 => {
-                    self.calibration.polar_cal.origin
-                }
-                CalTarget::Origin => None,
+        let snap_result = self.calibration_snap_result(target, pixel, base_size);
+        let snapped = snap_result.snapped_pixel;
+        let has_visual_snap = !matches!(
+            snap_result.snap_kind,
+            CalibrationSnapKind::None | CalibrationSnapKind::Angle15
+        );
+        self.calibration.snap_guides =
+            if has_visual_snap && snap_result.guides.iter().any(Option::is_some) {
+                snap_result.guides
+            } else {
+                empty_calibration_guides()
             };
-            self.snap_calibration_angle(pixel, snap_ref, base_size)
-        };
 
         match target {
             CalTarget::X1 => {
@@ -546,6 +1409,40 @@ impl CurcatApp {
         ];
         painter.line_segment(line, style.outline);
         painter.line_segment(line, style.stroke);
+    }
+
+    fn draw_dashed_segment(painter: &egui::Painter, start: Pos2, end: Pos2, stroke: egui::Stroke) {
+        let dir = end - start;
+        let len = dir.length();
+        if len <= f32::EPSILON {
+            return;
+        }
+        let unit = dir / len;
+        let dash_and_gap = super::super::CAL_GUIDE_DASH_LENGTH + super::super::CAL_GUIDE_GAP_LENGTH;
+        let mut offset = 0.0;
+        loop {
+            if offset >= len {
+                break;
+            }
+            let dash_end = (offset + super::super::CAL_GUIDE_DASH_LENGTH).min(len);
+            let dash_start_pos = start + unit * offset;
+            let dash_end_pos = start + unit * dash_end;
+            painter.line_segment([dash_start_pos, dash_end_pos], stroke);
+            offset += dash_and_gap;
+        }
+    }
+
+    fn draw_calibration_snap_guides(&self, painter: &egui::Painter, rect: egui::Rect) {
+        let [r, g, b, _] = Color32::LIGHT_BLUE.to_array();
+        let stroke = egui::Stroke::new(
+            (super::super::CAL_LINE_WIDTH - 0.2).max(1.0),
+            Color32::from_rgba_unmultiplied(r, g, b, 220),
+        );
+        for guide in self.calibration.snap_guides.iter().flatten() {
+            let start = rect.min + guide.start.to_vec2() * self.image.zoom;
+            let end = rect.min + guide.end.to_vec2() * self.image.zoom;
+            Self::draw_dashed_segment(painter, start, end, stroke);
+        }
     }
 
     fn draw_cal_point_base(
@@ -652,6 +1549,7 @@ impl CurcatApp {
             draw_cal_line(p1, p2);
             draw_cal_length_label(p1, p2);
         }
+        self.draw_calibration_snap_guides(painter, rect);
         if let Some(p) = self.calibration.cal_x.p1 {
             draw_cal_point(p, "X1", x_normal, false);
         }
@@ -1033,10 +1931,20 @@ impl CurcatApp {
 
                 let pointer_pos = response.interact_pointer_pos();
                 let pointer_state = PointerState::read(ui.ctx());
+                if !pointer_state.shift_pressed
+                    && matches!(self.calibration.pick_mode, PickMode::None)
+                    && self.calibration.dragging_handle.is_none()
+                {
+                    self.calibration.int_snap_sticky = None;
+                }
                 let hover_pos = response.hover_pos().or(pointer_state.latest_pos);
                 let pointer_pixel = hover_pos.map(&to_pixel);
                 let hover_pos_only = response.hover_pos();
                 let hover_pixel = hover_pos_only.map(&to_pixel);
+                self.calibration.snap_guides = empty_calibration_guides();
+                if self.calibration.dragging_handle.is_none() {
+                    self.update_calibration_pick_preview_guides(hover_pixel, base_size);
+                }
                 let (primary_clicked, click_pos) =
                     self.resolve_primary_click(&response, rect, pointer_state, pointer_pos, hover_pos);
                 let snap_preview = self.compute_snap_preview(pointer_pixel);
@@ -1192,8 +2100,7 @@ impl CurcatApp {
                         self.calibration.drag_last_pixel = Some(pixel);
                     }
                     if !pointer_state.shift_pressed || !pointer_state.primary_down {
-                        self.calibration.dragging_handle = None;
-                        self.calibration.drag_last_pixel = None;
+                        self.clear_calibration_drag_runtime();
                     }
                 } else if response.clicked_by(PointerButton::Secondary)
                     && matches!(self.calibration.pick_mode, PickMode::None)
@@ -1549,7 +2456,11 @@ impl CurcatApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_line_drag_delta, line_drag_hit_distance};
+    use super::{
+        CalTarget, CalibrationSnapKind, CartesianEndpointId, CurcatApp, clamp_line_drag_delta,
+        line_drag_hit_distance,
+    };
+    use crate::types::CoordSystem;
     use egui::{Pos2, Vec2, pos2, vec2};
 
     fn assert_vec2_close(actual: Vec2, expected: Vec2) {
@@ -1560,6 +2471,30 @@ mod tests {
     fn assert_point_in_bounds(point: Pos2, bounds: Vec2) {
         assert!(point.x >= 0.0 && point.x <= bounds.x);
         assert!(point.y >= 0.0 && point.y <= bounds.y);
+    }
+
+    fn assert_point_close(actual: Pos2, expected: Pos2) {
+        assert!((actual.x - expected.x).abs() <= f32::EPSILON);
+        assert!((actual.y - expected.y).abs() <= f32::EPSILON);
+    }
+
+    fn cartesian_app(x1: Pos2, x2: Pos2, y1: Pos2, y2: Pos2) -> CurcatApp {
+        let mut app = CurcatApp::default();
+        app.calibration.coord_system = CoordSystem::Cartesian;
+        app.image.zoom = 1.0;
+        app.calibration.cal_x.p1 = Some(x1);
+        app.calibration.cal_x.p2 = Some(x2);
+        app.calibration.cal_y.p1 = Some(y1);
+        app.calibration.cal_y.p2 = Some(y2);
+        app
+    }
+
+    fn guide_count(app: &CurcatApp) -> usize {
+        app.calibration
+            .snap_guides
+            .iter()
+            .filter(|guide| guide.is_some())
+            .count()
     }
 
     #[test]
@@ -1606,5 +2541,405 @@ mod tests {
         assert_vec2_close(delta, vec2(-2.0, 25.0));
         assert_point_in_bounds(p1 + delta, bounds);
         assert_point_in_bounds(p2 + delta, bounds);
+    }
+
+    #[test]
+    fn endpoint_snap_extension_works_on_imaginary_continuation() {
+        let mut app = cartesian_app(
+            pos2(50.0, 100.0),
+            pos2(100.0, 100.0),
+            pos2(80.0, 80.0),
+            pos2(80.0, 140.0),
+        );
+        app.calibration.snap_ext = true;
+        app.calibration.snap_vh = false;
+        app.calibration.snap_end = false;
+        app.calibration.snap_int = false;
+        let result = app
+            .endpoint_snap_reference(
+                CartesianEndpointId::X1,
+                pos2(40.0, 102.0),
+                vec2(200.0, 200.0),
+            )
+            .expect("extension snap");
+        assert!(matches!(result.snap_kind, CalibrationSnapKind::Extension));
+        assert_point_close(result.snapped_pixel, pos2(40.0, 100.0));
+        let guide = result.guides[0].expect("extension guide");
+        assert_point_close(guide.start, pos2(50.0, 100.0));
+        assert_point_close(guide.end, pos2(40.0, 100.0));
+    }
+
+    #[test]
+    fn endpoint_snap_extension_ignores_real_segment_body() {
+        let mut app = cartesian_app(
+            pos2(50.0, 100.0),
+            pos2(100.0, 100.0),
+            pos2(80.0, 80.0),
+            pos2(80.0, 140.0),
+        );
+        app.calibration.snap_ext = true;
+        app.calibration.snap_vh = false;
+        app.calibration.snap_end = false;
+        app.calibration.snap_int = false;
+        let result = app.endpoint_snap_reference(
+            CartesianEndpointId::X1,
+            pos2(65.0, 115.0),
+            vec2(200.0, 200.0),
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn endpoint_snap_extension_supports_rotated_vh_guides() {
+        let mut app = cartesian_app(
+            pos2(50.0, 50.0),
+            pos2(100.0, 100.0),
+            pos2(50.0, 100.0),
+            pos2(100.0, 50.0),
+        );
+        app.calibration.snap_ext = true;
+        app.calibration.snap_vh = false;
+        app.calibration.snap_end = false;
+        app.calibration.snap_int = false;
+        let result = app
+            .endpoint_snap_reference(
+                CartesianEndpointId::Y2,
+                pos2(70.0, 62.0),
+                vec2(200.0, 200.0),
+            )
+            .expect("rotated ext");
+        assert!(matches!(result.snap_kind, CalibrationSnapKind::Extension));
+        assert!((result.snapped_pixel.x - 66.0).abs() <= 1.0e-3);
+        assert!((result.snapped_pixel.y - 66.0).abs() <= 1.0e-3);
+        assert!(result.guides.iter().any(Option::is_some));
+    }
+
+    #[test]
+    fn endpoint_snap_vh_supports_combined_xy_alignment() {
+        let mut app = cartesian_app(
+            pos2(50.0, 100.0),
+            pos2(100.0, 100.0),
+            pos2(80.0, 80.0),
+            pos2(80.0, 140.0),
+        );
+        app.calibration.snap_ext = false;
+        app.calibration.snap_vh = true;
+        app.calibration.snap_end = false;
+        app.calibration.snap_int = false;
+        let result = app
+            .endpoint_snap_reference(
+                CartesianEndpointId::X1,
+                pos2(100.0, 140.0),
+                vec2(200.0, 200.0),
+            )
+            .expect("vh snap");
+        assert!(matches!(
+            result.snap_kind,
+            CalibrationSnapKind::VerticalHorizontal
+        ));
+        assert_point_close(result.snapped_pixel, pos2(100.0, 140.0));
+    }
+
+    #[test]
+    fn endpoint_snap_vh_does_not_duplicate_endpoints_when_end_disabled() {
+        let mut app = cartesian_app(
+            pos2(50.0, 100.0),
+            pos2(100.0, 100.0),
+            pos2(80.0, 80.0),
+            pos2(80.0, 140.0),
+        );
+        app.calibration.snap_ext = false;
+        app.calibration.snap_vh = true;
+        app.calibration.snap_end = false;
+        app.calibration.snap_int = false;
+        let result = app.endpoint_snap_reference(
+            CartesianEndpointId::X1,
+            pos2(80.0, 140.0),
+            vec2(200.0, 200.0),
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn endpoint_snap_end_respects_radius() {
+        let mut app = cartesian_app(
+            pos2(50.0, 100.0),
+            pos2(100.0, 100.0),
+            pos2(80.0, 80.0),
+            pos2(80.0, 140.0),
+        );
+        app.calibration.snap_ext = false;
+        app.calibration.snap_vh = false;
+        app.calibration.snap_end = true;
+        app.calibration.snap_int = false;
+
+        let near = app
+            .endpoint_snap_reference(
+                CartesianEndpointId::X1,
+                pos2(82.0, 138.0),
+                vec2(200.0, 200.0),
+            )
+            .expect("end snap");
+        assert!(matches!(near.snap_kind, CalibrationSnapKind::End));
+        assert_point_close(near.snapped_pixel, pos2(80.0, 140.0));
+
+        let far = app.endpoint_snap_reference(
+            CartesianEndpointId::X1,
+            pos2(10.0, 10.0),
+            vec2(200.0, 200.0),
+        );
+        assert!(far.is_none());
+    }
+
+    #[test]
+    fn endpoint_snap_end_uses_narrow_radius() {
+        let mut app = cartesian_app(
+            pos2(50.0, 100.0),
+            pos2(100.0, 100.0),
+            pos2(160.0, 60.0),
+            pos2(160.0, 140.0),
+        );
+        app.calibration.snap_ext = false;
+        app.calibration.snap_vh = false;
+        app.calibration.snap_end = true;
+        app.calibration.snap_int = false;
+        let result = app.endpoint_snap_reference(
+            CartesianEndpointId::X1,
+            pos2(108.0, 100.0),
+            vec2(220.0, 220.0),
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn endpoint_snap_int_uses_wider_radius() {
+        let mut app = cartesian_app(
+            pos2(50.0, 120.0),
+            pos2(100.0, 120.0),
+            pos2(130.0, 80.0),
+            pos2(130.0, 140.0),
+        );
+        app.calibration.snap_ext = false;
+        app.calibration.snap_vh = false;
+        app.calibration.snap_end = true;
+        app.calibration.snap_int = true;
+        let result = app
+            .endpoint_snap_reference(
+                CartesianEndpointId::X1,
+                pos2(118.0, 120.0),
+                vec2(220.0, 220.0),
+            )
+            .expect("int snap");
+        assert!(matches!(
+            result.snap_kind,
+            CalibrationSnapKind::Intersection
+        ));
+    }
+
+    #[test]
+    fn endpoint_snap_int_without_competition_is_not_sticky() {
+        let mut app = cartesian_app(
+            pos2(50.0, 120.0),
+            pos2(100.0, 120.0),
+            pos2(130.0, 80.0),
+            pos2(130.0, 140.0),
+        );
+        app.calibration.snap_ext = false;
+        app.calibration.snap_vh = false;
+        app.calibration.snap_end = false;
+        app.calibration.snap_int = true;
+        app.calibration.calibration_angle_snap = false;
+        let bounds = vec2(220.0, 220.0);
+
+        let first = app.calibration_snap_result(CalTarget::X1, pos2(129.0, 119.0), bounds);
+        assert!(matches!(first.snap_kind, CalibrationSnapKind::Intersection));
+
+        let second = app.calibration_snap_result(CalTarget::X1, pos2(147.0, 120.0), bounds);
+        assert!(matches!(second.snap_kind, CalibrationSnapKind::None));
+    }
+
+    #[test]
+    fn endpoint_snap_int_is_sticky_with_competition() {
+        let mut app = cartesian_app(
+            pos2(50.0, 120.0),
+            pos2(100.0, 120.0),
+            pos2(130.0, 80.0),
+            pos2(130.0, 140.0),
+        );
+        app.calibration.snap_ext = false;
+        app.calibration.snap_vh = true;
+        app.calibration.snap_end = false;
+        app.calibration.snap_int = true;
+        app.calibration.calibration_angle_snap = false;
+        let bounds = vec2(220.0, 220.0);
+
+        let first = app.calibration_snap_result(CalTarget::X1, pos2(130.0, 120.0), bounds);
+        assert!(matches!(first.snap_kind, CalibrationSnapKind::Intersection));
+
+        let sticky = app.calibration_snap_result(CalTarget::X1, pos2(147.0, 120.0), bounds);
+        assert!(matches!(
+            sticky.snap_kind,
+            CalibrationSnapKind::Intersection
+        ));
+
+        let released = app.calibration_snap_result(CalTarget::X1, pos2(151.0, 170.0), bounds);
+        assert!(matches!(released.snap_kind, CalibrationSnapKind::None));
+    }
+
+    #[test]
+    fn endpoint_snap_intersection_and_guides_work() {
+        let mut app = cartesian_app(
+            pos2(50.0, 120.0),
+            pos2(100.0, 120.0),
+            pos2(130.0, 80.0),
+            pos2(130.0, 140.0),
+        );
+        app.calibration.snap_ext = false;
+        app.calibration.snap_vh = false;
+        app.calibration.snap_end = false;
+        app.calibration.snap_int = true;
+        let result = app
+            .endpoint_snap_reference(
+                CartesianEndpointId::X1,
+                pos2(129.0, 119.0),
+                vec2(220.0, 220.0),
+            )
+            .expect("intersection snap");
+        assert!(matches!(
+            result.snap_kind,
+            CalibrationSnapKind::Intersection
+        ));
+        assert_point_close(result.snapped_pixel, pos2(130.0, 120.0));
+        let guide = result.guides[0].expect("intersection guide");
+        assert_point_close(guide.start, pos2(100.0, 120.0));
+        assert_point_close(guide.end, pos2(130.0, 120.0));
+        assert!(result.guides[1].is_none());
+    }
+
+    #[test]
+    fn endpoint_snap_tie_prefers_end_over_vh() {
+        let mut app = cartesian_app(
+            pos2(50.0, 100.0),
+            pos2(100.0, 100.0),
+            pos2(80.0, 80.0),
+            pos2(80.0, 140.0),
+        );
+        app.calibration.snap_ext = false;
+        app.calibration.snap_vh = true;
+        app.calibration.snap_end = true;
+        app.calibration.snap_int = false;
+        let result = app
+            .endpoint_snap_reference(
+                CartesianEndpointId::X1,
+                pos2(80.0, 80.0),
+                vec2(200.0, 200.0),
+            )
+            .expect("tie");
+        assert!(matches!(result.snap_kind, CalibrationSnapKind::End));
+        assert_point_close(result.snapped_pixel, pos2(80.0, 80.0));
+    }
+
+    #[test]
+    fn endpoint_snap_end_keeps_intersection_guide_on_same_point() {
+        let mut app = cartesian_app(
+            pos2(50.0, 120.0),
+            pos2(130.0, 120.0),
+            pos2(130.0, 80.0),
+            pos2(130.0, 100.0),
+        );
+        app.calibration.snap_ext = false;
+        app.calibration.snap_vh = false;
+        app.calibration.snap_end = true;
+        app.calibration.snap_int = true;
+        let result = app
+            .endpoint_snap_reference(
+                CartesianEndpointId::X1,
+                pos2(129.0, 119.0),
+                vec2(220.0, 220.0),
+            )
+            .expect("end/int tie");
+        assert!(matches!(result.snap_kind, CalibrationSnapKind::End));
+        assert_point_close(result.snapped_pixel, pos2(130.0, 120.0));
+        let guide = result.guides[0].expect("intersection guide kept");
+        assert_point_close(guide.start, pos2(130.0, 100.0));
+        assert_point_close(guide.end, pos2(130.0, 120.0));
+    }
+
+    #[test]
+    fn endpoint_snap_falls_back_to_15_deg_when_no_candidate() {
+        let mut app = cartesian_app(
+            pos2(50.0, 100.0),
+            pos2(100.0, 100.0),
+            pos2(80.0, 80.0),
+            pos2(80.0, 140.0),
+        );
+        app.calibration.snap_ext = false;
+        app.calibration.snap_vh = false;
+        app.calibration.snap_end = false;
+        app.calibration.snap_int = false;
+        app.calibration.calibration_angle_snap = true;
+        let pointer = pos2(77.0, 117.0);
+        let expected =
+            app.snap_calibration_angle(pointer, app.calibration.cal_x.p2, vec2(200.0, 200.0));
+        let result = app.calibration_snap_result(CalTarget::X1, pointer, vec2(200.0, 200.0));
+        assert!(matches!(result.snap_kind, CalibrationSnapKind::Angle15));
+        assert_point_close(result.snapped_pixel, expected);
+        assert!(result.guides.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn apply_calibration_point_keeps_guides_for_snaps_with_guides() {
+        let mut app = cartesian_app(
+            pos2(50.0, 100.0),
+            pos2(100.0, 100.0),
+            pos2(80.0, 80.0),
+            pos2(80.0, 140.0),
+        );
+        app.calibration.snap_ext = true;
+        app.calibration.snap_vh = false;
+        app.calibration.snap_end = false;
+        app.calibration.snap_int = false;
+        let mut x_mapping = app.calibration.cal_x.mapping();
+        let mut y_mapping = app.calibration.cal_y.mapping();
+        let mut polar_mapping = None;
+        app.apply_calibration_point(
+            CalTarget::X1,
+            pos2(40.0, 101.0),
+            vec2(200.0, 200.0),
+            super::CalUpdateMode::Drag,
+            &mut x_mapping,
+            &mut y_mapping,
+            &mut polar_mapping,
+        );
+        assert!(guide_count(&app) > 0);
+
+        app.calibration.snap_ext = false;
+        app.calibration.snap_vh = true;
+        app.apply_calibration_point(
+            CalTarget::X1,
+            pos2(98.0, 138.0),
+            vec2(200.0, 200.0),
+            super::CalUpdateMode::Drag,
+            &mut x_mapping,
+            &mut y_mapping,
+            &mut polar_mapping,
+        );
+        assert!(guide_count(&app) > 0);
+
+        app.calibration.snap_ext = false;
+        app.calibration.snap_vh = false;
+        app.calibration.snap_end = false;
+        app.calibration.snap_int = false;
+        app.calibration.calibration_angle_snap = false;
+        app.apply_calibration_point(
+            CalTarget::X1,
+            pos2(97.0, 137.0),
+            vec2(200.0, 200.0),
+            super::CalUpdateMode::Drag,
+            &mut x_mapping,
+            &mut y_mapping,
+            &mut polar_mapping,
+        );
+        assert_eq!(guide_count(&app), 0);
     }
 }

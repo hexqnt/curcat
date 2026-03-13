@@ -137,6 +137,20 @@ pub enum TextKey {
     CoordSystemForCalibrationExport,
     Snap15,
     Snap15Hover,
+    CalSnapExt,
+    CalSnapExtHover,
+    CalSnapVh,
+    CalSnapVhHover,
+    CalSnapEnd,
+    CalSnapEndHover,
+    CalSnapInt,
+    CalSnapIntHover,
+    CalSnapMenu,
+    CalSnapMenuHover,
+    CalSnapPointGroup,
+    CalSnapPointGroupHover,
+    CalSnapLineGroup,
+    CalSnapLineGroupHover,
     ShowCalibrationOverlay,
     ShowCalibrationOverlayHover,
     Unit,
@@ -291,7 +305,7 @@ pub enum TextKey {
 
 impl TextKey {
     #[cfg(test)]
-    pub const ALL: [Self; 243] = [
+    pub const ALL: [Self; 257] = [
         Self::File,
         Self::Appearance,
         Self::OpenImage,
@@ -385,6 +399,20 @@ impl TextKey {
         Self::CoordSystemForCalibrationExport,
         Self::Snap15,
         Self::Snap15Hover,
+        Self::CalSnapExt,
+        Self::CalSnapExtHover,
+        Self::CalSnapVh,
+        Self::CalSnapVhHover,
+        Self::CalSnapEnd,
+        Self::CalSnapEndHover,
+        Self::CalSnapInt,
+        Self::CalSnapIntHover,
+        Self::CalSnapMenu,
+        Self::CalSnapMenuHover,
+        Self::CalSnapPointGroup,
+        Self::CalSnapPointGroupHover,
+        Self::CalSnapLineGroup,
+        Self::CalSnapLineGroupHover,
         Self::ShowCalibrationOverlay,
         Self::ShowCalibrationOverlayHover,
         Self::Unit,
@@ -927,6 +955,22 @@ const fn en_text(key: TextKey) -> &'static str {
         TextKey::CoordSystemForCalibrationExport => "Coordinate system for calibration and export",
         TextKey::Snap15 => "15° snap",
         TextKey::Snap15Hover => "Snap calibration lines to 15° steps while picking or dragging",
+        TextKey::CalSnapExt => "EXT",
+        TextKey::CalSnapExtHover => "Snap to line extensions and to rotated axis-aligned guides",
+        TextKey::CalSnapVh => "V/H",
+        TextKey::CalSnapVhHover => {
+            "Snap to shared vertical/horizontal coordinates of calibration endpoints"
+        }
+        TextKey::CalSnapEnd => "END",
+        TextKey::CalSnapEndHover => "Snap endpoint to another calibration endpoint",
+        TextKey::CalSnapInt => "INT",
+        TextKey::CalSnapIntHover => "Snap to intersection of infinite X and Y calibration lines",
+        TextKey::CalSnapMenu => "CAD snap",
+        TextKey::CalSnapMenuHover => "Open CAD-like calibration snap settings",
+        TextKey::CalSnapPointGroup => "Point snaps",
+        TextKey::CalSnapPointGroupHover => "Toggle endpoint and intersection snaps",
+        TextKey::CalSnapLineGroup => "Line snaps",
+        TextKey::CalSnapLineGroupHover => "Toggle extension and alignment snaps",
         TextKey::ShowCalibrationOverlay => "Show calibration overlay",
         TextKey::ShowCalibrationOverlayHover => {
             "Show or hide calibration lines and point labels on the image"
@@ -1229,6 +1273,26 @@ const fn ru_text(key: TextKey) -> Option<&'static str> {
         TextKey::Snap15Hover => {
             Some("Привязывать калибровочные линии к шагу 15° при выборе или перетаскивании")
         }
+        TextKey::CalSnapExt => Some("EXT"),
+        TextKey::CalSnapExtHover => {
+            Some("Привязка к продолжениям линий и к повернутым локальным осям")
+        }
+        TextKey::CalSnapVh => Some("V/H"),
+        TextKey::CalSnapVhHover => {
+            Some("Привязка к общим вертикалям/горизонталям концов калибровочных линий")
+        }
+        TextKey::CalSnapEnd => Some("END"),
+        TextKey::CalSnapEndHover => Some("Привязка конца к другому концу калибровочной линии"),
+        TextKey::CalSnapInt => Some("INT"),
+        TextKey::CalSnapIntHover => {
+            Some("Привязка к пересечению бесконечных линий калибровки X и Y")
+        }
+        TextKey::CalSnapMenu => Some("CAD snap"),
+        TextKey::CalSnapMenuHover => Some("Открыть настройки CAD-подобных привязок калибровки"),
+        TextKey::CalSnapPointGroup => Some("Точечные привязки"),
+        TextKey::CalSnapPointGroupHover => Some("Включить/выключить привязки END и INT"),
+        TextKey::CalSnapLineGroup => Some("Линейные привязки"),
+        TextKey::CalSnapLineGroupHover => Some("Включить/выключить привязки EXT и V/H"),
         TextKey::ShowCalibrationOverlay => Some("Показывать калибровочный оверлей"),
         TextKey::ShowCalibrationOverlayHover => {
             Some("Показать или скрыть калибровочные линии и подписи точек на изображении")
