@@ -281,6 +281,33 @@ impl CurcatApp {
         let zoom_ir = egui::ComboBox::from_id_salt("zoom_combo")
             .selected_text(Self::format_zoom(self.image.zoom))
             .show_ui(ui, |ui| {
+                if ui
+                    .add(
+                        egui::Button::new(format!("{} {}", icons::ICON_FIT, self.t(TextKey::Fit)))
+                            .shortcut_text("Ctrl+F"),
+                    )
+                    .on_hover_text(self.t(TextKey::FitHover))
+                    .clicked()
+                {
+                    self.fit_image_to_viewport();
+                    ui.close();
+                }
+                if ui
+                    .add(
+                        egui::Button::new(format!(
+                            "{} {}",
+                            icons::ICON_RESET_VIEW,
+                            self.t(TextKey::ResetView)
+                        ))
+                        .shortcut_text("Ctrl+R"),
+                    )
+                    .on_hover_text(self.t(TextKey::ResetViewHover))
+                    .clicked()
+                {
+                    self.reset_view();
+                    ui.close();
+                }
+                ui.separator();
                 for &preset in super::super::ZOOM_PRESETS {
                     let label = Self::format_zoom(preset);
                     let selected = (self.image.zoom - preset).abs() < 0.0001;
@@ -292,30 +319,6 @@ impl CurcatApp {
         zoom_ir
             .response
             .on_hover_text(self.t(TextKey::ZoomPresetsHover));
-        if ui
-            .add(
-                egui::Button::new(format!("{} {}", icons::ICON_FIT, self.t(TextKey::Fit)))
-                    .shortcut_text("Ctrl+F"),
-            )
-            .on_hover_text(self.t(TextKey::FitHover))
-            .clicked()
-        {
-            self.fit_image_to_viewport();
-        }
-        if ui
-            .add(
-                egui::Button::new(format!(
-                    "{} {}",
-                    icons::ICON_RESET_VIEW,
-                    self.t(TextKey::ResetView)
-                ))
-                .shortcut_text("Ctrl+R"),
-            )
-            .on_hover_text(self.t(TextKey::ResetViewHover))
-            .clicked()
-        {
-            self.reset_view();
-        }
     }
 
     fn ui_middle_pan_toggle(&mut self, ui: &mut egui::Ui) {

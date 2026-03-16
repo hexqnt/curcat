@@ -30,7 +30,7 @@ impl CurcatApp {
 
     pub(crate) fn auto_tune_sample_count(&mut self) {
         if !self.calibration_ready() {
-            self.set_status(match self.calibration.coord_system {
+            self.set_status_warn(match self.calibration.coord_system {
                 CoordSystem::Cartesian => match self.ui.language {
                     UiLanguage::En => "Complete both axis calibrations before auto-tuning samples.",
                     UiLanguage::Ru => "Завершите калибровку обеих осей перед автоподбором семплов.",
@@ -64,7 +64,7 @@ impl CurcatApp {
         );
         let nums = self.sorted_numeric_points_cache();
         if nums.len() < 2 {
-            self.set_status(match self.ui.language {
+            self.set_status_warn(match self.ui.language {
                 UiLanguage::En => "Add at least two points before auto-tuning samples.",
                 UiLanguage::Ru => "Добавьте как минимум две точки перед автоподбором семплов.",
             });

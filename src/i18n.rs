@@ -606,8 +606,8 @@ impl I18n {
 
     pub fn format_fit_view(self, percent: f32) -> String {
         match self.lang {
-            UiLanguage::En => format!("Fit view: {:.0}%", percent),
-            UiLanguage::Ru => format!("Подогнать вид: {:.0}%", percent),
+            UiLanguage::En => format!("Fit view: {percent:.0}%"),
+            UiLanguage::Ru => format!("Подогнать вид: {percent:.0}%"),
         }
     }
 
@@ -715,6 +715,7 @@ impl I18n {
         )
     }
 
+    #[allow(clippy::unused_self)]
     pub fn format_axis_range(self, label: &str, min: &str, max: &str, span: &str) -> String {
         format!("{label}: {min} … {max} (Δ {span})")
     }
@@ -726,6 +727,7 @@ impl I18n {
         }
     }
 
+    #[allow(clippy::unused_self)]
     pub fn format_axis_pixels_only(self, label: &str, min: f32, max: f32, span: f32) -> String {
         format!("{label} (px): {min:.1} … {max:.1} (Δ {span:.1} px)")
     }
@@ -840,6 +842,7 @@ const fn choose_text(lang: UiLanguage, en: &'static str, ru: Option<&'static str
     }
 }
 
+#[allow(clippy::match_same_arms, clippy::too_many_lines)]
 const fn en_text(key: TextKey) -> &'static str {
     match key {
         TextKey::File => "File",
@@ -879,7 +882,7 @@ const fn en_text(key: TextKey) -> &'static str {
         TextKey::FlipV => "Flip V",
         TextKey::Zoom => "Zoom:",
         TextKey::ZoomHover => "Choose a preset zoom level",
-        TextKey::ZoomPresetsHover => "Zoom presets (percent)",
+        TextKey::ZoomPresetsHover => "Zoom presets plus Fit/Reset view actions",
         TextKey::Fit => "Fit",
         TextKey::FitHover => "Fit the image into the viewport (Ctrl+F)",
         TextKey::ResetView => "Reset view",
@@ -1144,6 +1147,11 @@ const fn en_text(key: TextKey) -> &'static str {
     }
 }
 
+#[allow(
+    clippy::match_same_arms,
+    clippy::too_many_lines,
+    clippy::unnecessary_wraps
+)]
 const fn ru_text(key: TextKey) -> Option<&'static str> {
     match key {
         TextKey::File => Some("Файл"),
@@ -1185,7 +1193,7 @@ const fn ru_text(key: TextKey) -> Option<&'static str> {
         TextKey::FlipV => Some("Вертик."),
         TextKey::Zoom => Some("Масштаб:"),
         TextKey::ZoomHover => Some("Выбрать предустановленный масштаб"),
-        TextKey::ZoomPresetsHover => Some("Предустановки масштаба (в процентах)"),
+        TextKey::ZoomPresetsHover => Some("Предустановки масштаба и команды Вписать/Сбросить вид"),
         TextKey::Fit => Some("Вписать"),
         TextKey::FitHover => Some("Вписать изображение в область просмотра (Ctrl+F)"),
         TextKey::ResetView => Some("Сбросить вид"),

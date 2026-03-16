@@ -58,6 +58,7 @@ impl AutoTraceConfig {
 }
 
 impl CurcatApp {
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn auto_trace_from(&mut self, pixel_hint: Pos2) {
         if self.image.image.is_none() {
             self.set_status(match self.ui.language {

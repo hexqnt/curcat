@@ -238,16 +238,10 @@ impl ExportConfig {
 }
 
 /// Root application configuration loaded from TOML.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
     pub language: Option<UiLanguage>,
-}
-
-impl Default for UiConfig {
-    fn default() -> Self {
-        Self { language: None }
-    }
 }
 
 /// Root application configuration loaded from TOML.

@@ -209,7 +209,7 @@ impl CurcatApp {
                 ),
             });
         } else {
-            self.set_status(match self.ui.language {
+            self.set_status_warn(match self.ui.language {
                 UiLanguage::En => "Unable to pick color at cursor.",
                 UiLanguage::Ru => "Не удалось выбрать цвет под курсором.",
             });

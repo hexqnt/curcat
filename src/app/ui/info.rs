@@ -1,13 +1,20 @@
 use super::super::{
-    CurcatApp, describe_aspect_ratio, format_system_time, human_readable_bytes, total_pixel_count,
+    CurcatApp, PickMode, StatusLevel, describe_aspect_ratio, format_system_time,
+    human_readable_bytes, total_pixel_count,
 };
 use super::stats::{AxisKind, axis_length, format_span};
 use crate::i18n::TextKey;
 use crate::types::{AxisUnit, AxisValue, CoordSystem, PolarMapping};
-use egui::{Color32, RichText};
+use egui::{Color32, CornerRadius, Margin, RichText, Stroke};
+use std::time::{Duration, Instant};
 
 impl CurcatApp {
+    const STATUS_INFO_TTL: Duration = Duration::from_secs(6);
+    const STATUS_WARN_TTL: Duration = Duration::from_secs(10);
+    const STATUS_COPY_FEEDBACK_TTL: Duration = Duration::from_secs(2);
+
     pub(crate) fn ui_status_bar(&mut self, ui: &mut egui::Ui) {
+        self.tick_status_timers(ui.ctx());
         let points_count = self.points.points.len();
         let i18n = self.i18n();
         ui.horizontal(|ui| {
@@ -17,13 +24,59 @@ impl CurcatApp {
                         .small()
                         .color(Color32::from_gray(180)),
                 );
-                if let Some(msg) = &self.ui.last_status {
+                ui.separator();
+                let (mode_label, mode_color) = self.cursor_mode_chip(ui.ctx());
+                Self::draw_mode_chip(ui, &mode_label, mode_color);
+                let mut dismiss_status = false;
+                let mut copy_error_text: Option<String> = None;
+                if let Some(status) = self.ui.last_status.as_ref() {
+                    let status_text = status.text.clone();
+                    let status_level = status.level;
                     ui.separator();
                     ui.label(
-                        RichText::new(msg.as_str())
+                        RichText::new(status_text.as_str())
                             .small()
-                            .color(Color32::from_gray(200)),
+                            .color(Self::status_color(status_level)),
                     );
+                    if status_level == StatusLevel::Error {
+                        ui.add_space(6.0);
+                        let copied = self
+                            .ui
+                            .status_copy_feedback_until
+                            .is_some_and(|deadline| Instant::now() < deadline);
+                        let copy_label = match (self.ui.language, copied) {
+                            (crate::i18n::UiLanguage::En, false) => "Copy details",
+                            (crate::i18n::UiLanguage::En, true) => "Copied",
+                            (crate::i18n::UiLanguage::Ru, false) => "Скопировать",
+                            (crate::i18n::UiLanguage::Ru, true) => "Скопировано",
+                        };
+                        let hover = match self.ui.language {
+                            crate::i18n::UiLanguage::En => "Copy the full error message",
+                            crate::i18n::UiLanguage::Ru => {
+                                "Скопировать полный текст ошибки в буфер обмена"
+                            }
+                        };
+                        if ui.small_button(copy_label).on_hover_text(hover).clicked() {
+                            copy_error_text = Some(status_text);
+                        }
+                    }
+                    ui.add_space(4.0);
+                    let close_hover = match self.ui.language {
+                        crate::i18n::UiLanguage::En => "Dismiss status message",
+                        crate::i18n::UiLanguage::Ru => "Скрыть сообщение статуса",
+                    };
+                    if ui.small_button("✕").on_hover_text(close_hover).clicked() {
+                        dismiss_status = true;
+                    }
+                }
+                if let Some(text) = copy_error_text {
+                    ui.ctx().copy_text(text);
+                    self.ui.status_copy_feedback_until =
+                        Some(Instant::now() + Self::STATUS_COPY_FEEDBACK_TTL);
+                }
+                if dismiss_status {
+                    self.ui.last_status = None;
+                    self.ui.status_copy_feedback_until = None;
                 }
             });
 
@@ -199,6 +252,216 @@ impl CurcatApp {
 }
 
 impl CurcatApp {
+    const fn status_ttl(level: StatusLevel) -> Option<Duration> {
+        match level {
+            StatusLevel::Info => Some(Self::STATUS_INFO_TTL),
+            StatusLevel::Warn => Some(Self::STATUS_WARN_TTL),
+            StatusLevel::Error => None,
+        }
+    }
+
+    fn tick_status_timers(&mut self, ctx: &egui::Context) {
+        let now = Instant::now();
+        if let Some(status) = self.ui.last_status.as_ref()
+            && let Some(ttl) = Self::status_ttl(status.level)
+        {
+            let elapsed = now.saturating_duration_since(status.created_at);
+            if elapsed >= ttl {
+                self.ui.last_status = None;
+            } else if let Some(remaining) = ttl.checked_sub(elapsed) {
+                ctx.request_repaint_after(remaining);
+            }
+        }
+
+        if let Some(deadline) = self.ui.status_copy_feedback_until {
+            if now >= deadline {
+                self.ui.status_copy_feedback_until = None;
+            } else if let Some(remaining) = deadline.checked_duration_since(now) {
+                ctx.request_repaint_after(remaining);
+            }
+        }
+    }
+
+    const fn status_color(level: StatusLevel) -> Color32 {
+        match level {
+            StatusLevel::Info => Color32::from_gray(200),
+            StatusLevel::Warn => Color32::from_rgb(242, 194, 102),
+            StatusLevel::Error => Color32::from_rgb(240, 128, 128),
+        }
+    }
+
+    fn cursor_mode_chip(&self, ctx: &egui::Context) -> (String, Color32) {
+        let (delete_down, shift_pressed, ctrl_pressed) = ctx.input(|i| {
+            (
+                i.key_down(egui::Key::Delete),
+                i.modifiers.shift,
+                i.modifiers.ctrl,
+            )
+        });
+        if let Some(pick_mode) = self.pick_mode_chip() {
+            return pick_mode;
+        }
+        if self.interaction.auto_place_state.active {
+            return match self.ui.language {
+                crate::i18n::UiLanguage::En => {
+                    ("Auto-place".to_string(), Color32::from_rgb(170, 220, 255))
+                }
+                crate::i18n::UiLanguage::Ru => (
+                    "Авто-расстановка".to_string(),
+                    Color32::from_rgb(170, 220, 255),
+                ),
+            };
+        }
+        if delete_down {
+            return match self.ui.language {
+                crate::i18n::UiLanguage::En => {
+                    ("Delete point".to_string(), Color32::from_rgb(255, 150, 150))
+                }
+                crate::i18n::UiLanguage::Ru => (
+                    "Удаление точки".to_string(),
+                    Color32::from_rgb(255, 150, 150),
+                ),
+            };
+        }
+        if shift_pressed {
+            return match self.ui.language {
+                crate::i18n::UiLanguage::En => {
+                    ("Drag".to_string(), Color32::from_rgb(190, 225, 255))
+                }
+                crate::i18n::UiLanguage::Ru => (
+                    "Перетаскивание".to_string(),
+                    Color32::from_rgb(190, 225, 255),
+                ),
+            };
+        }
+        if ctrl_pressed {
+            return match self.ui.language {
+                crate::i18n::UiLanguage::En => {
+                    ("Zoom".to_string(), Color32::from_rgb(186, 235, 186))
+                }
+                crate::i18n::UiLanguage::Ru => {
+                    ("Масштаб".to_string(), Color32::from_rgb(186, 235, 186))
+                }
+            };
+        }
+        match self.ui.language {
+            crate::i18n::UiLanguage::En => ("Normal".to_string(), Color32::from_gray(210)),
+            crate::i18n::UiLanguage::Ru => ("Обычный".to_string(), Color32::from_gray(210)),
+        }
+    }
+
+    fn pick_mode_chip(&self) -> Option<(String, Color32)> {
+        match self.calibration.pick_mode {
+            PickMode::None => None,
+            PickMode::X1 => Some(match self.ui.language {
+                crate::i18n::UiLanguage::En => {
+                    ("Pick X1".to_string(), Color32::from_rgb(190, 225, 255))
+                }
+                crate::i18n::UiLanguage::Ru => {
+                    ("Выбор X1".to_string(), Color32::from_rgb(190, 225, 255))
+                }
+            }),
+            PickMode::X2 => Some(match self.ui.language {
+                crate::i18n::UiLanguage::En => {
+                    ("Pick X2".to_string(), Color32::from_rgb(190, 225, 255))
+                }
+                crate::i18n::UiLanguage::Ru => {
+                    ("Выбор X2".to_string(), Color32::from_rgb(190, 225, 255))
+                }
+            }),
+            PickMode::Y1 => Some(match self.ui.language {
+                crate::i18n::UiLanguage::En => {
+                    ("Pick Y1".to_string(), Color32::from_rgb(200, 255, 200))
+                }
+                crate::i18n::UiLanguage::Ru => {
+                    ("Выбор Y1".to_string(), Color32::from_rgb(200, 255, 200))
+                }
+            }),
+            PickMode::Y2 => Some(match self.ui.language {
+                crate::i18n::UiLanguage::En => {
+                    ("Pick Y2".to_string(), Color32::from_rgb(200, 255, 200))
+                }
+                crate::i18n::UiLanguage::Ru => {
+                    ("Выбор Y2".to_string(), Color32::from_rgb(200, 255, 200))
+                }
+            }),
+            PickMode::Origin => Some(match self.ui.language {
+                crate::i18n::UiLanguage::En => {
+                    ("Pick origin".to_string(), Color32::from_rgb(255, 230, 180))
+                }
+                crate::i18n::UiLanguage::Ru => {
+                    ("Выбор начала".to_string(), Color32::from_rgb(255, 230, 180))
+                }
+            }),
+            PickMode::R1 => Some(match self.ui.language {
+                crate::i18n::UiLanguage::En => {
+                    ("Pick R1".to_string(), Color32::from_rgb(255, 210, 160))
+                }
+                crate::i18n::UiLanguage::Ru => {
+                    ("Выбор R1".to_string(), Color32::from_rgb(255, 210, 160))
+                }
+            }),
+            PickMode::R2 => Some(match self.ui.language {
+                crate::i18n::UiLanguage::En => {
+                    ("Pick R2".to_string(), Color32::from_rgb(255, 210, 160))
+                }
+                crate::i18n::UiLanguage::Ru => {
+                    ("Выбор R2".to_string(), Color32::from_rgb(255, 210, 160))
+                }
+            }),
+            PickMode::A1 => Some(match self.ui.language {
+                crate::i18n::UiLanguage::En => {
+                    ("Pick A1".to_string(), Color32::from_rgb(200, 210, 255))
+                }
+                crate::i18n::UiLanguage::Ru => {
+                    ("Выбор A1".to_string(), Color32::from_rgb(200, 210, 255))
+                }
+            }),
+            PickMode::A2 => Some(match self.ui.language {
+                crate::i18n::UiLanguage::En => {
+                    ("Pick A2".to_string(), Color32::from_rgb(200, 210, 255))
+                }
+                crate::i18n::UiLanguage::Ru => {
+                    ("Выбор A2".to_string(), Color32::from_rgb(200, 210, 255))
+                }
+            }),
+            PickMode::CurveColor => Some(match self.ui.language {
+                crate::i18n::UiLanguage::En => (
+                    "Pick curve color".to_string(),
+                    Color32::from_rgb(255, 210, 160),
+                ),
+                crate::i18n::UiLanguage::Ru => (
+                    "Выбор цвета кривой".to_string(),
+                    Color32::from_rgb(255, 210, 160),
+                ),
+            }),
+            PickMode::AutoTrace => Some(match self.ui.language {
+                crate::i18n::UiLanguage::En => (
+                    "Auto-trace pick".to_string(),
+                    Color32::from_rgb(215, 215, 255),
+                ),
+                crate::i18n::UiLanguage::Ru => (
+                    "Авто-трассировка".to_string(),
+                    Color32::from_rgb(215, 215, 255),
+                ),
+            }),
+        }
+    }
+
+    fn draw_mode_chip(ui: &mut egui::Ui, label: &str, color: Color32) {
+        let [r, g, b, _] = color.to_array();
+        let bg = Color32::from_rgba_unmultiplied(r, g, b, 44);
+        let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(r, g, b, 150));
+        egui::Frame::new()
+            .fill(bg)
+            .stroke(stroke)
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(Margin::symmetric(6, 2))
+            .show(ui, |ui| {
+                ui.label(RichText::new(label).small().color(color));
+            });
+    }
+
     fn render_axis_stats(
         &self,
         ui: &mut egui::Ui,
@@ -321,13 +584,10 @@ impl CurcatApp {
                             AxisValue::Float(v) => v,
                             AxisValue::DateTime(_) => 0.0,
                         };
-                        ui.label(format!(
-                            "{}",
-                            self.i18n().format_angle_values(
-                                &AxisValue::Float(v1).format(),
-                                &AxisValue::Float(v2).format(),
-                                unit.label(),
-                            )
+                        ui.label(self.i18n().format_angle_values(
+                            &AxisValue::Float(v1).format(),
+                            &AxisValue::Float(v2).format(),
+                            unit.label(),
                         ));
                     } else {
                         ui.label(

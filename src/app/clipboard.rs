@@ -27,7 +27,7 @@ impl CurcatApp {
                 self.set_status(self.i18n().format_loaded_name(&name));
                 self.image.pending_fit_on_load = self.project.pending_project_apply.is_none();
             }
-            Err(err) => self.set_status(err),
+            Err(err) => self.set_status_error(err),
         }
     }
 }

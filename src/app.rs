@@ -53,7 +53,7 @@ pub use interaction::{AutoPlaceState, DragTarget, InteractionState, PrimaryPress
 pub use points::{PickedPoint, PointsState};
 pub use project_state::ProjectState;
 pub use snap_state::{PointInputMode, SnapBuildJob, SnapState};
-pub use ui_state::{NativeDialog, SidePanelPosition, UiState};
+pub use ui_state::{NativeDialog, SidePanelPosition, StatusLevel, StatusMessage, UiState};
 /// Top-level application state for the Curcat UI.
 #[allow(clippy::struct_excessive_bools)]
 pub struct CurcatApp {
@@ -196,6 +196,7 @@ impl Default for CurcatApp {
                 image_filters_window_open: false,
                 auto_trace_window_open: false,
                 last_status: None,
+                status_copy_feedback_until: None,
             },
         }
     }
@@ -203,8 +204,8 @@ impl Default for CurcatApp {
 
 impl CurcatApp {
     /// Create a new app and optionally queue an initial image load.
-    pub fn new_with_initial_path(_ctx: &Context, initial_path: Option<&Path>) -> Self {
-        egui_extras::install_image_loaders(_ctx);
+    pub fn new_with_initial_path(ctx: &Context, initial_path: Option<&Path>) -> Self {
+        egui_extras::install_image_loaders(ctx);
         let mut app = Self::default();
         if let Some(p) = initial_path {
             app.remember_image_dir_from_path(p);
@@ -238,7 +239,7 @@ impl CurcatApp {
         }
         self.ui.language = language;
         if let Err(err) = self.config.persist_ui_language(language) {
-            self.set_status(match self.ui.language {
+            self.set_status_error(match self.ui.language {
                 UiLanguage::En => format!("Failed to save language preference: {err}"),
                 UiLanguage::Ru => format!("Не удалось сохранить выбранный язык интерфейса: {err}"),
             });
@@ -250,7 +251,24 @@ impl CurcatApp {
     }
 
     fn set_status(&mut self, msg: impl Into<String>) {
-        self.ui.last_status = Some(msg.into());
+        self.set_status_with_level(StatusLevel::Info, msg);
+    }
+
+    fn set_status_warn(&mut self, msg: impl Into<String>) {
+        self.set_status_with_level(StatusLevel::Warn, msg);
+    }
+
+    fn set_status_error(&mut self, msg: impl Into<String>) {
+        self.set_status_with_level(StatusLevel::Error, msg);
+    }
+
+    fn set_status_with_level(&mut self, level: StatusLevel, msg: impl Into<String>) {
+        self.ui.last_status = Some(StatusMessage {
+            text: msg.into(),
+            level,
+            created_at: std::time::Instant::now(),
+        });
+        self.ui.status_copy_feedback_until = None;
     }
 
     fn begin_pick_mode(&mut self, mode: PickMode) {
@@ -270,7 +288,7 @@ impl CurcatApp {
         }
     }
 
-    fn pick_mode_label(&self, mode: PickMode) -> Option<&'static str> {
+    const fn pick_mode_label(&self, mode: PickMode) -> Option<&'static str> {
         match mode {
             PickMode::X1 => Some(match self.ui.language {
                 UiLanguage::En => "Picking X1",
@@ -967,12 +985,11 @@ impl eframe::App for CurcatApp {
                             picked_export_path = Some(path.clone());
                             match format.export(&path, payload) {
                                 Ok(()) => {
-                                    self.set_status(self.i18n().format_exported(format_label))
+                                    self.set_status(self.i18n().format_exported(format_label));
                                 }
                                 Err(e) => {
-                                    self.set_status(
-                                        self.i18n()
-                                            .format_export_failed(format_label, &e.to_string()),
+                                    self.set_status_error(
+                                        self.i18n().format_export_failed(format_label, &e),
                                     );
                                 }
                             }

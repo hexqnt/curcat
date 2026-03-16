@@ -197,7 +197,7 @@ impl CurcatApp {
 
     pub(super) fn handle_project_save(&mut self, path: &Path) {
         if self.project.pending_project_save.is_some() {
-            self.set_status(match self.ui.language {
+            self.set_status_warn(match self.ui.language {
                 UiLanguage::En => "Project save already in progress.",
                 UiLanguage::Ru => "Сохранение проекта уже выполняется.",
             });
@@ -207,7 +207,7 @@ impl CurcatApp {
         self.project.last_project_dir = path.parent().map(Path::to_path_buf);
         match self.build_project_save_request(path) {
             Ok(request) => self.start_project_save_job(request),
-            Err(err) => self.set_status(match self.ui.language {
+            Err(err) => self.set_status_error(match self.ui.language {
                 UiLanguage::En => format!("Project save failed: {err}"),
                 UiLanguage::Ru => format!("Ошибка сохранения проекта: {err}"),
             }),
@@ -242,7 +242,7 @@ impl CurcatApp {
                 });
             }
             Ok(ProjectSaveResult::Error(err)) => {
-                self.set_status(match self.ui.language {
+                self.set_status_error(match self.ui.language {
                     UiLanguage::En => format!("Project save failed: {err}"),
                     UiLanguage::Ru => format!("Ошибка сохранения проекта: {err}"),
                 });
@@ -251,7 +251,7 @@ impl CurcatApp {
                 self.project.pending_project_save = Some(job);
             }
             Err(TryRecvError::Disconnected) => {
-                self.set_status(match self.ui.language {
+                self.set_status_error(match self.ui.language {
                     UiLanguage::En => "Project save failed: worker disconnected.",
                     UiLanguage::Ru => "Ошибка сохранения проекта: рабочий поток отключился.",
                 });
@@ -266,7 +266,7 @@ impl CurcatApp {
         self.project.last_project_path = Some(path.clone());
         match project::load_project(&path) {
             Ok(outcome) => self.handle_loaded_project(path, outcome),
-            Err(err) => self.set_status(match self.ui.language {
+            Err(err) => self.set_status_error(match self.ui.language {
                 UiLanguage::En => format!("Failed to load project: {err}"),
                 UiLanguage::Ru => format!("Не удалось загрузить проект: {err}"),
             }),
@@ -287,7 +287,7 @@ impl CurcatApp {
                 warnings: outcome.warnings,
                 plan,
             });
-            self.set_status(match self.ui.language {
+            self.set_status_warn(match self.ui.language {
                 UiLanguage::En => "Project has warnings. Confirm to continue loading.",
                 UiLanguage::Ru => {
                     "В проекте есть предупреждения. Подтвердите продолжение загрузки."
@@ -440,7 +440,7 @@ impl CurcatApp {
                 .image
                 .actual_checksum
                 .map_or_else(|| "unknown".to_string(), |v| format!("{v:#010x}"));
-            self.set_status(match self.ui.language {
+            self.set_status_warn(match self.ui.language {
                 UiLanguage::En => format!(
                     "Project v{} loaded with checksum warning (expected {expected:#010x}, got {actual}).",
                     plan.version

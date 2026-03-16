@@ -11,7 +11,7 @@ impl CurcatApp {
         if let Some(plan) = self.project.pending_project_apply.as_ref()
             && path != plan.image.path
         {
-            self.set_status(match self.ui.language {
+            self.set_status_warn(match self.ui.language {
                 UiLanguage::En => "Project loading in progress. Wait until it finishes.",
                 UiLanguage::Ru => "Идёт загрузка проекта. Дождитесь завершения.",
             });
@@ -29,7 +29,7 @@ impl CurcatApp {
         last_modified: Option<std::time::SystemTime>,
     ) {
         if self.project.pending_project_apply.is_some() {
-            self.set_status(match self.ui.language {
+            self.set_status_warn(match self.ui.language {
                 UiLanguage::En => "Project loading in progress. Wait until it finishes.",
                 UiLanguage::Ru => "Идёт загрузка проекта. Дождитесь завершения.",
             });
@@ -75,7 +75,7 @@ impl CurcatApp {
             }
             Ok(ImageLoadResult::Error(err)) => {
                 let label = task.meta.description();
-                self.set_status(match self.ui.language {
+                self.set_status_error(match self.ui.language {
                     UiLanguage::En => format!("Failed to load {label}: {err}"),
                     UiLanguage::Ru => format!("Не удалось загрузить {label}: {err}"),
                 });
@@ -86,7 +86,7 @@ impl CurcatApp {
             }
             Err(TryRecvError::Disconnected) => {
                 let label = task.meta.description();
-                self.set_status(match self.ui.language {
+                self.set_status_error(match self.ui.language {
                     UiLanguage::En => format!("Loading {label} failed: worker disconnected."),
                     UiLanguage::Ru => format!("Ошибка загрузки {label}: рабочий поток отключился."),
                 });

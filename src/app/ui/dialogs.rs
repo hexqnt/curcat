@@ -85,7 +85,7 @@ impl CurcatApp {
                     format,
                 });
             }
-            Err(msg) => self.set_status(msg),
+            Err(msg) => self.set_status_warn(msg),
         }
     }
 
