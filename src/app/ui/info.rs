@@ -1,6 +1,6 @@
 use super::super::{
-    CurcatApp, PickMode, StatusLevel, describe_aspect_ratio, format_system_time,
-    human_readable_bytes, total_pixel_count,
+    APP_REPOSITORY, APP_VERSION, CurcatApp, PickMode, StatusLevel, describe_aspect_ratio,
+    format_system_time, human_readable_bytes, total_pixel_count,
 };
 use super::stats::{AxisKind, axis_length, format_span};
 use crate::i18n::TextKey;
@@ -17,75 +17,121 @@ impl CurcatApp {
         self.tick_status_timers(ui.ctx());
         let points_count = self.points.points.len();
         let i18n = self.i18n();
-        ui.horizontal(|ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(i18n.format_points_count(points_count))
-                        .small()
-                        .color(Color32::from_gray(180)),
-                );
-                ui.separator();
-                let (mode_label, mode_color) = self.cursor_mode_chip(ui.ctx());
-                Self::draw_mode_chip(ui, &mode_label, mode_color);
-                let mut dismiss_status = false;
-                let mut copy_error_text: Option<String> = None;
-                if let Some(status) = self.ui.last_status.as_ref() {
-                    let status_text = status.text.clone();
-                    let status_level = status.level;
-                    ui.separator();
+        let ui_lang = self.ui.language;
+        let (mode_label, mode_color) = self.cursor_mode_chip(ui.ctx());
+        let status_snapshot = self
+            .ui
+            .last_status
+            .as_ref()
+            .map(|status| (status.text.clone(), status.level));
+        let copied_feedback_active = self
+            .ui
+            .status_copy_feedback_until
+            .is_some_and(|deadline| Instant::now() < deadline);
+        let mut dismiss_status = false;
+        let mut copy_error_text: Option<String> = None;
+
+        egui::containers::Sides::new()
+            .spacing(10.0)
+            .shrink_left()
+            .truncate()
+            .show(
+                ui,
+                |ui| {
                     ui.label(
-                        RichText::new(status_text.as_str())
+                        RichText::new(i18n.format_points_count(points_count))
                             .small()
-                            .color(Self::status_color(status_level)),
+                            .color(Color32::from_gray(180)),
                     );
-                    if status_level == StatusLevel::Error {
-                        ui.add_space(6.0);
-                        let copied = self
-                            .ui
-                            .status_copy_feedback_until
-                            .is_some_and(|deadline| Instant::now() < deadline);
-                        let copy_label = match (self.ui.language, copied) {
-                            (crate::i18n::UiLanguage::En, false) => "Copy details",
-                            (crate::i18n::UiLanguage::En, true) => "Copied",
-                            (crate::i18n::UiLanguage::Ru, false) => "Скопировать",
-                            (crate::i18n::UiLanguage::Ru, true) => "Скопировано",
-                        };
-                        let hover = match self.ui.language {
-                            crate::i18n::UiLanguage::En => "Copy the full error message",
-                            crate::i18n::UiLanguage::Ru => {
-                                "Скопировать полный текст ошибки в буфер обмена"
+                    ui.separator();
+                    Self::draw_mode_chip(ui, &mode_label, mode_color);
+                    if let Some((status_text, status_level)) = status_snapshot.as_ref() {
+                        ui.separator();
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(status_text.as_str())
+                                    .small()
+                                    .color(Self::status_color(*status_level)),
+                            )
+                            .truncate(),
+                        );
+
+                        if *status_level == StatusLevel::Error {
+                            ui.add_space(6.0);
+                            let copy_label = match (ui_lang, copied_feedback_active) {
+                                (crate::i18n::UiLanguage::En, false) => "Copy details",
+                                (crate::i18n::UiLanguage::En, true) => "Copied",
+                                (crate::i18n::UiLanguage::Ru, false) => "Скопировать",
+                                (crate::i18n::UiLanguage::Ru, true) => "Скопировано",
+                            };
+                            let hover = match ui_lang {
+                                crate::i18n::UiLanguage::En => "Copy the full error message",
+                                crate::i18n::UiLanguage::Ru => {
+                                    "Скопировать полный текст ошибки в буфер обмена"
+                                }
+                            };
+                            if ui.small_button(copy_label).on_hover_text(hover).clicked() {
+                                copy_error_text = Some(status_text.clone());
                             }
+                        }
+
+                        ui.add_space(4.0);
+                        let close_hover = match ui_lang {
+                            crate::i18n::UiLanguage::En => "Dismiss status message",
+                            crate::i18n::UiLanguage::Ru => "Скрыть сообщение статуса",
                         };
-                        if ui.small_button(copy_label).on_hover_text(hover).clicked() {
-                            copy_error_text = Some(status_text);
+                        if ui.small_button("✕").on_hover_text(close_hover).clicked() {
+                            dismiss_status = true;
                         }
                     }
-                    ui.add_space(4.0);
-                    let close_hover = match self.ui.language {
-                        crate::i18n::UiLanguage::En => "Dismiss status message",
-                        crate::i18n::UiLanguage::Ru => "Скрыть сообщение статуса",
-                    };
-                    if ui.small_button("✕").on_hover_text(close_hover).clicked() {
-                        dismiss_status = true;
-                    }
-                }
-                if let Some(text) = copy_error_text {
-                    ui.ctx().copy_text(text);
-                    self.ui.status_copy_feedback_until =
-                        Some(Instant::now() + Self::STATUS_COPY_FEEDBACK_TTL);
-                }
-                if dismiss_status {
-                    self.ui.last_status = None;
-                    self.ui.status_copy_feedback_until = None;
-                }
-            });
+                },
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(i18n.format_version(APP_VERSION))
+                                .small()
+                                .color(Color32::from_gray(160)),
+                        );
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.ui_language_selector(ui);
-                ui.add_space(6.0);
-                egui::widgets::global_theme_preference_switch(ui);
-            });
-        });
+                        let github_icon = egui::Image::new(egui::include_image!(
+                            "../../../assets/tm/Octicons-mark-github.svg"
+                        ))
+                        .fit_to_exact_size(egui::vec2(13.0, 13.0));
+
+                        let hover = match ui_lang {
+                            crate::i18n::UiLanguage::En => "Open GitHub repository",
+                            crate::i18n::UiLanguage::Ru => "Открыть репозиторий на GitHub",
+                        };
+
+                        let mut github_button = egui::Button::image(github_icon)
+                            .frame(true)
+                            .min_size(egui::vec2(20.0, 20.0));
+                        if ui.visuals().dark_mode {
+                            github_button = github_button
+                                .fill(Color32::from_gray(230))
+                                .stroke(egui::Stroke::new(1.0, Color32::from_gray(120)));
+                        }
+                        let github_resp = ui.add(github_button).on_hover_text(hover);
+                        if github_resp.clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(APP_REPOSITORY));
+                        }
+                    });
+                    ui.add_space(10.0);
+                    self.ui_language_selector(ui);
+                    ui.add_space(6.0);
+                    egui::widgets::global_theme_preference_switch(ui);
+                },
+            );
+
+        if let Some(text) = copy_error_text {
+            ui.ctx().copy_text(text);
+            self.ui.status_copy_feedback_until =
+                Some(Instant::now() + Self::STATUS_COPY_FEEDBACK_TTL);
+        }
+        if dismiss_status {
+            self.ui.last_status = None;
+            self.ui.status_copy_feedback_until = None;
+        }
     }
 
     #[allow(clippy::cast_precision_loss)]

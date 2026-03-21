@@ -48,7 +48,7 @@ rust_xlsxwriter = { version = "0.94", features = ["ryu"] }
 egui-file-dialog = { version = "0.12" }
 rayon = "1.11"
 bincode = { version = "2.0", features = ["serde"] }
-lz4_flex = "0.12"
+lz4_flex = "0.13"
 crc32fast = "1.5"
 pathdiff = "0.2"
 egui_extras = { version = "0.33", features = ["svg"] }

@@ -1,7 +1,7 @@
 use super::super::common::{side_section_card, toggle_switch};
 use super::super::icons;
 use super::axis_input::sanitize_axis_text;
-use crate::app::{APP_VERSION, AxisCalUi, AxisValueField, CurcatApp, PickMode, safe_usize_to_f32};
+use crate::app::{AxisCalUi, AxisValueField, CurcatApp, PickMode, safe_usize_to_f32};
 use crate::i18n::{TextKey, UiLanguage};
 use crate::types::{AngleDirection, AngleUnit, AxisUnit, AxisValue, CoordSystem, ScaleKind};
 use egui::containers::menu::MenuButton;
@@ -272,12 +272,6 @@ impl CurcatApp {
         if remaining > 24.0 {
             ui.add_space(remaining - 20.0);
         }
-        ui.separator();
-        ui.label(
-            RichText::new(i18n.format_version(APP_VERSION))
-                .small()
-                .color(Color32::from_gray(160)),
-        );
     }
 
     fn ui_quadrant_preset_menu(

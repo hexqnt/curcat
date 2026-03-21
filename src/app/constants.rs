@@ -5,6 +5,7 @@ pub const ZOOM_SMOOTH_RESPONSE: f32 = 0.10;
 pub const ZOOM_SNAP_EPS: f32 = 0.0005;
 pub const PAN_SNAP_EPS: f32 = 0.5;
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const APP_REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 pub const POINT_HIT_RADIUS: f32 = 12.0;
 pub const CAL_LINE_DRAG_HIT_RADIUS: f32 = 6.0;
 pub const CAL_LINE_DRAG_END_GAP: f32 = 8.0;
