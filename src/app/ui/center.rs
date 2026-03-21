@@ -692,7 +692,8 @@ impl CurcatApp {
         } else {
             None
         };
-        (primary_clicked, click_pos)
+        let click_pos = Self::pos_in_rect(click_pos, rect);
+        (primary_clicked && click_pos.is_some(), click_pos)
     }
 
     fn compute_snap_preview(&mut self, pointer_pixel: Option<Pos2>) -> Option<Pos2> {
@@ -716,6 +717,10 @@ impl CurcatApp {
                 None
             }
         }
+    }
+
+    fn pos_in_rect(pos: Option<Pos2>, rect: egui::Rect) -> Option<Pos2> {
+        pos.filter(|candidate| rect.contains(*candidate))
     }
 
     fn cartesian_calibration_endpoints(&self) -> [Option<CartesianEndpoint>; 4] {
@@ -1843,6 +1848,7 @@ impl CurcatApp {
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn draw_crosshair_overlay(
         &self,
+        ui: &egui::Ui,
         painter: &egui::Painter,
         rect: egui::Rect,
         hover_pos: Option<Pos2>,
@@ -2018,19 +2024,32 @@ impl CurcatApp {
         };
 
         if !showed_color_badge
-            && let Some((icon_text, icon_color)) =
-                self.cursor_badge(delete_down, shift_pressed, ctrl_pressed)
+            && let Some(icon_badge) = self.cursor_badge(delete_down, shift_pressed, ctrl_pressed)
         {
-            let icon_font = egui::FontId::proportional(15.0);
-            let icon_galley = painter.layout_no_wrap(icon_text.to_string(), icon_font, icon_color);
-            let icon_size = icon_galley.size();
             let icon_bg = Color32::from_rgba_unmultiplied(0, 0, 0, 160);
             painter.circle_filled(badge_anchor, badge_radius, icon_bg);
-            let icon_pos = pos2(
-                icon_size.x.mul_add(-0.5, badge_anchor.x),
-                icon_size.y.mul_add(-0.5, badge_anchor.y),
-            );
-            painter.galley(icon_pos, icon_galley, icon_color);
+            match icon_badge {
+                CursorBadge::Text(icon_text, icon_color) => {
+                    let icon_font = egui::FontId::proportional(15.0);
+                    let icon_galley =
+                        painter.layout_no_wrap(icon_text.to_string(), icon_font, icon_color);
+                    let icon_size = icon_galley.size();
+                    let icon_pos = pos2(
+                        icon_size.x.mul_add(-0.5, badge_anchor.x),
+                        icon_size.y.mul_add(-0.5, badge_anchor.y),
+                    );
+                    painter.galley(icon_pos, icon_galley, icon_color);
+                }
+                CursorBadge::Icon(icon, icon_color) => {
+                    let icon_rect = egui::Rect::from_center_size(
+                        badge_anchor,
+                        Vec2::splat(icons::BADGE_ICON_SIZE),
+                    );
+                    icons::image(icon, icons::BADGE_ICON_SIZE)
+                        .tint(icon_color)
+                        .paint_at(ui, icon_rect);
+                }
+            }
         }
     }
 
@@ -2095,7 +2114,10 @@ impl CurcatApp {
                 {
                     self.calibration.int_snap_sticky = None;
                 }
-                let hover_pos = response.hover_pos().or(pointer_state.latest_pos);
+                let hover_pos = response
+                    .hover_pos()
+                    .or(pointer_pos)
+                    .or_else(|| Self::pos_in_rect(pointer_state.latest_pos, rect));
                 let pointer_pixel = hover_pos.map(&to_pixel);
                 let hover_pos_only = response.hover_pos();
                 let hover_pixel = hover_pos_only.map(&to_pixel);
@@ -2342,6 +2364,7 @@ impl CurcatApp {
                 self.draw_snap_overlay(&painter, rect, pointer_pixel, snap_preview, point_radius);
                 self.draw_curve_preview(&painter, rect);
                 self.draw_crosshair_overlay(
+                    ui,
                     &painter,
                     rect,
                     hover_pos_only,
@@ -2397,48 +2420,54 @@ impl CurcatApp {
     }
 }
 
+#[derive(Clone, Copy)]
+enum CursorBadge {
+    Text(&'static str, Color32),
+    Icon(icons::Icon, Color32),
+}
+
 impl CurcatApp {
     const fn cursor_badge(
         &self,
         delete_down: bool,
         shift_pressed: bool,
         ctrl_pressed: bool,
-    ) -> Option<(&'static str, Color32)> {
+    ) -> Option<CursorBadge> {
         if let Some(badge) = self.calibration_cursor_badge() {
             return Some(badge);
         }
         if matches!(self.calibration.pick_mode, PickMode::AutoTrace) {
-            return Some((icons::ICON_AUTO_TRACE, Color32::WHITE));
+            return Some(CursorBadge::Icon(icons::ICON_AUTO_TRACE, Color32::WHITE));
         }
         if self.interaction.auto_place_state.active {
-            return Some((icons::ICON_AUTO_PLACE, Color32::WHITE));
+            return Some(CursorBadge::Icon(icons::ICON_AUTO_PLACE, Color32::WHITE));
         }
         if matches!(self.calibration.pick_mode, PickMode::CurveColor) {
-            return Some((icons::ICON_PICK_COLOR, Color32::WHITE));
+            return Some(CursorBadge::Icon(icons::ICON_PICK_COLOR, Color32::WHITE));
         }
         if delete_down {
-            return Some((icons::ICON_DELETE_POINT, Color32::WHITE));
+            return Some(CursorBadge::Icon(icons::ICON_DELETE_POINT, Color32::WHITE));
         }
         if shift_pressed {
-            return Some((icons::ICON_PAN, Color32::WHITE));
+            return Some(CursorBadge::Icon(icons::ICON_PAN, Color32::WHITE));
         }
         if ctrl_pressed {
-            return Some((icons::ICON_ZOOM, Color32::WHITE));
+            return Some(CursorBadge::Icon(icons::ICON_ZOOM, Color32::WHITE));
         }
         None
     }
 
-    const fn calibration_cursor_badge(&self) -> Option<(&'static str, Color32)> {
+    const fn calibration_cursor_badge(&self) -> Option<CursorBadge> {
         match self.calibration.pick_mode {
-            PickMode::X1 => Some(("X1", Color32::from_rgb(190, 225, 255))),
-            PickMode::X2 => Some(("X2", Color32::from_rgb(190, 225, 255))),
-            PickMode::Y1 => Some(("Y1", Color32::from_rgb(200, 255, 200))),
-            PickMode::Y2 => Some(("Y2", Color32::from_rgb(200, 255, 200))),
-            PickMode::Origin => Some(("O", Color32::from_rgb(255, 230, 180))),
-            PickMode::R1 => Some(("R1", Color32::from_rgb(255, 210, 160))),
-            PickMode::R2 => Some(("R2", Color32::from_rgb(255, 210, 160))),
-            PickMode::A1 => Some(("A1", Color32::from_rgb(200, 210, 255))),
-            PickMode::A2 => Some(("A2", Color32::from_rgb(200, 210, 255))),
+            PickMode::X1 => Some(CursorBadge::Text("X1", Color32::from_rgb(190, 225, 255))),
+            PickMode::X2 => Some(CursorBadge::Text("X2", Color32::from_rgb(190, 225, 255))),
+            PickMode::Y1 => Some(CursorBadge::Text("Y1", Color32::from_rgb(200, 255, 200))),
+            PickMode::Y2 => Some(CursorBadge::Text("Y2", Color32::from_rgb(200, 255, 200))),
+            PickMode::Origin => Some(CursorBadge::Text("O", Color32::from_rgb(255, 230, 180))),
+            PickMode::R1 => Some(CursorBadge::Text("R1", Color32::from_rgb(255, 210, 160))),
+            PickMode::R2 => Some(CursorBadge::Text("R2", Color32::from_rgb(255, 210, 160))),
+            PickMode::A1 => Some(CursorBadge::Text("A1", Color32::from_rgb(200, 210, 255))),
+            PickMode::A2 => Some(CursorBadge::Text("A2", Color32::from_rgb(200, 210, 255))),
             _ => None,
         }
     }
@@ -2628,7 +2657,7 @@ mod tests {
         line_drag_hit_distance,
     };
     use crate::types::CoordSystem;
-    use egui::{Pos2, Vec2, pos2, vec2};
+    use egui::{Pos2, Rect, Vec2, pos2, vec2};
 
     fn assert_vec2_close(actual: Vec2, expected: Vec2) {
         assert!((actual.x - expected.x).abs() <= f32::EPSILON);
@@ -2643,6 +2672,20 @@ mod tests {
     fn assert_point_close(actual: Pos2, expected: Pos2) {
         assert!((actual.x - expected.x).abs() <= f32::EPSILON);
         assert!((actual.y - expected.y).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn pos_in_rect_accepts_inside_position() {
+        let rect = Rect::from_min_max(pos2(10.0, 20.0), pos2(30.0, 40.0));
+        let pos = CurcatApp::pos_in_rect(Some(pos2(15.0, 25.0)), rect);
+        assert_eq!(pos, Some(pos2(15.0, 25.0)));
+    }
+
+    #[test]
+    fn pos_in_rect_rejects_outside_position() {
+        let rect = Rect::from_min_max(pos2(10.0, 20.0), pos2(30.0, 40.0));
+        let pos = CurcatApp::pos_in_rect(Some(pos2(35.0, 25.0)), rect);
+        assert!(pos.is_none());
     }
 
     fn cartesian_app(x1: Pos2, x2: Pos2, y1: Pos2, y2: Pos2) -> CurcatApp {

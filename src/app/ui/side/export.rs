@@ -4,17 +4,24 @@ use crate::i18n::TextKey;
 use crate::interp::InterpAlgorithm;
 
 impl CurcatApp {
+    #[allow(clippy::too_many_arguments)]
     fn export_action_button(
         &mut self,
         ui: &mut egui::Ui,
         enabled: bool,
-        label: String,
+        icon: icons::Icon,
+        label: &str,
         shortcut: &str,
         hint: &str,
         on_click: fn(&mut Self),
     ) {
         let resp = ui
-            .add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut))
+            .add_enabled(
+                enabled,
+                egui::Button::image_and_text(icons::image(icon, icons::BUTTON_ICON_SIZE), label)
+                    .image_tint_follows_text_color(true)
+                    .shortcut_text(shortcut),
+            )
             .on_hover_text(hint);
         if resp.clicked() {
             on_click(self);
@@ -153,11 +160,8 @@ impl CurcatApp {
         self.export_action_button(
             ui,
             can_export,
-            format!(
-                "{} {}",
-                icons::ICON_EXPORT_CSV,
-                i18n.text(TextKey::ExportCsv)
-            ),
+            icons::ICON_EXPORT_CSV,
+            i18n.text(TextKey::ExportCsv),
             "Ctrl+Shift+C",
             &export_hint("CSV", "Ctrl+Shift+C"),
             Self::start_export_csv,
@@ -166,11 +170,8 @@ impl CurcatApp {
         self.export_action_button(
             ui,
             can_export,
-            format!(
-                "{} {}",
-                icons::ICON_EXPORT_JSON,
-                i18n.text(TextKey::ExportJson)
-            ),
+            icons::ICON_EXPORT_JSON,
+            i18n.text(TextKey::ExportJson),
             "Ctrl+Shift+J",
             &export_hint("JSON", "Ctrl+Shift+J"),
             Self::start_export_json,
@@ -178,11 +179,8 @@ impl CurcatApp {
         self.export_action_button(
             ui,
             can_export,
-            format!(
-                "{} {}",
-                icons::ICON_EXPORT_RON,
-                i18n.text(TextKey::ExportRon)
-            ),
+            icons::ICON_EXPORT_RON,
+            i18n.text(TextKey::ExportRon),
             "Ctrl+Shift+R",
             &export_hint("RON", "Ctrl+Shift+R"),
             Self::start_export_ron,
@@ -190,11 +188,8 @@ impl CurcatApp {
         self.export_action_button(
             ui,
             can_export,
-            format!(
-                "{} {}",
-                icons::ICON_EXPORT_XLSX,
-                i18n.text(TextKey::ExportExcel)
-            ),
+            icons::ICON_EXPORT_XLSX,
+            i18n.text(TextKey::ExportExcel),
             "Ctrl+Shift+E",
             &export_hint("Excel", "Ctrl+Shift+E"),
             Self::start_export_xlsx,

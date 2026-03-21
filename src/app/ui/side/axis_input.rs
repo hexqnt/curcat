@@ -150,14 +150,22 @@ impl CurcatApp {
             value_rect = Some(value_resp.rect);
 
             let pick_button = match language {
-                UiLanguage::En => format!("{} Pick {name}", icons::ICON_PICK_POINT),
-                UiLanguage::Ru => format!("{} Выбрать {name}", icons::ICON_PICK_POINT),
+                UiLanguage::En => format!("Pick {name}"),
+                UiLanguage::Ru => format!("Выбрать {name}"),
             };
             let pick_hover = match language {
                 UiLanguage::En => format!("Click, then pick the {name} point on the image"),
                 UiLanguage::Ru => format!("Нажмите и выберите точку {name} на изображении"),
             };
-            let pick_resp = ui.button(pick_button).on_hover_text(pick_hover);
+            let pick_resp = ui
+                .add(
+                    egui::Button::image_and_text(
+                        icons::image(icons::ICON_PICK_POINT, icons::BUTTON_ICON_SIZE),
+                        pick_button,
+                    )
+                    .image_tint_follows_text_color(true),
+                )
+                .on_hover_text(pick_hover);
             if pick_resp.clicked() {
                 requested_pick = Some(pick_mode);
             }

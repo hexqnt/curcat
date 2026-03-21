@@ -23,7 +23,7 @@ impl CalibrationPresetKind {
         }
     }
 
-    const fn icon(self) -> &'static str {
+    const fn icon(self) -> icons::Icon {
         match self {
             Self::Unit => icons::ICON_PRESET_UNIT,
             Self::Pixels => icons::ICON_PRESET_PIXELS,
@@ -282,7 +282,9 @@ impl CurcatApp {
     ) {
         let lang = self.ui.language;
         ui.add_enabled_ui(enabled, |ui| {
-            let menu = ui.menu_button(preset.icon(), |ui| {
+            let button = egui::Button::image(icons::image(preset.icon(), icons::BUTTON_ICON_SIZE))
+                .image_tint_follows_text_color(true);
+            let menu = MenuButton::from_button(button).ui(ui, |ui| {
                 for quadrant in CalibrationQuadrant::ALL {
                     let resp = ui
                         .button(quadrant.label())
@@ -293,7 +295,7 @@ impl CurcatApp {
                     }
                 }
             });
-            menu.response.on_hover_text(preset.hover_text(lang));
+            menu.0.on_hover_text(preset.hover_text(lang));
         });
     }
 
@@ -320,6 +322,7 @@ impl CurcatApp {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn ui_calibration_snap_menu(&mut self, ui: &mut egui::Ui, cartesian: bool) {
         let i18n = self.i18n();
         let active_count = usize::from(self.calibration.calibration_angle_snap)
@@ -337,11 +340,14 @@ impl CurcatApp {
                 0
             };
         let total = if cartesian { 5 } else { 1 };
-        let button = egui::Button::new(format!(
-            "{} {} ({active_count}/{total})",
-            icons::ICON_MENU,
-            i18n.text(TextKey::CalSnapMenu)
-        ));
+        let button = egui::Button::image_and_text(
+            icons::image(icons::ICON_MENU, icons::BUTTON_ICON_SIZE),
+            format!(
+                "{} ({active_count}/{total})",
+                i18n.text(TextKey::CalSnapMenu)
+            ),
+        )
+        .image_tint_follows_text_color(true);
         let menu_cfg = egui::containers::menu::MenuConfig::new()
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
         let (response, _) = MenuButton::from_button(button)
@@ -740,11 +746,11 @@ impl CurcatApp {
             let pick_resp = ui
                 .add_enabled(
                     has_image,
-                    egui::Button::new(format!(
-                        "{} {}",
-                        icons::ICON_PICK_POINT,
-                        self.t(TextKey::PickOrigin)
-                    )),
+                    egui::Button::image_and_text(
+                        icons::image(icons::ICON_PICK_POINT, icons::BUTTON_ICON_SIZE),
+                        self.t(TextKey::PickOrigin),
+                    )
+                    .image_tint_follows_text_color(true),
                 )
                 .on_hover_text(self.t(TextKey::PickOriginHover));
             if pick_resp.clicked() {

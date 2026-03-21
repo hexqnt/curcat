@@ -2,22 +2,30 @@ use super::super::{
     APP_REPOSITORY, APP_VERSION, CurcatApp, PickMode, StatusLevel, describe_aspect_ratio,
     format_system_time, human_readable_bytes, total_pixel_count,
 };
+use super::icons;
 use super::stats::{AxisKind, axis_length, format_span};
 use crate::i18n::TextKey;
 use crate::types::{AxisUnit, AxisValue, CoordSystem, PolarMapping};
-use egui::{Color32, CornerRadius, Margin, RichText, Stroke};
+use egui::{Color32, CornerRadius, FontId, Margin, RichText, Stroke};
 use std::time::{Duration, Instant};
 
 impl CurcatApp {
+    const STATUS_BAR_FONT_SIZE: f32 = 13.0;
     const STATUS_INFO_TTL: Duration = Duration::from_secs(6);
     const STATUS_WARN_TTL: Duration = Duration::from_secs(10);
     const STATUS_COPY_FEEDBACK_TTL: Duration = Duration::from_secs(2);
 
+    const fn status_bar_font() -> FontId {
+        FontId::proportional(Self::STATUS_BAR_FONT_SIZE)
+    }
+
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_status_bar(&mut self, ui: &mut egui::Ui) {
         self.tick_status_timers(ui.ctx());
         let points_count = self.points.points.len();
         let i18n = self.i18n();
         let ui_lang = self.ui.language;
+        let status_font = Self::status_bar_font();
         let (mode_label, mode_color) = self.cursor_mode_chip(ui.ctx());
         let status_snapshot = self
             .ui
@@ -40,17 +48,17 @@ impl CurcatApp {
                 |ui| {
                     ui.label(
                         RichText::new(i18n.format_points_count(points_count))
-                            .small()
+                            .font(status_font.clone())
                             .color(Color32::from_gray(180)),
                     );
                     ui.separator();
-                    Self::draw_mode_chip(ui, &mode_label, mode_color);
+                    Self::draw_mode_chip(ui, &mode_label, mode_color, &status_font);
                     if let Some((status_text, status_level)) = status_snapshot.as_ref() {
                         ui.separator();
                         ui.add(
                             egui::Label::new(
                                 RichText::new(status_text.as_str())
-                                    .small()
+                                    .font(status_font.clone())
                                     .color(Self::status_color(*status_level)),
                             )
                             .truncate(),
@@ -70,7 +78,13 @@ impl CurcatApp {
                                     "Скопировать полный текст ошибки в буфер обмена"
                                 }
                             };
-                            if ui.small_button(copy_label).on_hover_text(hover).clicked() {
+                            if ui
+                                .add(egui::Button::new(
+                                    RichText::new(copy_label).font(status_font.clone()),
+                                ))
+                                .on_hover_text(hover)
+                                .clicked()
+                            {
                                 copy_error_text = Some(status_text.clone());
                             }
                         }
@@ -80,7 +94,19 @@ impl CurcatApp {
                             crate::i18n::UiLanguage::En => "Dismiss status message",
                             crate::i18n::UiLanguage::Ru => "Скрыть сообщение статуса",
                         };
-                        if ui.small_button("✕").on_hover_text(close_hover).clicked() {
+                        if ui
+                            .add(
+                                egui::Button::image(icons::image(
+                                    icons::ICON_CLOSE,
+                                    icons::INLINE_ICON_SIZE,
+                                ))
+                                .small()
+                                .frame(false)
+                                .image_tint_follows_text_color(true),
+                            )
+                            .on_hover_text(close_hover)
+                            .clicked()
+                        {
                             dismiss_status = true;
                         }
                     }
@@ -89,7 +115,7 @@ impl CurcatApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new(i18n.format_version(APP_VERSION))
-                                .small()
+                                .font(status_font.clone())
                                 .color(Color32::from_gray(160)),
                         );
 
@@ -494,7 +520,7 @@ impl CurcatApp {
         }
     }
 
-    fn draw_mode_chip(ui: &mut egui::Ui, label: &str, color: Color32) {
+    fn draw_mode_chip(ui: &mut egui::Ui, label: &str, color: Color32, font: &FontId) {
         let [r, g, b, _] = color.to_array();
         let bg = Color32::from_rgba_unmultiplied(r, g, b, 44);
         let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(r, g, b, 150));
@@ -504,7 +530,7 @@ impl CurcatApp {
             .corner_radius(CornerRadius::same(6))
             .inner_margin(Margin::symmetric(6, 2))
             .show(ui, |ui| {
-                ui.label(RichText::new(label).small().color(color));
+                ui.label(RichText::new(label).font(font.clone()).color(color));
             });
     }
 

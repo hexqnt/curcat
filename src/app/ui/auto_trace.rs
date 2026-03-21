@@ -48,11 +48,11 @@ impl CurcatApp {
         if ui
             .add_enabled(
                 can_trace,
-                egui::Button::new(format!(
-                    "{} {}",
-                    icons::ICON_AUTO_TRACE,
-                    i18n.text(TextKey::TraceFromClick)
-                )),
+                egui::Button::image_and_text(
+                    icons::image(icons::ICON_AUTO_TRACE, icons::BUTTON_ICON_SIZE),
+                    i18n.text(TextKey::TraceFromClick),
+                )
+                .image_tint_follows_text_color(true),
             )
             .on_hover_text(trace_hint)
             .clicked()

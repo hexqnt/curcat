@@ -66,55 +66,80 @@ impl CurcatApp {
     }
 
     fn ui_file_menu(&mut self, ui: &mut egui::Ui, can_save_project: bool) -> egui::Response {
-        let file_menu = ui.menu_button(
-            format!("{} {}", icons::ICON_MENU, self.t(TextKey::File)),
-            |ui| {
-                if ui
-                    .add(egui::Button::new(self.t(TextKey::OpenImage)).shortcut_text("Ctrl+O"))
-                    .on_hover_text(self.t(TextKey::OpenImageHover))
-                    .clicked()
-                {
-                    self.open_image_dialog();
-                    ui.close();
-                }
-
-                if ui
-                    .add(egui::Button::new(self.t(TextKey::PasteImage)).shortcut_text("Ctrl+V"))
-                    .on_hover_text(self.t(TextKey::PasteImageHover))
-                    .clicked()
-                {
-                    self.paste_image_from_clipboard(ui.ctx());
-                    ui.close();
-                }
-
-                ui.separator();
-
-                if ui
-                    .add(
-                        egui::Button::new(self.t(TextKey::LoadProject))
-                            .shortcut_text("Ctrl+Shift+P"),
+        let button = egui::Button::image_and_text(
+            icons::image(icons::ICON_MENU, icons::BUTTON_ICON_SIZE),
+            self.t(TextKey::File),
+        )
+        .image_tint_follows_text_color(true);
+        let (response, _) = MenuButton::from_button(button).ui(ui, |ui| {
+            if ui
+                .add(
+                    egui::Button::image_and_text(
+                        icons::image(icons::ICON_OPEN_IMAGE, icons::BUTTON_ICON_SIZE),
+                        self.t(TextKey::OpenImage),
                     )
-                    .on_hover_text(self.t(TextKey::LoadProjectHover))
-                    .clicked()
-                {
-                    self.open_project_dialog();
-                    ui.close();
-                }
+                    .image_tint_follows_text_color(true)
+                    .shortcut_text("Ctrl+O"),
+                )
+                .on_hover_text(self.t(TextKey::OpenImageHover))
+                .clicked()
+            {
+                self.open_image_dialog();
+                ui.close();
+            }
 
-                if ui
-                    .add_enabled(
-                        can_save_project,
-                        egui::Button::new(self.t(TextKey::SaveProject)).shortcut_text("Ctrl+S"),
+            if ui
+                .add(
+                    egui::Button::image_and_text(
+                        icons::image(icons::ICON_PASTE_IMAGE, icons::BUTTON_ICON_SIZE),
+                        self.t(TextKey::PasteImage),
                     )
-                    .on_hover_text(self.t(TextKey::SaveProjectHover))
-                    .clicked()
-                {
-                    self.save_project_dialog();
-                    ui.close();
-                }
-            },
-        );
-        file_menu.response
+                    .image_tint_follows_text_color(true)
+                    .shortcut_text("Ctrl+V"),
+                )
+                .on_hover_text(self.t(TextKey::PasteImageHover))
+                .clicked()
+            {
+                self.paste_image_from_clipboard(ui.ctx());
+                ui.close();
+            }
+
+            ui.separator();
+
+            if ui
+                .add(
+                    egui::Button::image_and_text(
+                        icons::image(icons::ICON_LOAD_PROJECT, icons::BUTTON_ICON_SIZE),
+                        self.t(TextKey::LoadProject),
+                    )
+                    .image_tint_follows_text_color(true)
+                    .shortcut_text("Ctrl+Shift+P"),
+                )
+                .on_hover_text(self.t(TextKey::LoadProjectHover))
+                .clicked()
+            {
+                self.open_project_dialog();
+                ui.close();
+            }
+
+            if ui
+                .add_enabled(
+                    can_save_project,
+                    egui::Button::image_and_text(
+                        icons::image(icons::ICON_SAVE_PROJECT, icons::BUTTON_ICON_SIZE),
+                        self.t(TextKey::SaveProject),
+                    )
+                    .image_tint_follows_text_color(true)
+                    .shortcut_text("Ctrl+S"),
+                )
+                .on_hover_text(self.t(TextKey::SaveProjectHover))
+                .clicked()
+            {
+                self.save_project_dialog();
+                ui.close();
+            }
+        });
+        response
     }
 
     fn ui_side_toggle(&mut self, ui: &mut egui::Ui) {
@@ -123,8 +148,12 @@ impl CurcatApp {
         } else {
             self.t(TextKey::ShowSide)
         };
-        let button = egui::Button::new(format!("{} {side_label}", icons::ICON_SIDE_TOGGLE))
-            .shortcut_text("Ctrl+B");
+        let button = egui::Button::image_and_text(
+            icons::image(icons::ICON_SIDE_TOGGLE, icons::BUTTON_ICON_SIZE),
+            side_label,
+        )
+        .image_tint_follows_text_color(true)
+        .shortcut_text("Ctrl+B");
         let (response, _) = MenuButton::from_button(button).ui(ui, |ui| {
             let toggle_label = if self.ui.side_open {
                 self.t(TextKey::HideSidePanel)
@@ -157,30 +186,29 @@ impl CurcatApp {
     }
 
     fn ui_appearance_menu(&mut self, ui: &mut egui::Ui, has_image: bool) {
-        let button = egui::Button::new(format!(
-            "{} {}",
-            icons::ICON_MENU,
-            self.t(TextKey::Appearance)
-        ));
+        let button = egui::Button::image_and_text(
+            icons::image(icons::ICON_MENU, icons::BUTTON_ICON_SIZE),
+            self.t(TextKey::Appearance),
+        )
+        .image_tint_follows_text_color(true);
         let menu_cfg = egui::containers::menu::MenuConfig::new()
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
         let _ = MenuButton::from_button(button)
             .config(menu_cfg)
             .ui(ui, |ui| {
-                let points_label =
-                    format!("{} {}", icons::ICON_STATS, self.t(TextKey::PointsStats));
+                let points_label = self.t(TextKey::PointsStats);
                 let points_hover = self.t(TextKey::PointsStatsHover);
-                let filters_label = format!("{} {}", icons::ICON_FILTERS, self.t(TextKey::Filters));
+                let filters_label = self.t(TextKey::Filters);
                 let filters_hover = self.t(TextKey::FiltersHover);
-                let trace_label =
-                    format!("{} {}", icons::ICON_AUTO_TRACE, self.t(TextKey::AutoTrace));
+                let trace_label = self.t(TextKey::AutoTrace);
                 let trace_hover = self.t(TextKey::AutoTraceHover);
-                let info_label = format!("{} {}", icons::ICON_INFO, self.t(TextKey::ImageInfo));
+                let info_label = self.t(TextKey::ImageInfo);
                 let info_hover = self.t(TextKey::ImageInfoHover);
 
                 Self::ui_toggle_menu_item(
                     ui,
                     &mut self.ui.points_info_window_open,
+                    icons::ICON_STATS,
                     points_label,
                     points_hover,
                 );
@@ -188,6 +216,7 @@ impl CurcatApp {
                 Self::ui_toggle_menu_item(
                     ui,
                     &mut self.ui.image_filters_window_open,
+                    icons::ICON_FILTERS,
                     filters_label,
                     filters_hover,
                 );
@@ -195,6 +224,7 @@ impl CurcatApp {
                 Self::ui_toggle_menu_item(
                     ui,
                     &mut self.ui.auto_trace_window_open,
+                    icons::ICON_AUTO_TRACE,
                     trace_label,
                     trace_hover,
                 );
@@ -203,6 +233,7 @@ impl CurcatApp {
                     Self::ui_toggle_menu_item(
                         ui,
                         &mut self.ui.info_window_open,
+                        icons::ICON_INFO,
                         info_label,
                         info_hover,
                     );
@@ -210,10 +241,20 @@ impl CurcatApp {
             });
     }
 
-    fn ui_toggle_menu_item(ui: &mut egui::Ui, state: &mut bool, label: String, hover: &str) {
+    fn ui_toggle_menu_item(
+        ui: &mut egui::Ui,
+        state: &mut bool,
+        icon: icons::Icon,
+        label: &str,
+        hover: &str,
+    ) {
         ui.horizontal(|ui| {
             let _toggle_resp = toggle_switch(ui, state).on_hover_text(hover);
             ui.add_space(4.0);
+            let _icon_resp = ui
+                .add(icons::image(icon, icons::INLINE_ICON_SIZE).tint(ui.visuals().text_color()))
+                .on_hover_text(hover);
+            ui.add_space(2.0);
             let label_resp = ui
                 .add(egui::Label::new(label).sense(egui::Sense::click()))
                 .on_hover_text(hover);
@@ -228,14 +269,23 @@ impl CurcatApp {
             ui.label(title);
             ui.label(action);
         };
-        let info_button = |ui: &mut egui::Ui, label: String, action: &str, title: &str| {
-            ui.add_enabled(has_image, egui::Button::new(label))
-                .on_hover_ui(|ui| info_hover(ui, action, title))
+        let info_button = |ui: &mut egui::Ui,
+                           icon: icons::Icon,
+                           label: &str,
+                           action: &str,
+                           title: &str| {
+            ui.add_enabled(
+                has_image,
+                egui::Button::image_and_text(icons::image(icon, icons::BUTTON_ICON_SIZE), label)
+                    .image_tint_follows_text_color(true),
+            )
+            .on_hover_ui(|ui| info_hover(ui, action, title))
         };
 
         if info_button(
             ui,
-            format!("{} 90°", icons::ICON_ROTATE_CCW),
+            icons::ICON_ROTATE_CCW,
+            "90°",
             self.t(TextKey::Rotate90Ccw),
             self.t(TextKey::TransformsTogether),
         )
@@ -245,7 +295,8 @@ impl CurcatApp {
         }
         if info_button(
             ui,
-            format!("{} 90°", icons::ICON_ROTATE_CW),
+            icons::ICON_ROTATE_CW,
+            "90°",
             self.t(TextKey::Rotate90Cw),
             self.t(TextKey::TransformsTogether),
         )
@@ -255,7 +306,8 @@ impl CurcatApp {
         }
         if info_button(
             ui,
-            format!("{} {}", icons::ICON_FLIP_H, self.t(TextKey::FlipH)),
+            icons::ICON_FLIP_H,
+            self.t(TextKey::FlipH),
             self.t(TextKey::FlipHorizontally),
             self.t(TextKey::TransformsTogether),
         )
@@ -265,7 +317,8 @@ impl CurcatApp {
         }
         if info_button(
             ui,
-            format!("{} {}", icons::ICON_FLIP_V, self.t(TextKey::FlipV)),
+            icons::ICON_FLIP_V,
+            self.t(TextKey::FlipV),
             self.t(TextKey::FlipVertically),
             self.t(TextKey::TransformsTogether),
         )
@@ -283,8 +336,12 @@ impl CurcatApp {
             .show_ui(ui, |ui| {
                 if ui
                     .add(
-                        egui::Button::new(format!("{} {}", icons::ICON_FIT, self.t(TextKey::Fit)))
-                            .shortcut_text("Ctrl+F"),
+                        egui::Button::image_and_text(
+                            icons::image(icons::ICON_FIT, icons::BUTTON_ICON_SIZE),
+                            self.t(TextKey::Fit),
+                        )
+                        .image_tint_follows_text_color(true)
+                        .shortcut_text("Ctrl+F"),
                     )
                     .on_hover_text(self.t(TextKey::FitHover))
                     .clicked()
@@ -294,11 +351,11 @@ impl CurcatApp {
                 }
                 if ui
                     .add(
-                        egui::Button::new(format!(
-                            "{} {}",
-                            icons::ICON_RESET_VIEW,
-                            self.t(TextKey::ResetView)
-                        ))
+                        egui::Button::image_and_text(
+                            icons::image(icons::ICON_RESET_VIEW, icons::BUTTON_ICON_SIZE),
+                            self.t(TextKey::ResetView),
+                        )
+                        .image_tint_follows_text_color(true)
                         .shortcut_text("Ctrl+R"),
                     )
                     .on_hover_text(self.t(TextKey::ResetViewHover))
@@ -337,11 +394,11 @@ impl CurcatApp {
         let resp_clear = ui
             .add_enabled(
                 has_points,
-                egui::Button::new(format!(
-                    "{} {}",
-                    icons::ICON_CLEAR,
-                    self.t(TextKey::ClearPoints)
-                ))
+                egui::Button::image_and_text(
+                    icons::image(icons::ICON_CLEAR, icons::BUTTON_ICON_SIZE),
+                    self.t(TextKey::ClearPoints),
+                )
+                .image_tint_follows_text_color(true)
                 .shortcut_text("Ctrl+Shift+D"),
             )
             .on_hover_text(self.t(TextKey::ClearPointsHover));
@@ -351,8 +408,12 @@ impl CurcatApp {
         let resp_undo = ui
             .add_enabled(
                 has_points,
-                egui::Button::new(format!("{} {}", icons::ICON_UNDO, self.t(TextKey::Undo)))
-                    .shortcut_text("Ctrl+Z"),
+                egui::Button::image_and_text(
+                    icons::image(icons::ICON_UNDO, icons::BUTTON_ICON_SIZE),
+                    self.t(TextKey::Undo),
+                )
+                .image_tint_follows_text_color(true)
+                .shortcut_text("Ctrl+Z"),
             )
             .on_hover_text(self.t(TextKey::UndoHover));
         if resp_undo.clicked() {
