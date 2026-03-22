@@ -10,26 +10,33 @@ impl CurcatApp {
     pub(crate) fn ui_point_input_section(&mut self, ui: &mut egui::Ui) {
         let i18n = self.i18n();
         ui.heading(i18n.text(TextKey::PointInput));
-        ui.horizontal(|ui| {
-            ui.radio_value(
-                &mut self.snap.point_input_mode,
-                PointInputMode::Free,
-                i18n.text(TextKey::Free),
-            )
-            .on_hover_text(i18n.text(TextKey::FreeHover));
-            ui.radio_value(
-                &mut self.snap.point_input_mode,
-                PointInputMode::ContrastSnap,
-                i18n.text(TextKey::ContrastSnap),
-            )
-            .on_hover_text(i18n.text(TextKey::ContrastSnapHover));
-            ui.radio_value(
-                &mut self.snap.point_input_mode,
-                PointInputMode::CenterlineSnap,
-                i18n.text(TextKey::CenterlineSnap),
-            )
-            .on_hover_text(i18n.text(TextKey::CenterlineSnapHover));
-        });
+        let mode_label = match self.snap.point_input_mode {
+            PointInputMode::Free => i18n.text(TextKey::Free),
+            PointInputMode::ContrastSnap => i18n.text(TextKey::ContrastSnap),
+            PointInputMode::CenterlineSnap => i18n.text(TextKey::CenterlineSnap),
+        };
+        egui::ComboBox::from_id_salt("point_input_mode_combo")
+            .selected_text(mode_label)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.snap.point_input_mode,
+                    PointInputMode::Free,
+                    i18n.text(TextKey::Free),
+                )
+                .on_hover_text(i18n.text(TextKey::FreeHover));
+                ui.selectable_value(
+                    &mut self.snap.point_input_mode,
+                    PointInputMode::ContrastSnap,
+                    i18n.text(TextKey::ContrastSnap),
+                )
+                .on_hover_text(i18n.text(TextKey::ContrastSnapHover));
+                ui.selectable_value(
+                    &mut self.snap.point_input_mode,
+                    PointInputMode::CenterlineSnap,
+                    i18n.text(TextKey::CenterlineSnap),
+                )
+                .on_hover_text(i18n.text(TextKey::CenterlineSnapHover));
+            });
 
         match self.snap.point_input_mode {
             PointInputMode::Free => {}

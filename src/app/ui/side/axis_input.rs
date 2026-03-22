@@ -3,7 +3,7 @@ use crate::app::{AxisValueField, CurcatApp, PickMode};
 use crate::i18n::UiLanguage;
 use crate::types::AxisUnit;
 use egui::{
-    Pos2, Rect, Response, TextBuffer, TextEdit,
+    Pos2, Rect, Response, RichText, TextBuffer, TextEdit,
     text::{CCursor, CCursorRange},
 };
 use std::any::TypeId;
@@ -118,8 +118,22 @@ impl CurcatApp {
         let mut value_rect = None;
         let mut pick_rect = None;
         let mut requested_pick = None;
+        let row_height = ui.spacing().interact_size.y;
+        let row_spacing_x = 6.0;
+        let available_width = ui.available_width().max(220.0);
+        let label_width = match language {
+            UiLanguage::En => 70.0,
+            UiLanguage::Ru => 82.0,
+        };
+        let pick_width = match language {
+            UiLanguage::En => 82.0,
+            UiLanguage::Ru => 90.0,
+        };
+        let value_width =
+            (available_width - label_width - pick_width - row_spacing_x * 2.0).clamp(64.0, 110.0);
 
         ui.horizontal(|ui| {
+            ui.style_mut().spacing.item_spacing.x = row_spacing_x;
             let value_label = match language {
                 UiLanguage::En => format!("{name} value:"),
                 UiLanguage::Ru => format!("Значение {name}:"),
@@ -128,13 +142,11 @@ impl CurcatApp {
                 UiLanguage::En => format!("Value of the calibration point ({name})"),
                 UiLanguage::Ru => format!("Значение калибровочной точки ({name})"),
             };
-            ui.label(value_label).on_hover_text(value_hover);
+            ui.add_sized([label_width, row_height], egui::Label::new(value_label))
+                .on_hover_text(value_hover);
             let value_resp = {
                 let mut buffer = AxisFilteredText::new(value_text, unit);
-                ui.add_sized(
-                    [100.0, ui.spacing().interact_size.y],
-                    TextEdit::singleline(&mut buffer),
-                )
+                ui.add_sized([value_width, row_height], TextEdit::singleline(&mut buffer))
             };
             let value_resp = value_resp.on_hover_text(match unit {
                 AxisUnit::Float => match language {
@@ -158,23 +170,31 @@ impl CurcatApp {
                 UiLanguage::Ru => format!("Нажмите и выберите точку {name} на изображении"),
             };
             let pick_resp = ui
-                .add(
+                .add_sized(
+                    [pick_width, row_height],
                     egui::Button::image_and_text(
                         icons::image(icons::ICON_PICK_POINT, icons::BUTTON_ICON_SIZE),
                         pick_button,
                     )
-                    .image_tint_follows_text_color(true),
+                    .image_tint_follows_text_color(true)
+                    .min_size(egui::vec2(pick_width, row_height)),
                 )
                 .on_hover_text(pick_hover);
             if pick_resp.clicked() {
                 requested_pick = Some(pick_mode);
             }
             pick_rect = Some(pick_resp.rect);
-
-            if let Some(p) = point {
-                ui.label(format!("@ ({:.1},{:.1})", p.x, p.y));
-            }
         });
+        if let Some(p) = point {
+            ui.horizontal(|ui| {
+                ui.add_space(label_width + row_spacing_x);
+                ui.label(
+                    RichText::new(format!("@ ({:.1},{:.1})", p.x, p.y))
+                        .small()
+                        .weak(),
+                );
+            });
+        }
 
         CalRowResult {
             value_rect,

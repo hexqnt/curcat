@@ -3,7 +3,7 @@
 use crate::util::rounded_u8;
 
 use super::super::{AxisCalUi, CurcatApp};
-use egui::{Color32, CornerRadius, StrokeKind, pos2};
+use egui::{Color32, CornerRadius, Margin, StrokeKind, pos2};
 
 /// Отрисовать секцию боковой панели как отдельную карточку.
 pub fn side_section_card<R>(
@@ -13,7 +13,7 @@ pub fn side_section_card<R>(
     egui::Frame::group(ui.style())
         .fill(ui.visuals().faint_bg_color)
         .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-        .inner_margin(8)
+        .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
             ui.take_available_width();
             add_contents(ui)

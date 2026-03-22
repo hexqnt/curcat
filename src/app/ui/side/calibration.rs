@@ -176,10 +176,12 @@ impl CurcatApp {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_side_calibration(&mut self, ui: &mut egui::Ui) {
         let i18n = self.i18n();
+        ui.spacing_mut().item_spacing.y = 6.0;
+        ui.add_space(2.0);
         side_section_card(ui, |ui| {
             self.ui_point_input_section(ui);
         });
-        ui.add_space(8.0);
+        ui.add_space(10.0);
 
         side_section_card(ui, |ui| {
             ui.heading(i18n.text(TextKey::Calibration));
@@ -262,7 +264,7 @@ impl CurcatApp {
                     .on_hover_text(i18n.text(TextKey::ShowCalibrationOverlayHover));
             });
         });
-        ui.add_space(8.0);
+        ui.add_space(10.0);
 
         side_section_card(ui, |ui| {
             self.ui_export_section(ui);
@@ -283,6 +285,7 @@ impl CurcatApp {
         let lang = self.ui.language;
         ui.add_enabled_ui(enabled, |ui| {
             let button = egui::Button::image(icons::image(preset.icon(), icons::BUTTON_ICON_SIZE))
+                .min_size(egui::vec2(24.0, 24.0))
                 .image_tint_follows_text_color(true);
             let menu = MenuButton::from_button(button).ui(ui, |ui| {
                 for quadrant in CalibrationQuadrant::ALL {
@@ -565,6 +568,7 @@ impl CurcatApp {
             p1_mode,
             cal.p1,
         );
+        ui.add_space(2.0);
         let p2_row = Self::render_calibration_row(
             ui,
             p2_label,
@@ -736,13 +740,22 @@ impl CurcatApp {
 
     fn ui_polar_origin_row(&mut self, ui: &mut egui::Ui) {
         let has_image = self.image.image.is_some();
+        let row_height = ui.spacing().interact_size.y;
+        let (label_width, pick_width, center_width) = match self.ui.language {
+            UiLanguage::En => (56.0, 92.0, 64.0),
+            UiLanguage::Ru => (70.0, 100.0, 72.0),
+        };
         let mut pick_rect = None;
         ui.horizontal(|ui| {
-            ui.label(format!("{}:", self.t(TextKey::Origin)))
-                .on_hover_text(match self.ui.language {
-                    UiLanguage::En => "Pick the pole (origin) for polar coordinates",
-                    UiLanguage::Ru => "Выберите полюс (начало координат) для полярной системы",
-                });
+            ui.style_mut().spacing.item_spacing.x = 6.0;
+            ui.add_sized(
+                [label_width, row_height],
+                egui::Label::new(format!("{}:", self.t(TextKey::Origin))),
+            )
+            .on_hover_text(match self.ui.language {
+                UiLanguage::En => "Pick the pole (origin) for polar coordinates",
+                UiLanguage::Ru => "Выберите полюс (начало координат) для полярной системы",
+            });
             let pick_resp = ui
                 .add_enabled(
                     has_image,
@@ -750,7 +763,8 @@ impl CurcatApp {
                         icons::image(icons::ICON_PICK_POINT, icons::BUTTON_ICON_SIZE),
                         self.t(TextKey::PickOrigin),
                     )
-                    .image_tint_follows_text_color(true),
+                    .image_tint_follows_text_color(true)
+                    .min_size(egui::vec2(pick_width, row_height)),
                 )
                 .on_hover_text(self.t(TextKey::PickOriginHover));
             if pick_resp.clicked() {
@@ -759,7 +773,11 @@ impl CurcatApp {
             pick_rect = Some(pick_resp.rect);
 
             let center_resp = ui
-                .add_enabled(has_image, egui::Button::new(self.t(TextKey::Center)))
+                .add_enabled(
+                    has_image,
+                    egui::Button::new(self.t(TextKey::Center))
+                        .min_size(egui::vec2(center_width, row_height)),
+                )
                 .on_hover_text(self.t(TextKey::CenterOriginHover));
             if center_resp.clicked()
                 && let Some(image) = self.image.image.as_ref()
@@ -773,11 +791,17 @@ impl CurcatApp {
                     UiLanguage::Ru => "Начало координат установлено в центр изображения.",
                 });
             }
-
-            if let Some(p) = self.calibration.polar_cal.origin {
-                ui.label(format!("@ ({:.1},{:.1})", p.x, p.y));
-            }
         });
+        if let Some(p) = self.calibration.polar_cal.origin {
+            ui.horizontal(|ui| {
+                ui.add_space(label_width + 6.0);
+                ui.label(
+                    RichText::new(format!("@ ({:.1},{:.1})", p.x, p.y))
+                        .small()
+                        .weak(),
+                );
+            });
+        }
         if let Some(rect) = pick_rect {
             self.paint_attention_outline_if(ui, rect, self.calibration.polar_cal.origin.is_none());
         }

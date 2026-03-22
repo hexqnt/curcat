@@ -35,20 +35,26 @@ impl CurcatApp {
         let has_points = !self.points.points.is_empty();
         let calibrated = self.calibration_ready();
         let can_export = has_points && calibrated;
-        ui.horizontal(|ui| {
-            ui.radio_value(
-                &mut self.export.export_kind,
-                ExportKind::Interpolated,
-                i18n.text(TextKey::InterpolatedCurve),
-            )
-            .on_hover_text(i18n.text(TextKey::InterpolatedCurveHover));
-            ui.radio_value(
-                &mut self.export.export_kind,
-                ExportKind::RawPoints,
-                i18n.text(TextKey::RawPickedPoints),
-            )
-            .on_hover_text(i18n.text(TextKey::RawPickedPointsHover));
-        });
+        let export_kind_label = match self.export.export_kind {
+            ExportKind::Interpolated => i18n.text(TextKey::InterpolatedCurve),
+            ExportKind::RawPoints => i18n.text(TextKey::RawPickedPoints),
+        };
+        egui::ComboBox::from_id_salt("export_kind_combo")
+            .selected_text(export_kind_label)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.export.export_kind,
+                    ExportKind::Interpolated,
+                    i18n.text(TextKey::InterpolatedCurve),
+                )
+                .on_hover_text(i18n.text(TextKey::InterpolatedCurveHover));
+                ui.selectable_value(
+                    &mut self.export.export_kind,
+                    ExportKind::RawPoints,
+                    i18n.text(TextKey::RawPickedPoints),
+                )
+                .on_hover_text(i18n.text(TextKey::RawPickedPointsHover));
+            });
         ui.add_space(4.0);
 
         match self.export.export_kind {

@@ -22,6 +22,7 @@ impl CurcatApp {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_status_bar(&mut self, ui: &mut egui::Ui) {
         self.tick_status_timers(ui.ctx());
+        ui.add_space(1.0);
         let points_count = self.points.points.len();
         let i18n = self.i18n();
         let ui_lang = self.ui.language;
@@ -40,7 +41,7 @@ impl CurcatApp {
         let mut copy_error_text: Option<String> = None;
 
         egui::containers::Sides::new()
-            .spacing(10.0)
+            .spacing(12.0)
             .shrink_left()
             .truncate()
             .show(
@@ -51,10 +52,10 @@ impl CurcatApp {
                             .font(status_font.clone())
                             .color(Color32::from_gray(180)),
                     );
-                    ui.separator();
+                    Self::status_bar_separator(ui);
                     Self::draw_mode_chip(ui, &mode_label, mode_color, &status_font);
                     if let Some((status_text, status_level)) = status_snapshot.as_ref() {
-                        ui.separator();
+                        Self::status_bar_separator(ui);
                         ui.add(
                             egui::Label::new(
                                 RichText::new(status_text.as_str())
@@ -89,7 +90,7 @@ impl CurcatApp {
                             }
                         }
 
-                        ui.add_space(4.0);
+                        ui.add_space(6.0);
                         let close_hover = match ui_lang {
                             crate::i18n::UiLanguage::En => "Dismiss status message",
                             crate::i18n::UiLanguage::Ru => "Скрыть сообщение статуса",
@@ -100,8 +101,8 @@ impl CurcatApp {
                                     icons::ICON_CLOSE,
                                     icons::INLINE_ICON_SIZE,
                                 ))
-                                .small()
                                 .frame(false)
+                                .min_size(egui::vec2(24.0, 24.0))
                                 .image_tint_follows_text_color(true),
                             )
                             .on_hover_text(close_hover)
@@ -131,7 +132,7 @@ impl CurcatApp {
 
                         let mut github_button = egui::Button::image(github_icon)
                             .frame(true)
-                            .min_size(egui::vec2(20.0, 20.0));
+                            .min_size(egui::vec2(24.0, 24.0));
                         if ui.visuals().dark_mode {
                             github_button = github_button
                                 .fill(Color32::from_gray(230))
@@ -142,9 +143,9 @@ impl CurcatApp {
                             ui.ctx().open_url(egui::OpenUrl::new_tab(APP_REPOSITORY));
                         }
                     });
-                    ui.add_space(10.0);
+                    ui.add_space(8.0);
                     self.ui_language_selector(ui);
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     egui::widgets::global_theme_preference_switch(ui);
                 },
             );
@@ -158,6 +159,7 @@ impl CurcatApp {
             self.ui.last_status = None;
             self.ui.status_copy_feedback_until = None;
         }
+        ui.add_space(1.0);
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -528,10 +530,16 @@ impl CurcatApp {
             .fill(bg)
             .stroke(stroke)
             .corner_radius(CornerRadius::same(6))
-            .inner_margin(Margin::symmetric(6, 2))
+            .inner_margin(Margin::symmetric(7, 3))
             .show(ui, |ui| {
                 ui.label(RichText::new(label).font(font.clone()).color(color));
             });
+    }
+
+    fn status_bar_separator(ui: &mut egui::Ui) {
+        ui.add_space(2.0);
+        ui.separator();
+        ui.add_space(2.0);
     }
 
     fn render_axis_stats(

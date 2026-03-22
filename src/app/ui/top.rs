@@ -6,7 +6,10 @@ use egui::containers::menu::MenuButton;
 
 impl CurcatApp {
     pub(crate) fn ui_top(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(2.0);
         ui.horizontal(|ui| {
+            ui.style_mut().spacing.item_spacing.x = 6.0;
+            ui.add_space(2.0);
             let has_image = self.image.image.is_some();
             let can_save_project = self.image.meta.as_ref().and_then(|m| m.path()).is_some();
             let file_menu_response = self.ui_file_menu(ui, can_save_project);
@@ -15,23 +18,25 @@ impl CurcatApp {
                 file_menu_response.rect,
                 self.image.image.is_none(),
             );
-            ui.separator();
+            Self::top_bar_separator(ui);
 
             self.ui_side_toggle(ui);
-            ui.separator();
+            Self::top_bar_separator(ui);
 
             self.ui_appearance_menu(ui, has_image);
             self.ui_transform_buttons(ui, has_image);
 
             let has_points = !self.points.points.is_empty();
             self.ui_zoom_controls(ui);
-            ui.separator();
+            Self::top_bar_separator(ui);
 
             self.ui_middle_pan_toggle(ui);
-            ui.separator();
+            Self::top_bar_separator(ui);
 
             self.ui_point_edit_buttons(ui, has_points);
+            ui.add_space(2.0);
         });
+        ui.add_space(1.0);
     }
 
     fn flag_image(lang: UiLanguage, size: egui::Vec2) -> egui::Image<'static> {
@@ -45,7 +50,7 @@ impl CurcatApp {
     pub(super) fn ui_language_selector(&mut self, ui: &mut egui::Ui) {
         let button =
             egui::Button::image(Self::flag_image(self.ui.language, egui::vec2(18.0, 12.0)))
-                .min_size(egui::vec2(24.0, 20.0));
+                .min_size(egui::vec2(26.0, 22.0));
         let (response, _) = MenuButton::from_button(button).ui(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.style_mut().spacing.item_spacing.x = 6.0;
@@ -54,7 +59,7 @@ impl CurcatApp {
                     let button =
                         egui::Button::image(Self::flag_image(lang, egui::vec2(22.0, 14.0)))
                             .frame(selected)
-                            .min_size(egui::vec2(28.0, 20.0));
+                            .min_size(egui::vec2(30.0, 22.0));
                     if ui.add(button).clicked() {
                         self.set_ui_language(lang);
                         ui.close();
@@ -332,6 +337,7 @@ impl CurcatApp {
         ui.label(self.t(TextKey::Zoom))
             .on_hover_text(self.t(TextKey::ZoomHover));
         let zoom_ir = egui::ComboBox::from_id_salt("zoom_combo")
+            .width(86.0)
             .selected_text(Self::format_zoom(self.image.zoom))
             .show_ui(ui, |ui| {
                 if ui
@@ -391,6 +397,11 @@ impl CurcatApp {
     }
 
     fn ui_point_edit_buttons(&mut self, ui: &mut egui::Ui, has_points: bool) {
+        let button_height = ui.spacing().interact_size.y;
+        let action_width = match self.ui.language {
+            UiLanguage::En => 162.0,
+            UiLanguage::Ru => 198.0,
+        };
         let resp_clear = ui
             .add_enabled(
                 has_points,
@@ -399,12 +410,14 @@ impl CurcatApp {
                     self.t(TextKey::ClearPoints),
                 )
                 .image_tint_follows_text_color(true)
-                .shortcut_text("Ctrl+Shift+D"),
+                .shortcut_text("Ctrl+Shift+D")
+                .min_size(egui::vec2(action_width, button_height)),
             )
             .on_hover_text(self.t(TextKey::ClearPointsHover));
         if resp_clear.clicked() {
             self.clear_all_points();
         }
+        ui.add_space(4.0);
         let resp_undo = ui
             .add_enabled(
                 has_points,
@@ -413,11 +426,18 @@ impl CurcatApp {
                     self.t(TextKey::Undo),
                 )
                 .image_tint_follows_text_color(true)
-                .shortcut_text("Ctrl+Z"),
+                .shortcut_text("Ctrl+Z")
+                .min_size(egui::vec2(action_width, button_height)),
             )
             .on_hover_text(self.t(TextKey::UndoHover));
         if resp_undo.clicked() {
             self.undo_last_point();
         }
+    }
+
+    fn top_bar_separator(ui: &mut egui::Ui) {
+        ui.add_space(2.0);
+        ui.separator();
+        ui.add_space(2.0);
     }
 }
