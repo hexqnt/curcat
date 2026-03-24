@@ -1,4 +1,4 @@
-use super::super::common::{side_section_card, toggle_switch};
+use super::super::common::{side_section_card_collapsible, toggle_switch};
 use super::super::icons;
 use super::axis_input::sanitize_axis_text;
 use crate::app::{AxisCalUi, AxisValueField, CurcatApp, PickMode, safe_usize_to_f32};
@@ -178,97 +178,110 @@ impl CurcatApp {
         let i18n = self.i18n();
         ui.spacing_mut().item_spacing.y = 6.0;
         ui.add_space(2.0);
-        side_section_card(ui, |ui| {
-            self.ui_point_input_section(ui);
-        });
+        side_section_card_collapsible(
+            ui,
+            "side_section_point_input",
+            i18n.text(TextKey::PointInput),
+            |ui| {
+                self.ui_point_input_section(ui);
+            },
+        );
         ui.add_space(10.0);
 
-        side_section_card(ui, |ui| {
-            ui.heading(i18n.text(TextKey::Calibration));
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label(i18n.text(TextKey::CoordinateSystem))
-                    .on_hover_text(i18n.text(TextKey::CoordinateSystemHover));
-                let mut system = self.calibration.coord_system;
-                let resp = egui::ComboBox::from_id_salt("coord_system_combo")
-                    .selected_text(match system {
-                        CoordSystem::Cartesian => i18n.text(TextKey::Cartesian),
-                        CoordSystem::Polar => i18n.text(TextKey::Polar),
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut system,
-                            CoordSystem::Cartesian,
-                            i18n.text(TextKey::Cartesian),
-                        );
-                        ui.selectable_value(
-                            &mut system,
-                            CoordSystem::Polar,
-                            i18n.text(TextKey::Polar),
-                        );
-                    });
-                resp.response
-                    .on_hover_text(i18n.text(TextKey::CoordSystemForCalibrationExport));
-                if system != self.calibration.coord_system {
-                    self.calibration.coord_system = system;
-                    self.mark_points_dirty();
-                    self.calibration.pick_mode = PickMode::None;
-                    self.calibration.pending_value_focus = None;
-                    self.clear_calibration_snap_runtime();
-                    self.set_status(match system {
-                        CoordSystem::Cartesian => match self.ui.language {
-                            UiLanguage::En => "Switched to Cartesian calibration.",
-                            UiLanguage::Ru => "Переключено на декартову калибровку.",
-                        },
-                        CoordSystem::Polar => match self.ui.language {
-                            UiLanguage::En => "Switched to Polar calibration.",
-                            UiLanguage::Ru => "Переключено на полярную калибровку.",
-                        },
-                    });
-                }
-            });
-            ui.separator();
-            ui.horizontal(|ui| {
-                let cartesian = matches!(self.calibration.coord_system, CoordSystem::Cartesian);
-                self.ui_calibration_snap_menu(ui, cartesian);
-                ui.add_space(8.0);
-                let has_image = self.image.image.is_some();
-                if cartesian {
-                    self.ui_quadrant_preset_menu(ui, CalibrationPresetKind::Unit, has_image);
-                    self.ui_quadrant_preset_menu(ui, CalibrationPresetKind::Pixels, has_image);
-                }
-            });
-            ui.separator();
+        side_section_card_collapsible(
+            ui,
+            "side_section_calibration",
+            i18n.text(TextKey::Calibration),
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(i18n.text(TextKey::CoordinateSystem))
+                        .on_hover_text(i18n.text(TextKey::CoordinateSystemHover));
+                    let mut system = self.calibration.coord_system;
+                    let resp = egui::ComboBox::from_id_salt("coord_system_combo")
+                        .selected_text(match system {
+                            CoordSystem::Cartesian => i18n.text(TextKey::Cartesian),
+                            CoordSystem::Polar => i18n.text(TextKey::Polar),
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut system,
+                                CoordSystem::Cartesian,
+                                i18n.text(TextKey::Cartesian),
+                            );
+                            ui.selectable_value(
+                                &mut system,
+                                CoordSystem::Polar,
+                                i18n.text(TextKey::Polar),
+                            );
+                        });
+                    resp.response
+                        .on_hover_text(i18n.text(TextKey::CoordSystemForCalibrationExport));
+                    if system != self.calibration.coord_system {
+                        self.calibration.coord_system = system;
+                        self.mark_points_dirty();
+                        self.calibration.pick_mode = PickMode::None;
+                        self.calibration.pending_value_focus = None;
+                        self.clear_calibration_snap_runtime();
+                        self.set_status(match system {
+                            CoordSystem::Cartesian => match self.ui.language {
+                                UiLanguage::En => "Switched to Cartesian calibration.",
+                                UiLanguage::Ru => "Переключено на декартову калибровку.",
+                            },
+                            CoordSystem::Polar => match self.ui.language {
+                                UiLanguage::En => "Switched to Polar calibration.",
+                                UiLanguage::Ru => "Переключено на полярную калибровку.",
+                            },
+                        });
+                    }
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let cartesian = matches!(self.calibration.coord_system, CoordSystem::Cartesian);
+                    self.ui_calibration_snap_menu(ui, cartesian);
+                    ui.add_space(8.0);
+                    let has_image = self.image.image.is_some();
+                    if cartesian {
+                        self.ui_quadrant_preset_menu(ui, CalibrationPresetKind::Unit, has_image);
+                        self.ui_quadrant_preset_menu(ui, CalibrationPresetKind::Pixels, has_image);
+                    }
+                });
+                ui.separator();
 
-            match self.calibration.coord_system {
-                CoordSystem::Cartesian => {
-                    self.axis_cal_group(ui, true);
-                    ui.separator();
-                    self.axis_cal_group(ui, false);
+                match self.calibration.coord_system {
+                    CoordSystem::Cartesian => {
+                        self.axis_cal_group(ui, true);
+                        ui.separator();
+                        self.axis_cal_group(ui, false);
+                    }
+                    CoordSystem::Polar => {
+                        self.ui_polar_origin_row(ui);
+                        ui.separator();
+                        self.polar_axis_group(ui, PolarAxisKind::Radius);
+                        ui.separator();
+                        self.polar_axis_group(ui, PolarAxisKind::Angle);
+                    }
                 }
-                CoordSystem::Polar => {
-                    self.ui_polar_origin_row(ui);
-                    ui.separator();
-                    self.polar_axis_group(ui, PolarAxisKind::Radius);
-                    ui.separator();
-                    self.polar_axis_group(ui, PolarAxisKind::Angle);
-                }
-            }
 
-            ui.separator();
-            ui.horizontal(|ui| {
-                toggle_switch(ui, &mut self.calibration.show_calibration_segments)
-                    .on_hover_text(i18n.text(TextKey::ShowCalibrationOverlayHover));
-                ui.add_space(4.0);
-                ui.label(i18n.text(TextKey::ShowCalibrationOverlay))
-                    .on_hover_text(i18n.text(TextKey::ShowCalibrationOverlayHover));
-            });
-        });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    toggle_switch(ui, &mut self.calibration.show_calibration_segments)
+                        .on_hover_text(i18n.text(TextKey::ShowCalibrationOverlayHover));
+                    ui.add_space(4.0);
+                    ui.label(i18n.text(TextKey::ShowCalibrationOverlay))
+                        .on_hover_text(i18n.text(TextKey::ShowCalibrationOverlayHover));
+                });
+            },
+        );
         ui.add_space(10.0);
 
-        side_section_card(ui, |ui| {
-            self.ui_export_section(ui);
-        });
+        side_section_card_collapsible(
+            ui,
+            "side_section_export",
+            i18n.text(TextKey::ExportPoints),
+            |ui| {
+                self.ui_export_section(ui);
+            },
+        );
 
         let remaining = ui.available_height().max(0.0);
         if remaining > 24.0 {

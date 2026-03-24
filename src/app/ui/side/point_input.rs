@@ -9,7 +9,6 @@ impl CurcatApp {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_point_input_section(&mut self, ui: &mut egui::Ui) {
         let i18n = self.i18n();
-        ui.heading(i18n.text(TextKey::PointInput));
         let mode_label = match self.snap.point_input_mode {
             PointInputMode::Free => i18n.text(TextKey::Free),
             PointInputMode::ContrastSnap => i18n.text(TextKey::ContrastSnap),

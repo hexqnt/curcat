@@ -31,7 +31,6 @@ impl CurcatApp {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_export_section(&mut self, ui: &mut egui::Ui) {
         let i18n = self.i18n();
-        ui.heading(i18n.text(TextKey::ExportPoints));
         let has_points = !self.points.points.is_empty();
         let calibrated = self.calibration_ready();
         let can_export = has_points && calibrated;

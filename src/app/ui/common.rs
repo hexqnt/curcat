@@ -5,6 +5,9 @@ use crate::util::rounded_u8;
 use super::super::{AxisCalUi, CurcatApp};
 use egui::{Color32, CornerRadius, Margin, StrokeKind, pos2};
 
+const COLLAPSING_ICON_SCALE: f32 = 1.5;
+const COLLAPSING_HEADER_TEXT_OFFSET_X: f32 = 4.0;
+
 /// Отрисовать секцию боковой панели как отдельную карточку.
 pub fn side_section_card<R>(
     ui: &mut egui::Ui,
@@ -18,6 +21,39 @@ pub fn side_section_card<R>(
             ui.take_available_width();
             add_contents(ui)
         })
+}
+
+/// Отрисовать секцию боковой панели как карточку со сворачиваемым заголовком.
+pub fn side_section_card_collapsible(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash,
+    title: impl Into<egui::WidgetText>,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    side_section_card(ui, |ui| {
+        ui.scope(|ui| {
+            ui.spacing_mut().indent += COLLAPSING_HEADER_TEXT_OFFSET_X;
+            egui::CollapsingHeader::new(title.into().heading())
+                .id_salt(id_salt)
+                .default_open(true)
+                .icon(|ui, openness, response| {
+                    let enlarged_rect = egui::Rect::from_center_size(
+                        response.rect.center(),
+                        response.rect.size() * COLLAPSING_ICON_SCALE,
+                    )
+                    .translate(egui::vec2(-0.5 * COLLAPSING_HEADER_TEXT_OFFSET_X, 0.0));
+                    let enlarged_response = response.clone().with_new_rect(enlarged_rect);
+                    egui::containers::collapsing_header::paint_default_icon(
+                        ui,
+                        openness,
+                        &enlarged_response,
+                    );
+                })
+                .show_unindented(ui, |ui| {
+                    add_contents(ui);
+                });
+        });
+    });
 }
 
 impl CurcatApp {

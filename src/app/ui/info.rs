@@ -22,7 +22,7 @@ impl CurcatApp {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_status_bar(&mut self, ui: &mut egui::Ui) {
         self.tick_status_timers(ui.ctx());
-        ui.add_space(1.0);
+        ui.add_space(2.0);
         let points_count = self.points.points.len();
         let i18n = self.i18n();
         let ui_lang = self.ui.language;
@@ -159,7 +159,6 @@ impl CurcatApp {
             self.ui.last_status = None;
             self.ui.status_copy_feedback_until = None;
         }
-        ui.add_space(1.0);
     }
 
     #[allow(clippy::cast_precision_loss)]
