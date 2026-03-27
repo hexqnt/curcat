@@ -93,6 +93,27 @@ fn perform_project_save(request: ProjectSaveRequest) -> Result<(), String> {
 }
 
 impl CurcatApp {
+    const fn project_source_label(
+        language: UiLanguage,
+        source: project::ImagePathSource,
+        capitalized: bool,
+    ) -> &'static str {
+        match (language, source, capitalized) {
+            (UiLanguage::En, project::ImagePathSource::Absolute, false) => "absolute path",
+            (UiLanguage::En, project::ImagePathSource::Relative, false) => "relative path",
+            (UiLanguage::Ru, project::ImagePathSource::Absolute, false) => "абсолютный путь",
+            (UiLanguage::Ru, project::ImagePathSource::Relative, false) => "относительный путь",
+            (UiLanguage::En, project::ImagePathSource::Absolute, true) => "Absolute path",
+            (UiLanguage::En, project::ImagePathSource::Relative, true) => "Relative path",
+            (UiLanguage::Ru, project::ImagePathSource::Absolute, true) => "Абсолютный путь",
+            (UiLanguage::Ru, project::ImagePathSource::Relative, true) => "Относительный путь",
+        }
+    }
+
+    fn checksum_actual_label(actual_checksum: Option<u32>) -> String {
+        actual_checksum.map_or_else(|| "unknown".to_string(), |value| format!("{value:#010x}"))
+    }
+
     fn axis_to_record(cal: &AxisCalUi) -> project::AxisCalibrationRecord {
         project::AxisCalibrationRecord {
             unit: cal.unit,
@@ -300,16 +321,8 @@ impl CurcatApp {
         let image_path = plan.image.path.clone();
         self.project.project_prompt = None;
         let status = {
-            let source_label = match plan.image.source {
-                project::ImagePathSource::Absolute => match self.ui.language {
-                    UiLanguage::En => "absolute path",
-                    UiLanguage::Ru => "абсолютный путь",
-                },
-                project::ImagePathSource::Relative => match self.ui.language {
-                    UiLanguage::En => "relative path",
-                    UiLanguage::Ru => "относительный путь",
-                },
-            };
+            let source_label =
+                Self::project_source_label(self.ui.language, plan.image.source, false);
             if plan.image.checksum_matches {
                 match self.ui.language {
                     UiLanguage::En => {
@@ -327,10 +340,7 @@ impl CurcatApp {
                 }
             } else {
                 let expected = plan.payload.image_crc32;
-                let actual = plan
-                    .image
-                    .actual_checksum
-                    .map_or_else(|| "unknown".to_string(), |v| format!("{v:#010x}"));
+                let actual = Self::checksum_actual_label(plan.image.actual_checksum);
                 match self.ui.language {
                     UiLanguage::En => format!(
                         "Image checksum mismatch (expected {expected:#010x}, got {actual}). Loading from {source_label}…"
@@ -420,26 +430,15 @@ impl CurcatApp {
         self.remember_image_dir_from_path(&plan.image.path);
 
         if plan.image.checksum_matches {
-            let source_label = match plan.image.source {
-                project::ImagePathSource::Absolute => match self.ui.language {
-                    UiLanguage::En => "absolute path",
-                    UiLanguage::Ru => "абсолютный путь",
-                },
-                project::ImagePathSource::Relative => match self.ui.language {
-                    UiLanguage::En => "relative path",
-                    UiLanguage::Ru => "относительный путь",
-                },
-            };
+            let source_label =
+                Self::project_source_label(self.ui.language, plan.image.source, false);
             self.set_status(match self.ui.language {
                 UiLanguage::En => format!("Project v{} loaded ({source_label}).", plan.version),
                 UiLanguage::Ru => format!("Проект v{} загружен ({source_label}).", plan.version),
             });
         } else {
             let expected = plan.payload.image_crc32;
-            let actual = plan
-                .image
-                .actual_checksum
-                .map_or_else(|| "unknown".to_string(), |v| format!("{v:#010x}"));
+            let actual = Self::checksum_actual_label(plan.image.actual_checksum);
             self.set_status_warn(match self.ui.language {
                 UiLanguage::En => format!(
                     "Project v{} loaded with checksum warning (expected {expected:#010x}, got {actual}).",
@@ -454,14 +453,6 @@ impl CurcatApp {
     }
 
     pub(super) fn project_warning_text(&self, warn: &project::ProjectWarning) -> String {
-        let source_label =
-            |source: &project::ImagePathSource, lang: UiLanguage| match (lang, source) {
-                (UiLanguage::En, project::ImagePathSource::Absolute) => "Absolute path",
-                (UiLanguage::En, project::ImagePathSource::Relative) => "Relative path",
-                (UiLanguage::Ru, project::ImagePathSource::Absolute) => "Абсолютный путь",
-                (UiLanguage::Ru, project::ImagePathSource::Relative) => "Относительный путь",
-            };
-
         match warn {
             project::ProjectWarning::MissingImage {
                 path,
@@ -470,13 +461,13 @@ impl CurcatApp {
             } => match self.ui.language {
                 UiLanguage::En => format!(
                     "Missing image ({}) at {}: {}",
-                    source_label(source, self.ui.language),
+                    Self::project_source_label(self.ui.language, *source, true),
                     path.display(),
                     reason
                 ),
                 UiLanguage::Ru => format!(
                     "Изображение не найдено ({}) по пути {}: {}",
-                    source_label(source, self.ui.language),
+                    Self::project_source_label(self.ui.language, *source, true),
                     path.display(),
                     reason
                 ),
@@ -489,12 +480,12 @@ impl CurcatApp {
             } => match self.ui.language {
                 UiLanguage::En => format!(
                     "Checksum mismatch ({}) at {}: expected {expected:#010x}, got {actual:#010x}",
-                    source_label(source, self.ui.language),
+                    Self::project_source_label(self.ui.language, *source, true),
                     path.display()
                 ),
                 UiLanguage::Ru => format!(
                     "Несовпадение контрольной суммы ({}) по пути {}: ожидалось {expected:#010x}, получено {actual:#010x}",
-                    source_label(source, self.ui.language),
+                    Self::project_source_label(self.ui.language, *source, true),
                     path.display()
                 ),
             },

@@ -21,6 +21,19 @@ pub struct AxisCalibrationRecord {
     pub v2_text: String,
 }
 
+impl Default for AxisCalibrationRecord {
+    fn default() -> Self {
+        Self {
+            unit: AxisUnit::Float,
+            scale: ScaleKind::Linear,
+            p1: None,
+            p2: None,
+            v1_text: String::new(),
+            v2_text: String::new(),
+        }
+    }
+}
+
 /// Saved calibration data for polar coordinates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolarCalibrationRecord {
@@ -40,22 +53,8 @@ impl Default for PolarCalibrationRecord {
     fn default() -> Self {
         Self {
             origin: None,
-            radius: AxisCalibrationRecord {
-                unit: AxisUnit::Float,
-                scale: ScaleKind::Linear,
-                p1: None,
-                p2: None,
-                v1_text: String::new(),
-                v2_text: String::new(),
-            },
-            angle: AxisCalibrationRecord {
-                unit: AxisUnit::Float,
-                scale: ScaleKind::Linear,
-                p1: None,
-                p2: None,
-                v1_text: String::new(),
-                v2_text: String::new(),
-            },
+            radius: AxisCalibrationRecord::default(),
+            angle: AxisCalibrationRecord::default(),
             angle_unit: AngleUnit::Degrees,
             angle_direction: AngleDirection::Cw,
         }

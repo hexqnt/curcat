@@ -102,57 +102,71 @@ pub(super) fn resolve_image_path(
     project_path: &Path,
     payload: &ProjectPayload,
 ) -> anyhow::Result<(ResolvedImage, Vec<ProjectWarning>)> {
-    let mut warnings = Vec::new();
-    let project_dir = project_path.parent().unwrap_or_else(|| Path::new("."));
-    let expected_crc = payload.image_crc32;
-    let mut candidates: Vec<(PathBuf, ImagePathSource)> = Vec::new();
-    candidates.push((
-        payload.absolute_image_path.clone(),
-        ImagePathSource::Absolute,
-    ));
-    if let Some(rel) = payload.relative_image_path.as_ref() {
-        candidates.push((project_dir.join(rel), ImagePathSource::Relative));
-    }
-
-    let mut chosen: Option<ResolvedImage> = None;
-
-    for (path, source) in candidates {
+    fn evaluate_candidate(
+        path: PathBuf,
+        source: ImagePathSource,
+        expected_crc: u32,
+        warnings: &mut Vec<ProjectWarning>,
+    ) -> Option<ResolvedImage> {
         match compute_image_crc32(&path) {
             Ok(actual_crc) => {
                 let checksum_matches = actual_crc == expected_crc;
-                if checksum_matches {
-                    return Ok((
-                        ResolvedImage {
-                            path,
-                            checksum_matches: true,
-                            source,
-                            actual_checksum: Some(actual_crc),
-                        },
-                        warnings,
-                    ));
-                }
-                warnings.push(ProjectWarning::ChecksumMismatch {
-                    path: path.clone(),
-                    source,
-                    expected: expected_crc,
-                    actual: actual_crc,
-                });
-                if chosen.is_none() {
-                    chosen = Some(ResolvedImage {
-                        path,
-                        checksum_matches: false,
+                if !checksum_matches {
+                    warnings.push(ProjectWarning::ChecksumMismatch {
+                        path: path.clone(),
                         source,
-                        actual_checksum: Some(actual_crc),
+                        expected: expected_crc,
+                        actual: actual_crc,
                     });
                 }
+                Some(ResolvedImage {
+                    path,
+                    checksum_matches,
+                    source,
+                    actual_checksum: Some(actual_crc),
+                })
             }
             Err(err) => {
                 warnings.push(ProjectWarning::MissingImage {
-                    path: path.clone(),
+                    path,
                     source,
                     reason: err.to_string(),
                 });
+                None
             }
+        }
+    }
+
+    let mut warnings = Vec::new();
+    let project_dir = project_path.parent().unwrap_or_else(|| Path::new("."));
+    let expected_crc = payload.image_crc32;
+    let mut chosen = match evaluate_candidate(
+        payload.absolute_image_path.clone(),
+        ImagePathSource::Absolute,
+        expected_crc,
+        &mut warnings,
+    ) {
+        Some(resolved) if resolved.checksum_matches => return Ok((resolved, warnings)),
+        Some(resolved) => Some(resolved),
+        None => None,
+    };
+
+    if let Some(rel_path) = payload
+        .relative_image_path
+        .as_ref()
+        .map(|rel| project_dir.join(rel))
+        && let Some(resolved) = evaluate_candidate(
+            rel_path,
+            ImagePathSource::Relative,
+            expected_crc,
+            &mut warnings,
+        )
+    {
+        if resolved.checksum_matches {
+            return Ok((resolved, warnings));
+        }
+        if chosen.is_none() {
+            chosen = Some(resolved);
         }
     }
 
