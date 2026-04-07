@@ -662,18 +662,19 @@ impl CurcatApp {
         let mut scroll = 0.0_f32;
         let mut hover_pos: Option<Pos2> = None;
         ui.ctx().input(|i| {
-            scroll = i.raw_scroll_delta.y;
+            scroll = i.smooth_scroll_delta().y;
             hover_pos = i.pointer.latest_pos();
         });
         if scroll.abs() <= f32::EPSILON {
             return None;
         }
-        let steps = (scroll / 40.0).round();
-        if steps.abs() <= f32::EPSILON {
+        // В egui 0.34 wheel delta чаще приходит дробными порциями.
+        // Квантизация через round() гасит эти значения в ноль, поэтому используем непрерывный шаг.
+        let steps = scroll / super::super::WHEEL_ZOOM_STEP_POINTS;
+        if steps.abs() < 0.01 {
             return None;
         }
-        let base: f32 = if steps > 0.0 { 1.1 } else { 0.9 };
-        let factor = base.powf(steps.abs());
+        let factor = 1.1_f32.powf(steps);
         Some((self.image.zoom * factor, response.hover_pos().or(hover_pos)))
     }
 

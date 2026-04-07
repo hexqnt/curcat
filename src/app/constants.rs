@@ -1,6 +1,7 @@
 pub const ZOOM_PRESETS: &[f32] = &[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0];
 pub const MIN_ZOOM: f32 = 0.25;
 pub const MAX_ZOOM: f32 = 8.0;
+pub const WHEEL_ZOOM_STEP_POINTS: f32 = 40.0 / 3.0;
 pub const ZOOM_SMOOTH_RESPONSE: f32 = 0.10;
 pub const ZOOM_SNAP_EPS: f32 = 0.0005;
 pub const PAN_SNAP_EPS: f32 = 0.5;

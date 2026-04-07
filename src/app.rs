@@ -784,18 +784,19 @@ impl CurcatApp {
 
 impl eframe::App for CurcatApp {
     #[allow(clippy::too_many_lines)]
-    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = root_ui.ctx().clone();
         let title = match self.ui.language {
             UiLanguage::En => "Curcat — Graph Digitizer",
             UiLanguage::Ru => "Curcat — Оцифровка графиков",
         };
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.to_string()));
 
-        self.poll_image_loader(ctx);
+        self.poll_image_loader(&ctx);
         self.poll_project_save_job();
         self.poll_snap_build_job();
         // Global hotkeys (ignored while typing in text fields)
-        let wants_kb = ctx.wants_keyboard_input();
+        let wants_kb = ctx.egui_wants_keyboard_input();
         if !wants_kb {
             // Ctrl/Cmd + B: toggle side panel
             if ctx.input(|i| i.key_pressed(Key::B) && i.modifiers.command) {
@@ -822,7 +823,7 @@ impl eframe::App for CurcatApp {
             if self.project.active_dialog.is_none()
                 && ctx.input(|i| i.key_pressed(Key::V) && i.modifiers.command)
             {
-                self.paste_image_from_clipboard(ctx);
+                self.paste_image_from_clipboard(&ctx);
             }
             // Ctrl/Cmd + Shift + C: export CSV
             if self.project.active_dialog.is_none()
@@ -901,29 +902,31 @@ impl eframe::App for CurcatApp {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
 
-        egui::TopBottomPanel::top("top").show(ctx, |ui| self.ui_top(ui));
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| self.ui_status_bar(ui));
+        egui::Panel::top("top").show_inside(root_ui, |ui| self.ui_top(ui));
+        egui::Panel::bottom("status").show_inside(root_ui, |ui| self.ui_status_bar(ui));
         let side_panel = match self.ui.side_position {
-            SidePanelPosition::Left => egui::SidePanel::left("side"),
-            SidePanelPosition::Right => egui::SidePanel::right("side"),
+            SidePanelPosition::Left => egui::Panel::left("side"),
+            SidePanelPosition::Right => egui::Panel::right("side"),
         };
         side_panel
             .resizable(true)
-            .default_width(280.0)
-            .show_animated(ctx, self.ui.side_open, |ui| self.ui_side_calibration(ui));
-        egui::CentralPanel::default().show(ctx, |ui| self.ui_central_image(ctx, ui));
-        self.ui_image_info_window(ctx);
-        self.ui_image_filters_window(ctx);
-        self.ui_auto_trace_window(ctx);
-        self.ui_points_info_window(ctx);
-        self.ui_project_prompt(ctx);
+            .default_size(280.0)
+            .show_animated_inside(root_ui, self.ui.side_open, |ui| {
+                self.ui_side_calibration(ui);
+            });
+        egui::CentralPanel::default().show_inside(root_ui, |ui| self.ui_central_image(&ctx, ui));
+        self.ui_image_info_window(&ctx);
+        self.ui_image_filters_window(&ctx);
+        self.ui_auto_trace_window(&ctx);
+        self.ui_points_info_window(&ctx);
+        self.ui_project_prompt(&ctx);
 
         let mut close_dialog = false;
         let mut picked_export_path: Option<PathBuf> = None;
 
         if let Some(dialog_state) = self.project.active_dialog.as_mut() {
             match dialog_state {
-                NativeDialog::Open(dialog) => match Self::poll_dialog(ctx, dialog) {
+                NativeDialog::Open(dialog) => match Self::poll_dialog(&ctx, dialog) {
                     DialogPoll::Picked(path) => {
                         self.start_loading_image_from_path(path);
                         close_dialog = true;
@@ -938,7 +941,7 @@ impl eframe::App for CurcatApp {
                     DialogPoll::Closed => close_dialog = true,
                     DialogPoll::Open => {}
                 },
-                NativeDialog::OpenProject(dialog) => match Self::poll_dialog(ctx, dialog) {
+                NativeDialog::OpenProject(dialog) => match Self::poll_dialog(&ctx, dialog) {
                     DialogPoll::Picked(path) => {
                         self.handle_project_load(path);
                         close_dialog = true;
@@ -953,7 +956,7 @@ impl eframe::App for CurcatApp {
                     DialogPoll::Closed => close_dialog = true,
                     DialogPoll::Open => {}
                 },
-                NativeDialog::SaveProject(dialog) => match Self::poll_dialog(ctx, dialog) {
+                NativeDialog::SaveProject(dialog) => match Self::poll_dialog(&ctx, dialog) {
                     DialogPoll::Picked(path) => {
                         self.handle_project_save(&path);
                         close_dialog = true;
@@ -980,7 +983,7 @@ impl eframe::App for CurcatApp {
                         crate::export::ExportFormat::Json => "JSON",
                         crate::export::ExportFormat::Ron => "RON",
                     };
-                    match Self::poll_dialog(ctx, dialog) {
+                    match Self::poll_dialog(&ctx, dialog) {
                         DialogPoll::Picked(path) => {
                             picked_export_path = Some(path.clone());
                             match format.export(&path, payload) {
