@@ -13,6 +13,26 @@ use std::time::{Duration, Instant};
 const LIGHT_DRAG_CLICK_DIST: f32 = 20.0;
 const LIGHT_DRAG_CLICK_MAX_DURATION: Duration = Duration::from_millis(400);
 
+fn is_soft_primary_click(
+    press: &PrimaryPressInfo,
+    release_pos: Option<Pos2>,
+    rect: egui::Rect,
+    response_hovered: bool,
+) -> bool {
+    if !response_hovered || press.shift_down || !press.in_rect {
+        return false;
+    }
+    let Some(release_pos) = release_pos else {
+        return false;
+    };
+    if !rect.contains(release_pos) {
+        return false;
+    }
+    let dist = press.pos.distance(release_pos);
+    let elapsed = press.time.elapsed();
+    dist <= LIGHT_DRAG_CLICK_DIST && elapsed <= LIGHT_DRAG_CLICK_MAX_DURATION
+}
+
 fn format_overlay_value(value: &AxisValue) -> String {
     match value {
         AxisValue::Float(v) => format!("{v:.3}"),
@@ -365,6 +385,17 @@ impl PointerState {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+#[allow(clippy::struct_excessive_bools)]
+struct PrimaryImageGesture {
+    down: bool,
+    pressed: bool,
+    started_in_image: bool,
+    pointer_over_image: bool,
+    clicked: bool,
+    click_pos: Option<Pos2>,
+}
+
 #[derive(Clone, Copy)]
 enum CalTarget {
     X1,
@@ -646,44 +677,53 @@ impl CurcatApp {
         Some((self.image.zoom * factor, response.hover_pos().or(hover_pos)))
     }
 
-    fn resolve_primary_click(
+    fn resolve_primary_gesture(
         &mut self,
         response: &egui::Response,
         rect: egui::Rect,
         pointer: PointerState,
         pointer_pos: Option<Pos2>,
         hover_pos: Option<Pos2>,
-    ) -> (bool, Option<Pos2>) {
+    ) -> PrimaryImageGesture {
         let mut soft_primary_click = false;
+        let pointer_over_image = response.contains_pointer();
+        let mut started_in_image = self
+            .interaction
+            .primary_press
+            .as_ref()
+            .is_some_and(|press| press.in_rect);
+
         if pointer.primary_pressed {
             if let Some(pos) = pointer.press_origin.or(pointer.latest_pos) {
+                let press_in_image = rect.contains(pos);
                 self.interaction.primary_press = Some(PrimaryPressInfo {
                     pos,
                     time: Instant::now(),
-                    in_rect: rect.contains(pos),
+                    in_rect: press_in_image,
                     shift_down: pointer.shift_pressed,
                 });
+                started_in_image = press_in_image;
             } else {
                 self.interaction.primary_press = None;
+                started_in_image = false;
             }
         }
         if pointer.primary_released {
-            if let Some(info) = self.interaction.primary_press.take()
-                && !info.shift_down
-                && info.in_rect
-                && let Some(release_pos) = pointer.latest_pos
-                && rect.contains(release_pos)
-            {
-                let dist = info.pos.distance(release_pos);
-                let elapsed = info.time.elapsed();
-                if dist <= LIGHT_DRAG_CLICK_DIST && elapsed <= LIGHT_DRAG_CLICK_MAX_DURATION {
+            if let Some(info) = self.interaction.primary_press.take() {
+                started_in_image = info.in_rect;
+                if is_soft_primary_click(&info, pointer.latest_pos, rect, pointer_over_image) {
                     soft_primary_click = true;
                 }
             }
         } else if !pointer.primary_down {
             self.interaction.primary_press = None;
+            started_in_image = false;
         }
+
         let response_clicked = response.clicked_by(PointerButton::Primary);
+        if response_clicked {
+            started_in_image = true;
+        }
         let primary_clicked = response_clicked || soft_primary_click;
         let click_pos = if response_clicked {
             pointer_pos.or(hover_pos)
@@ -693,7 +733,16 @@ impl CurcatApp {
             None
         };
         let click_pos = Self::pos_in_rect(click_pos, rect);
-        (primary_clicked && click_pos.is_some(), click_pos)
+        let clicked = primary_clicked && click_pos.is_some() && started_in_image;
+
+        PrimaryImageGesture {
+            down: pointer.primary_down,
+            pressed: pointer.primary_pressed,
+            started_in_image,
+            pointer_over_image,
+            clicked,
+            click_pos,
+        }
     }
 
     fn compute_snap_preview(&mut self, pointer_pixel: Option<Pos2>) -> Option<Pos2> {
@@ -2125,8 +2174,13 @@ impl CurcatApp {
                 if self.calibration.dragging_handle.is_none() {
                     self.update_calibration_pick_preview_guides(hover_pixel, base_size);
                 }
-                let (primary_clicked, click_pos) =
-                    self.resolve_primary_click(&response, rect, pointer_state, pointer_pos, hover_pos);
+                let primary_gesture = self.resolve_primary_gesture(
+                    &response,
+                    rect,
+                    pointer_state,
+                    pointer_pos,
+                    hover_pos,
+                );
                 let snap_preview = self.compute_snap_preview(pointer_pixel);
                 let calibrated = match self.calibration.coord_system {
                     CoordSystem::Cartesian => {
@@ -2134,16 +2188,20 @@ impl CurcatApp {
                     }
                     CoordSystem::Polar => polar_mapping.is_some(),
                 };
+                let auto_place_pointer_pixel = if primary_gesture.pointer_over_image {
+                    pointer_pixel
+                } else {
+                    None
+                };
                 let suppress_primary_click = self.auto_place_tick(
-                    pointer_pixel,
-                    pointer_state.primary_down,
-                    pointer_state.primary_pressed,
+                    auto_place_pointer_pixel,
+                    primary_gesture,
                     pointer_state.shift_pressed,
                     pointer_state.delete_down,
                     calibrated,
                 );
 
-                if pointer_state.primary_down {
+                if primary_gesture.down && primary_gesture.started_in_image {
                     ui.ctx().request_repaint_after(Duration::from_millis(16));
                 }
 
@@ -2288,10 +2346,10 @@ impl CurcatApp {
                 {
                     let image_origin = rect.min;
                     self.remove_point_near_screen(pos, image_origin);
-                } else if primary_clicked
+                } else if primary_gesture.clicked
                     && !suppress_primary_click
                     && !pointer_state.shift_pressed
-                    && let Some(pos) = click_pos
+                    && let Some(pos) = primary_gesture.click_pos
                 {
                     if pointer_state.delete_down {
                         let image_origin = rect.min;
@@ -2511,22 +2569,26 @@ impl CurcatApp {
     fn auto_place_tick(
         &mut self,
         pointer_pixel: Option<Pos2>,
-        primary_down: bool,
-        primary_pressed: bool,
+        primary: PrimaryImageGesture,
         shift_pressed: bool,
         delete_down: bool,
         calibrated: bool,
     ) -> bool {
-        if primary_pressed {
+        if primary.pressed {
             self.reset_auto_place_runtime(false);
         }
 
         let mut suppress_click = self.interaction.auto_place_state.suppress_click;
 
-        if !primary_down {
+        if !primary.down {
             suppress_click = self.interaction.auto_place_state.suppress_click;
             self.reset_auto_place_runtime(false);
             return suppress_click;
+        }
+
+        if !primary.started_in_image {
+            self.reset_auto_place_runtime(false);
+            return self.interaction.auto_place_state.suppress_click;
         }
 
         if shift_pressed || delete_down || !matches!(self.calibration.pick_mode, PickMode::None) {
@@ -2653,11 +2715,12 @@ impl CurcatApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        CalTarget, CalibrationSnapKind, CartesianEndpointId, CurcatApp, clamp_line_drag_delta,
-        line_drag_hit_distance,
+        CalTarget, CalibrationSnapKind, CartesianEndpointId, CurcatApp, PrimaryImageGesture,
+        PrimaryPressInfo, clamp_line_drag_delta, is_soft_primary_click, line_drag_hit_distance,
     };
     use crate::types::CoordSystem;
     use egui::{Pos2, Rect, Vec2, pos2, vec2};
+    use std::time::{Duration, Instant};
 
     fn assert_vec2_close(actual: Vec2, expected: Vec2) {
         assert!((actual.x - expected.x).abs() <= f32::EPSILON);
@@ -2686,6 +2749,100 @@ mod tests {
         let rect = Rect::from_min_max(pos2(10.0, 20.0), pos2(30.0, 40.0));
         let pos = CurcatApp::pos_in_rect(Some(pos2(35.0, 25.0)), rect);
         assert!(pos.is_none());
+    }
+
+    #[test]
+    fn soft_primary_click_requires_hovered_response() {
+        let rect = Rect::from_min_max(pos2(10.0, 10.0), pos2(50.0, 50.0));
+        let now = Instant::now();
+        let press = PrimaryPressInfo {
+            pos: pos2(20.0, 20.0),
+            time: now.checked_sub(Duration::from_millis(20)).unwrap_or(now),
+            in_rect: true,
+            shift_down: false,
+        };
+        let clicked = is_soft_primary_click(&press, Some(pos2(21.0, 20.5)), rect, false);
+        assert!(!clicked);
+    }
+
+    #[test]
+    fn soft_primary_click_accepts_short_release_inside_hovered_image() {
+        let rect = Rect::from_min_max(pos2(10.0, 10.0), pos2(50.0, 50.0));
+        let now = Instant::now();
+        let press = PrimaryPressInfo {
+            pos: pos2(20.0, 20.0),
+            time: now.checked_sub(Duration::from_millis(20)).unwrap_or(now),
+            in_rect: true,
+            shift_down: false,
+        };
+        let clicked = is_soft_primary_click(&press, Some(pos2(22.0, 21.0)), rect, true);
+        assert!(clicked);
+    }
+
+    fn primary_gesture_for_test(
+        down: bool,
+        pressed: bool,
+        started_in_image: bool,
+    ) -> PrimaryImageGesture {
+        PrimaryImageGesture {
+            down,
+            pressed,
+            started_in_image,
+            pointer_over_image: started_in_image,
+            clicked: false,
+            click_pos: None,
+        }
+    }
+
+    #[test]
+    fn auto_place_tick_ignores_presses_started_outside_image() {
+        let mut app = CurcatApp::default();
+        let suppressed = app.auto_place_tick(
+            Some(pos2(100.0, 100.0)),
+            primary_gesture_for_test(true, true, false),
+            false,
+            false,
+            true,
+        );
+        assert!(!suppressed);
+        assert!(!app.interaction.auto_place_state.active);
+        assert!(app.interaction.auto_place_state.hold_started_at.is_none());
+    }
+
+    #[test]
+    fn auto_place_tick_starts_hold_only_for_image_origin_press() {
+        let mut app = CurcatApp::default();
+        let _ = app.auto_place_tick(
+            Some(pos2(100.0, 100.0)),
+            primary_gesture_for_test(true, true, true),
+            false,
+            false,
+            true,
+        );
+        assert!(app.interaction.auto_place_state.hold_started_at.is_some());
+    }
+
+    #[test]
+    fn auto_place_tick_resets_hold_when_pointer_leaves_image() {
+        let mut app = CurcatApp::default();
+        let _ = app.auto_place_tick(
+            Some(pos2(100.0, 100.0)),
+            primary_gesture_for_test(true, true, true),
+            false,
+            false,
+            true,
+        );
+        assert!(app.interaction.auto_place_state.hold_started_at.is_some());
+
+        let _ = app.auto_place_tick(
+            None,
+            primary_gesture_for_test(true, false, true),
+            false,
+            false,
+            true,
+        );
+        assert!(app.interaction.auto_place_state.hold_started_at.is_none());
+        assert!(!app.interaction.auto_place_state.active);
     }
 
     fn cartesian_app(x1: Pos2, x2: Pos2, y1: Pos2, y2: Pos2) -> CurcatApp {
