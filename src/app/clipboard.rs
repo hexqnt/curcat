@@ -1,104 +1,54 @@
 use super::CurcatApp;
-use crate::config::AppConfig;
-use crate::image::{ImageMeta, LoadedImage, human_readable_bytes};
 use arboard::{Clipboard, Error as ClipboardError};
-use egui::{ColorImage, Context};
+use egui::Context;
 
 struct ClipboardCapture {
-    image: ColorImage,
-    byte_len: usize,
-}
-
-struct ValidatedClipboardSize {
     width: usize,
     height: usize,
-    expected_len: usize,
+    rgba: Vec<u8>,
 }
 
 impl CurcatApp {
-    pub(crate) fn paste_image_from_clipboard(&mut self, ctx: &Context) {
+    pub(crate) fn paste_image_from_clipboard(&mut self, _ctx: &Context) {
         self.project.pending_image_task = None;
-        match capture_clipboard_image(&self.config) {
+        self.project.pending_image_limit_prompt = None;
+
+        match capture_clipboard_image() {
             Ok(captured) => {
-                let meta = ImageMeta::from_clipboard(u64::try_from(captured.byte_len).ok());
-                let name = meta.display_name();
-                let loaded = LoadedImage::from_color_image(ctx, captured.image);
-                self.set_loaded_image(loaded, Some(meta));
-                self.set_status(self.i18n().format_loaded_name(&name));
-                self.image.pending_fit_on_load = self.project.pending_project_apply.is_none();
+                self.start_loading_image_from_clipboard(
+                    captured.width,
+                    captured.height,
+                    captured.rgba,
+                );
             }
             Err(err) => self.set_status_error(err),
         }
     }
 }
 
-fn capture_clipboard_image(cfg: &AppConfig) -> Result<ClipboardCapture, String> {
+fn capture_clipboard_image() -> Result<ClipboardCapture, String> {
     let mut clipboard = Clipboard::new().map_err(format_clipboard_error)?;
     let data = clipboard.get_image().map_err(format_clipboard_error)?;
-    let size = validate_clipboard_image(cfg, data.width, data.height)?;
-    let bytes = data.bytes.into_owned();
-    if bytes.len() < size.expected_len {
-        return Err("Paste failed: clipboard image data is truncated.".to_string());
-    }
-    let image =
-        ColorImage::from_rgba_unmultiplied([size.width, size.height], &bytes[..size.expected_len]);
-    Ok(ClipboardCapture {
-        image,
-        byte_len: size.expected_len,
-    })
-}
 
-fn validate_clipboard_image(
-    cfg: &AppConfig,
-    width: usize,
-    height: usize,
-) -> Result<ValidatedClipboardSize, String> {
-    if width == 0 || height == 0 {
+    if data.width == 0 || data.height == 0 {
         return Err("Paste failed: clipboard image is empty.".to_string());
     }
-    let limits = cfg.effective_image_limits();
-    let width_u32 = u32::try_from(width).unwrap_or(u32::MAX);
-    let height_u32 = u32::try_from(height).unwrap_or(u32::MAX);
-    if width_u32 > limits.image_dim || height_u32 > limits.image_dim {
-        return Err(format!(
-            "Paste failed: clipboard image {width}x{height} exceeds the per-side limit ({} px).",
-            limits.image_dim
-        ));
+
+    let expected_len = data
+        .width
+        .checked_mul(data.height)
+        .and_then(|px| px.checked_mul(4))
+        .ok_or_else(|| "Paste failed: clipboard image dimensions are too large.".to_string())?;
+
+    let bytes = data.bytes.into_owned();
+    if bytes.len() < expected_len {
+        return Err("Paste failed: clipboard image data is truncated.".to_string());
     }
 
-    let total_pixels = u64::try_from(width)
-        .ok()
-        .and_then(|w| u64::try_from(height).ok().and_then(|h| w.checked_mul(h)))
-        .ok_or_else(|| {
-            "Paste failed: clipboard dimensions are too large for this system.".to_string()
-        })?;
-    if total_pixels > limits.total_pixels {
-        return Err(format!(
-            "Paste failed: clipboard image too large: {width}x{height} (~{} MP) exceeds limit (~{} MP).",
-            total_pixels / 1_000_000,
-            limits.total_pixels / 1_000_000
-        ));
-    }
-
-    let rgba_bytes = total_pixels.checked_mul(4).ok_or_else(|| {
-        "Paste failed: clipboard image is too large to fit in memory.".to_string()
-    })?;
-    if rgba_bytes > limits.alloc_bytes {
-        return Err(format!(
-            "Paste failed: clipboard image needs about {} of RGBA data, over the configured limit ({}).",
-            human_readable_bytes(rgba_bytes),
-            human_readable_bytes(limits.alloc_bytes)
-        ));
-    }
-
-    let expected_len = usize::try_from(rgba_bytes).map_err(|_| {
-        "Paste failed: clipboard image does not fit in available memory.".to_string()
-    })?;
-
-    Ok(ValidatedClipboardSize {
-        width,
-        height,
-        expected_len,
+    Ok(ClipboardCapture {
+        width: data.width,
+        height: data.height,
+        rgba: bytes[..expected_len].to_vec(),
     })
 }
 

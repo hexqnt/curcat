@@ -1,6 +1,6 @@
 use super::{
-    AxisCalUi, CurcatApp, MAX_ZOOM, MIN_ZOOM, NativeDialog, PendingImageTask, PickMode,
-    PickedPoint, PolarCalUi, ZoomIntent,
+    AxisCalUi, CurcatApp, MAX_ZOOM, MIN_ZOOM, NativeDialog, PendingImageLimitPrompt,
+    PendingImageTask, PickMode, PickedPoint, PolarCalUi, ZoomIntent,
 };
 use crate::i18n::UiLanguage;
 use crate::image::ImageTransformRecord;
@@ -48,6 +48,7 @@ pub(super) struct ProjectLoadPrompt {
 
 pub struct ProjectState {
     pub(super) pending_image_task: Option<PendingImageTask>,
+    pub(super) pending_image_limit_prompt: Option<PendingImageLimitPrompt>,
     pub(super) pending_project_apply: Option<ProjectApplyPlan>,
     pub(super) pending_project_save: Option<PendingProjectSave>,
     pub(super) project_prompt: Option<ProjectLoadPrompt>,
@@ -282,6 +283,7 @@ impl CurcatApp {
 
     pub(super) fn handle_project_load(&mut self, path: PathBuf) {
         self.project.project_prompt = None;
+        self.project.pending_image_limit_prompt = None;
         self.project.pending_project_apply = None;
         self.project.last_project_dir = path.parent().map(Path::to_path_buf);
         self.project.last_project_path = Some(path.clone());
@@ -320,6 +322,7 @@ impl CurcatApp {
     pub(super) fn begin_applying_project(&mut self, plan: ProjectApplyPlan) {
         let image_path = plan.image.path.clone();
         self.project.project_prompt = None;
+        self.project.pending_image_limit_prompt = None;
         let status = {
             let source_label =
                 Self::project_source_label(self.ui.language, plan.image.source, false);

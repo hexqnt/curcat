@@ -1,4 +1,6 @@
-use crate::image::{ImageFilters, ImageMeta, ImageTransformRecord, LoadedImage};
+use crate::image::{
+    ImageFilters, ImageLimitInfo, ImageLoadPolicy, ImageMeta, ImageTransformRecord, LoadedImage,
+};
 use egui::{ColorImage, Pos2, Vec2};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -19,6 +21,11 @@ pub enum ZoomIntent {
 pub enum ImageLoadRequest {
     Path(PathBuf),
     Bytes(Vec<u8>),
+    ClipboardRgba {
+        width: usize,
+        height: usize,
+        rgba: Vec<u8>,
+    },
 }
 
 pub struct PendingImageTask {
@@ -28,7 +35,17 @@ pub struct PendingImageTask {
 
 pub enum ImageLoadResult {
     Success(ColorImage),
+    NeedsLimitDecision {
+        request: ImageLoadRequest,
+        info: ImageLimitInfo,
+    },
     Error(String),
+}
+
+pub struct PendingImageLimitPrompt {
+    pub(super) request: ImageLoadRequest,
+    pub(super) meta: PendingImageMeta,
+    pub(super) info: ImageLimitInfo,
 }
 
 #[derive(Clone)]
@@ -40,6 +57,9 @@ pub enum PendingImageMeta {
         name: Option<String>,
         byte_len: usize,
         last_modified: Option<SystemTime>,
+    },
+    Clipboard {
+        byte_len: usize,
     },
 }
 
@@ -53,6 +73,7 @@ impl PendingImageMeta {
             Self::DroppedBytes { name, .. } => name
                 .as_deref()
                 .map_or_else(|| "dropped bytes".to_string(), str::to_string),
+            Self::Clipboard { .. } => "clipboard image".to_string(),
         }
     }
 
@@ -64,7 +85,17 @@ impl PendingImageMeta {
                 byte_len,
                 last_modified,
             } => ImageMeta::from_dropped_bytes(name.as_deref(), byte_len, last_modified),
+            Self::Clipboard { byte_len } => ImageMeta::from_clipboard(u64::try_from(byte_len).ok()),
         }
+    }
+}
+
+impl PendingImageLimitPrompt {
+    pub(super) fn retry_with_policy(
+        self,
+        policy: ImageLoadPolicy,
+    ) -> (ImageLoadRequest, PendingImageMeta, ImageLoadPolicy) {
+        (self.request, self.meta, policy)
     }
 }
 

@@ -52,6 +52,7 @@ lz4_flex = "0.13"
 crc32fast = "1.5"
 pathdiff = "0.2"
 egui_extras = { version = "0.34", features = ["svg"] }
+resvg = "0.47"
 
 [profile.release]
 opt-level = 3

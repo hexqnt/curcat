@@ -4,6 +4,7 @@ pub mod common;
 pub mod dialogs;
 pub mod filters;
 pub mod icons;
+pub mod image_limits;
 pub mod info;
 pub mod project;
 pub mod side;

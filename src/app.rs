@@ -46,8 +46,8 @@ pub use calibration::{
 pub use constants::*;
 pub use export_state::{ExportKind, ExportState, SAMPLE_COUNT_MIN};
 pub use image_state::{
-    ImageLoadRequest, ImageLoadResult, ImageState, PendingImageMeta, PendingImageTask, ZoomAnchor,
-    ZoomIntent,
+    ImageLoadRequest, ImageLoadResult, ImageState, PendingImageLimitPrompt, PendingImageMeta,
+    PendingImageTask, ZoomAnchor, ZoomIntent,
 };
 pub use interaction::{AutoPlaceState, DragTarget, InteractionState, PrimaryPressInfo};
 pub use points::{PickedPoint, PointsState};
@@ -108,6 +108,7 @@ impl Default for CurcatApp {
             },
             project: ProjectState {
                 pending_image_task: None,
+                pending_image_limit_prompt: None,
                 pending_project_apply: None,
                 pending_project_save: None,
                 project_prompt: None,
@@ -920,6 +921,7 @@ impl eframe::App for CurcatApp {
         self.ui_auto_trace_window(&ctx);
         self.ui_points_info_window(&ctx);
         self.ui_project_prompt(&ctx);
+        self.ui_image_limits_prompt(&ctx);
 
         let mut close_dialog = false;
         let mut picked_export_path: Option<PathBuf> = None;

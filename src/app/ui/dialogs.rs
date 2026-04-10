@@ -90,7 +90,7 @@ impl CurcatApp {
     }
 
     pub(crate) fn make_open_dialog(&self, initial_dir: Option<&Path>) -> FileDialog {
-        // Keep in sync with enabled `image` crate features.
+        // Keep in sync with enabled `image` crate features + SVG/SVGZ via resvg.
         // Add separate presets for frequent formats.
         let mut dialog = FileDialog::new()
             .title(self.t(crate::i18n::TextKey::OpenImageDialogTitle))
@@ -99,7 +99,7 @@ impl CurcatApp {
                 self.t(crate::i18n::TextKey::ImageFilterAll),
                 vec![
                     "png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "tga", "tiff", "tif", "pnm",
-                    "pbm", "pgm", "ppm", "hdr", "dds",
+                    "pbm", "pgm", "ppm", "hdr", "dds", "svg", "svgz",
                 ],
             )
             // Individual format presets
@@ -107,6 +107,7 @@ impl CurcatApp {
             .add_file_filter_extensions("JPEG/JPG", vec!["jpg", "jpeg"])
             .add_file_filter_extensions("BMP", vec!["bmp"])
             .add_file_filter_extensions("TIFF", vec!["tiff", "tif"])
+            .add_file_filter_extensions("SVG/SVGZ", vec!["svg", "svgz"])
             .default_file_filter(self.t(crate::i18n::TextKey::ImageFilterAll));
         if let Some(dir) = initial_dir {
             dialog = dialog.initial_directory(dir.to_path_buf());

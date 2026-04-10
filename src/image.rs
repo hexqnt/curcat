@@ -4,7 +4,10 @@ mod meta;
 mod transform;
 
 pub use filters::{ImageFilters, apply_image_filters};
-pub use load::{decode_image_from_bytes, decode_image_from_path};
+pub use load::{
+    ImageLimitInfo, ImageLoadOutcome, ImageLoadPolicy, decode_image_from_bytes,
+    decode_image_from_clipboard_rgba, decode_image_from_path,
+};
 pub use meta::{
     ImageMeta, describe_aspect_ratio, format_system_time, human_readable_bytes, total_pixel_count,
 };
