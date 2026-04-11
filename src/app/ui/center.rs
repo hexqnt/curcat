@@ -2104,7 +2104,8 @@ impl CurcatApp {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn ui_central_image(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui) {
+    pub(crate) fn ui_central_image(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        self.image.last_pixels_per_point = ctx.pixels_per_point().max(1.0);
         self.image.last_viewport_size = Some(ui.available_size());
         self.apply_pending_fit_on_load();
         self.handle_drag_and_drop(ui);

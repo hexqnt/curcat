@@ -1,5 +1,6 @@
 use crate::image::{
-    ImageFilters, ImageLimitInfo, ImageLoadPolicy, ImageMeta, ImageTransformRecord, LoadedImage,
+    ImageDecodeOptions, ImageFilters, ImageLimitInfo, ImageLoadPolicy, ImageMeta,
+    ImageTransformRecord, LoadedImage,
 };
 use egui::{ColorImage, Pos2, Vec2};
 use std::path::PathBuf;
@@ -31,6 +32,7 @@ pub enum ImageLoadRequest {
 pub struct PendingImageTask {
     pub(super) rx: Receiver<ImageLoadResult>,
     pub(super) meta: PendingImageMeta,
+    pub(super) decode_options: ImageDecodeOptions,
 }
 
 pub enum ImageLoadResult {
@@ -46,6 +48,7 @@ pub struct PendingImageLimitPrompt {
     pub(super) request: ImageLoadRequest,
     pub(super) meta: PendingImageMeta,
     pub(super) info: ImageLimitInfo,
+    pub(super) decode_options: ImageDecodeOptions,
 }
 
 #[derive(Clone)]
@@ -94,8 +97,13 @@ impl PendingImageLimitPrompt {
     pub(super) fn retry_with_policy(
         self,
         policy: ImageLoadPolicy,
-    ) -> (ImageLoadRequest, PendingImageMeta, ImageLoadPolicy) {
-        (self.request, self.meta, policy)
+    ) -> (
+        ImageLoadRequest,
+        PendingImageMeta,
+        ImageDecodeOptions,
+        ImageLoadPolicy,
+    ) {
+        (self.request, self.meta, self.decode_options, policy)
     }
 }
 
@@ -107,6 +115,7 @@ pub struct ImageState {
     pub(super) transform: ImageTransformRecord,
     pub(super) pan: Vec2,
     pub(super) last_viewport_size: Option<Vec2>,
+    pub(super) last_pixels_per_point: f32,
     pub(super) skip_pan_sync_once: bool,
     pub(super) pending_fit_on_load: bool,
     pub(super) zoom: f32,

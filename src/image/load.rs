@@ -11,6 +11,7 @@ use std::sync::{Arc, OnceLock};
 const HARD_LIMIT_SIDE: u32 = 32_768;
 const HARD_LIMIT_TOTAL_PIXELS: u64 = 500_000_000;
 const HARD_LIMIT_ALLOC_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const SVG_MAX_SUPERSAMPLE_FACTOR: u32 = 2;
 
 const HARD_LIMITS: ImageLimits = ImageLimits {
     image_dim: HARD_LIMIT_SIDE,
@@ -23,6 +24,11 @@ pub enum ImageLoadPolicy {
     AskUser,
     AutoscaleToConfig,
     IgnoreConfigWithHardCap,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImageDecodeOptions {
+    pub svg_min_render_size: Option<[u32; 2]>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,10 +87,20 @@ pub fn decode_image_from_path(
     path: &Path,
     policy: ImageLoadPolicy,
 ) -> anyhow::Result<ImageLoadOutcome> {
+    decode_image_from_path_with_options(cfg, path, policy, ImageDecodeOptions::default())
+}
+
+/// Декодирует изображение из файла с опциями декодирования и политикой лимитов.
+pub fn decode_image_from_path_with_options(
+    cfg: &AppConfig,
+    path: &Path,
+    policy: ImageLoadPolicy,
+    options: ImageDecodeOptions,
+) -> anyhow::Result<ImageLoadOutcome> {
     let bytes =
         std::fs::read(path).with_context(|| format!("Failed to read {}", path.display()))?;
     let resources_dir = path.parent();
-    decode_image_data(cfg, &bytes, Some(path), resources_dir, policy)
+    decode_image_data(cfg, &bytes, Some(path), resources_dir, policy, options)
 }
 
 /// Декодирует изображение из массива байт с политикой лимитов.
@@ -93,7 +109,17 @@ pub fn decode_image_from_bytes(
     bytes: &[u8],
     policy: ImageLoadPolicy,
 ) -> anyhow::Result<ImageLoadOutcome> {
-    decode_image_data(cfg, bytes, None, None, policy)
+    decode_image_from_bytes_with_options(cfg, bytes, policy, ImageDecodeOptions::default())
+}
+
+/// Декодирует изображение из массива байт с опциями декодирования и политикой лимитов.
+pub fn decode_image_from_bytes_with_options(
+    cfg: &AppConfig,
+    bytes: &[u8],
+    policy: ImageLoadPolicy,
+    options: ImageDecodeOptions,
+) -> anyhow::Result<ImageLoadOutcome> {
+    decode_image_data(cfg, bytes, None, None, policy, options)
 }
 
 /// Декодирует изображение из RGBA-буфера буфера обмена с политикой лимитов.
@@ -103,6 +129,25 @@ pub fn decode_image_from_clipboard_rgba(
     height: usize,
     rgba: &[u8],
     policy: ImageLoadPolicy,
+) -> anyhow::Result<ImageLoadOutcome> {
+    decode_image_from_clipboard_rgba_with_options(
+        cfg,
+        width,
+        height,
+        rgba,
+        policy,
+        ImageDecodeOptions::default(),
+    )
+}
+
+/// Декодирует изображение из RGBA-буфера буфера обмена с опциями и политикой лимитов.
+pub fn decode_image_from_clipboard_rgba_with_options(
+    cfg: &AppConfig,
+    width: usize,
+    height: usize,
+    rgba: &[u8],
+    policy: ImageLoadPolicy,
+    _options: ImageDecodeOptions,
 ) -> anyhow::Result<ImageLoadOutcome> {
     let width_u32 = u32::try_from(width).context("Clipboard image width is too large")?;
     let height_u32 = u32::try_from(height).context("Clipboard image height is too large")?;
@@ -140,6 +185,7 @@ fn decode_image_data(
     path_hint: Option<&Path>,
     resources_dir: Option<&Path>,
     policy: ImageLoadPolicy,
+    options: ImageDecodeOptions,
 ) -> anyhow::Result<ImageLoadOutcome> {
     let cfg_limits = cfg.effective_image_limits();
     let force_svg = path_hint
@@ -150,7 +196,7 @@ fn decode_image_data(
     if force_svg || looks_like_svg(bytes) {
         match parse_svg_tree(bytes, resources_dir) {
             Ok(tree) => {
-                return decode_svg_tree(&tree, &cfg_limits, policy);
+                return decode_svg_tree(&tree, &cfg_limits, policy, options);
             }
             Err(err) if force_svg => {
                 return Err(err.context("Failed to parse SVG data"));
@@ -196,6 +242,7 @@ fn decode_svg_tree(
     tree: &usvg::Tree,
     cfg_limits: &ImageLimits,
     policy: ImageLoadPolicy,
+    options: ImageDecodeOptions,
 ) -> anyhow::Result<ImageLoadOutcome> {
     let source_size = tree.size().to_int_size();
     let source_w = source_size.width();
@@ -206,11 +253,14 @@ fn decode_svg_tree(
     match decision {
         PlanDecision::Prompt(info) => Ok(ImageLoadOutcome::NeedsLimitDecision(info)),
         PlanDecision::Proceed(plan) => {
-            let target = match plan {
-                DecodePlan::OriginalConfig | DecodePlan::OriginalHard => [source_w, source_h],
-                DecodePlan::ResizeConfig(size) => size,
+            let (base_target, render_limits) = match plan {
+                DecodePlan::OriginalConfig => ([source_w, source_h], cfg_limits),
+                DecodePlan::OriginalHard => ([source_w, source_h], &HARD_LIMITS),
+                DecodePlan::ResizeConfig(size) => (size, cfg_limits),
             };
-            let color = render_svg_to_color_image(tree, target[0], target[1])?;
+            let target =
+                upscale_svg_target_for_ui(base_target, options.svg_min_render_size, render_limits);
+            let color = render_svg_to_color_image(tree, target[0], target[1], render_limits)?;
             Ok(ImageLoadOutcome::Ready(color))
         }
     }
@@ -240,29 +290,189 @@ fn render_svg_to_color_image(
     tree: &usvg::Tree,
     target_w: u32,
     target_h: u32,
+    limits: &ImageLimits,
 ) -> anyhow::Result<ColorImage> {
-    let mut pixmap = tiny_skia::Pixmap::new(target_w, target_h)
-        .ok_or_else(|| anyhow::anyhow!("Failed to allocate SVG render target"))?;
-
-    let source_size = tree.size().to_int_size();
-    let source_w = source_size.width();
-    let source_h = source_size.height();
-    let transform = if source_w == target_w && source_h == target_h {
-        tiny_skia::Transform::identity()
+    let supersample_factor = pick_svg_supersample_factor(target_w, target_h, limits);
+    let render_w = target_w
+        .checked_mul(supersample_factor)
+        .context("SVG render width overflows")?;
+    let render_h = target_h
+        .checked_mul(supersample_factor)
+        .context("SVG render height overflows")?;
+    let rendered = render_svg_to_pixmap(tree, render_w, render_h)?;
+    let pixmap = if supersample_factor == 1 {
+        rendered
     } else {
-        tiny_skia::Transform::from_scale(
-            u32_to_f32(target_w) / u32_to_f32(source_w),
-            u32_to_f32(target_h) / u32_to_f32(source_h),
-        )
+        downsample_pixmap(&rendered, target_w, target_h)?
     };
-
-    resvg::render(tree, transform, &mut pixmap.as_mut());
     let width = usize::try_from(target_w).context("SVG width does not fit usize")?;
     let height = usize::try_from(target_h).context("SVG height does not fit usize")?;
     Ok(ColorImage::from_rgba_premultiplied(
         [width, height],
         pixmap.data(),
     ))
+}
+
+fn render_svg_to_pixmap(
+    tree: &usvg::Tree,
+    target_w: u32,
+    target_h: u32,
+) -> anyhow::Result<tiny_skia::Pixmap> {
+    let mut pixmap = tiny_skia::Pixmap::new(target_w, target_h)
+        .ok_or_else(|| anyhow::anyhow!("Failed to allocate SVG render target"))?;
+
+    let source_size = tree.size();
+    let source_w = source_size.width();
+    let source_h = source_size.height();
+    let target_width_f = u32_to_f32(target_w);
+    let target_height_f = u32_to_f32(target_h);
+    let transform = if (source_w - target_width_f).abs() <= f32::EPSILON
+        && (source_h - target_height_f).abs() <= f32::EPSILON
+    {
+        tiny_skia::Transform::identity()
+    } else {
+        tiny_skia::Transform::from_scale(target_width_f / source_w, target_height_f / source_h)
+    };
+
+    resvg::render(tree, transform, &mut pixmap.as_mut());
+    Ok(pixmap)
+}
+
+fn downsample_pixmap(
+    source: &tiny_skia::Pixmap,
+    target_w: u32,
+    target_h: u32,
+) -> anyhow::Result<tiny_skia::Pixmap> {
+    let mut output = tiny_skia::Pixmap::new(target_w, target_h)
+        .ok_or_else(|| anyhow::anyhow!("Failed to allocate SVG downsample target"))?;
+    let paint = tiny_skia::PixmapPaint {
+        quality: tiny_skia::FilterQuality::Bicubic,
+        ..tiny_skia::PixmapPaint::default()
+    };
+    let transform = tiny_skia::Transform::from_scale(
+        u32_to_f32(target_w) / u32_to_f32(source.width()),
+        u32_to_f32(target_h) / u32_to_f32(source.height()),
+    );
+    output
+        .as_mut()
+        .draw_pixmap(0, 0, source.as_ref(), &paint, transform, None);
+    Ok(output)
+}
+
+fn pick_svg_supersample_factor(target_w: u32, target_h: u32, limits: &ImageLimits) -> u32 {
+    let mut factor = SVG_MAX_SUPERSAMPLE_FACTOR;
+    while factor > 1 {
+        if svg_supersample_fits_limits(target_w, target_h, factor, limits) {
+            return factor;
+        }
+        factor -= 1;
+    }
+    1
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn upscale_svg_target_for_ui(
+    base_target: [u32; 2],
+    ui_min_size: Option<[u32; 2]>,
+    limits: &ImageLimits,
+) -> [u32; 2] {
+    let Some([ui_min_w, ui_min_h]) = ui_min_size else {
+        return base_target;
+    };
+    if ui_min_w == 0 || ui_min_h == 0 {
+        return base_target;
+    }
+
+    let [base_w, base_h] = base_target;
+    if base_w >= ui_min_w && base_h >= ui_min_h {
+        return base_target;
+    }
+
+    let required_scale = (f64::from(ui_min_w) / f64::from(base_w))
+        .max(f64::from(ui_min_h) / f64::from(base_h))
+        .max(1.0);
+
+    let pixel_limit = limits.total_pixels.min(limits.alloc_bytes / 4);
+    if pixel_limit == 0 {
+        return base_target;
+    }
+
+    let base_pixels = u64::from(base_w) * u64::from(base_h);
+    let max_scale = (f64::from(limits.image_dim) / f64::from(base_w))
+        .min(f64::from(limits.image_dim) / f64::from(base_h))
+        .min((pixel_limit as f64 / base_pixels as f64).sqrt());
+    if !max_scale.is_finite() || max_scale <= 0.0 {
+        return base_target;
+    }
+
+    let applied_scale = required_scale.min(max_scale);
+    if applied_scale <= 1.0 {
+        return base_target;
+    }
+
+    let target_w = (f64::from(base_w) * applied_scale).floor().max(1.0) as u32;
+    let target_h = (f64::from(base_h) * applied_scale).floor().max(1.0) as u32;
+    if fits_limits(target_w, target_h, limits) {
+        [target_w, target_h]
+    } else {
+        base_target
+    }
+}
+
+fn svg_supersample_fits_limits(
+    target_w: u32,
+    target_h: u32,
+    factor: u32,
+    limits: &ImageLimits,
+) -> bool {
+    let Some(scaled_w) = u64::from(target_w).checked_mul(u64::from(factor)) else {
+        return false;
+    };
+    let Some(scaled_h) = u64::from(target_h).checked_mul(u64::from(factor)) else {
+        return false;
+    };
+    let Some(total_pixels) = scaled_w.checked_mul(scaled_h) else {
+        return false;
+    };
+    let Some(rgba_bytes) = total_pixels.checked_mul(4) else {
+        return false;
+    };
+
+    fits_limits_u64(scaled_w, scaled_h, total_pixels, rgba_bytes, &HARD_LIMITS)
+        && fits_limits_u64(scaled_w, scaled_h, total_pixels, rgba_bytes, limits)
+}
+
+fn fits_limits(width: u32, height: u32, limits: &ImageLimits) -> bool {
+    let Some(total_pixels) = u64::from(width).checked_mul(u64::from(height)) else {
+        return false;
+    };
+    let Some(rgba_bytes) = total_pixels.checked_mul(4) else {
+        return false;
+    };
+    fits_limits_u64(
+        u64::from(width),
+        u64::from(height),
+        total_pixels,
+        rgba_bytes,
+        limits,
+    )
+}
+
+const fn fits_limits_u64(
+    width: u64,
+    height: u64,
+    total_pixels: u64,
+    rgba_bytes: u64,
+    limits: &ImageLimits,
+) -> bool {
+    width <= limits.image_dim as u64
+        && height <= limits.image_dim as u64
+        && total_pixels <= limits.total_pixels
+        && rgba_bytes <= limits.alloc_bytes
 }
 
 fn raster_dimensions(bytes: &[u8]) -> anyhow::Result<(u32, u32)> {
@@ -659,5 +869,66 @@ mod tests {
             panic!("Expected ready ignored image");
         };
         assert_eq!(ignored.size, [4_000, 2_000]);
+    }
+
+    #[test]
+    fn svg_supersample_uses_max_factor_when_limits_allow() {
+        let limits = ImageLimits {
+            image_dim: 4_096,
+            total_pixels: 20_000_000,
+            alloc_bytes: 256 * 1024 * 1024,
+        };
+        assert_eq!(
+            pick_svg_supersample_factor(1_000, 600, &limits),
+            SVG_MAX_SUPERSAMPLE_FACTOR
+        );
+    }
+
+    #[test]
+    fn svg_supersample_falls_back_to_1x_when_limited() {
+        let limits = ImageLimits {
+            image_dim: 1_500,
+            total_pixels: 1_000_000,
+            alloc_bytes: 4_000_000,
+        };
+        assert_eq!(pick_svg_supersample_factor(1_000, 800, &limits), 1);
+    }
+
+    #[test]
+    fn svg_ui_min_target_upscales_for_viewport() {
+        let cfg = cfg_with_limits(10_000, 200_000_000, 1_000_000_000);
+        let svg = svg_bytes(400, 200);
+        let outcome = decode_image_from_bytes_with_options(
+            &cfg,
+            &svg,
+            ImageLoadPolicy::AskUser,
+            ImageDecodeOptions {
+                svg_min_render_size: Some([1_200, 800]),
+            },
+        )
+        .unwrap();
+        let ImageLoadOutcome::Ready(color) = outcome else {
+            panic!("Expected ready image");
+        };
+        assert_eq!(color.size, [1_600, 800]);
+    }
+
+    #[test]
+    fn svg_ui_min_target_respects_limits() {
+        let cfg = cfg_with_limits(1_000, 1_000_000, 200_000_000);
+        let svg = svg_bytes(400, 200);
+        let outcome = decode_image_from_bytes_with_options(
+            &cfg,
+            &svg,
+            ImageLoadPolicy::AskUser,
+            ImageDecodeOptions {
+                svg_min_render_size: Some([2_400, 1_800]),
+            },
+        )
+        .unwrap();
+        let ImageLoadOutcome::Ready(color) = outcome else {
+            panic!("Expected ready image");
+        };
+        assert_eq!(color.size, [1_000, 500]);
     }
 }

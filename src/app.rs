@@ -98,6 +98,7 @@ impl Default for CurcatApp {
                 transform: ImageTransformRecord::identity(),
                 pan: Vec2::ZERO,
                 last_viewport_size: None,
+                last_pixels_per_point: 1.0,
                 skip_pan_sync_once: false,
                 pending_fit_on_load: false,
                 zoom: 1.0,

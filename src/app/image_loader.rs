@@ -4,13 +4,17 @@ use super::{
 };
 use crate::i18n::UiLanguage;
 use crate::image::{
-    ImageLoadOutcome, ImageLoadPolicy, LoadedImage, decode_image_from_bytes,
-    decode_image_from_clipboard_rgba, decode_image_from_path,
+    ImageDecodeOptions, ImageLoadOutcome, ImageLoadPolicy, LoadedImage, decode_image_from_bytes,
+    decode_image_from_bytes_with_options, decode_image_from_clipboard_rgba,
+    decode_image_from_clipboard_rgba_with_options, decode_image_from_path,
+    decode_image_from_path_with_options,
 };
 use egui::{ColorImage, Context};
 use std::path::Path;
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
+
+const SVG_VIEWPORT_QUALITY_SCALE: f32 = 1.0;
 
 impl CurcatApp {
     pub(crate) fn start_loading_image_from_path(&mut self, path: std::path::PathBuf) {
@@ -19,7 +23,12 @@ impl CurcatApp {
         }
         self.remember_image_dir_from_path(&path);
         let meta = PendingImageMeta::Path { path: path.clone() };
-        self.start_image_load(ImageLoadRequest::Path(path), meta, ImageLoadPolicy::AskUser);
+        self.start_image_load(
+            ImageLoadRequest::Path(path),
+            meta,
+            ImageLoadPolicy::AskUser,
+            self.current_decode_options(),
+        );
     }
 
     pub(crate) fn start_loading_image_from_bytes(
@@ -40,6 +49,7 @@ impl CurcatApp {
             ImageLoadRequest::Bytes(bytes),
             meta,
             ImageLoadPolicy::AskUser,
+            self.current_decode_options(),
         );
     }
 
@@ -63,6 +73,7 @@ impl CurcatApp {
             },
             meta,
             ImageLoadPolicy::AskUser,
+            self.current_decode_options(),
         );
     }
 
@@ -70,8 +81,8 @@ impl CurcatApp {
         let Some(prompt) = self.project.pending_image_limit_prompt.take() else {
             return;
         };
-        let (request, meta, policy) = prompt.retry_with_policy(policy);
-        self.start_image_load(request, meta, policy);
+        let (request, meta, decode_options, policy) = prompt.retry_with_policy(policy);
+        self.start_image_load(request, meta, policy, decode_options);
     }
 
     pub(crate) fn reject_image_load_due_to_limits(&mut self) {
@@ -89,6 +100,7 @@ impl CurcatApp {
         request: ImageLoadRequest,
         meta: PendingImageMeta,
         policy: ImageLoadPolicy,
+        decode_options: ImageDecodeOptions,
     ) {
         let description = meta.description();
         let cfg = self.config.clone();
@@ -96,11 +108,15 @@ impl CurcatApp {
         self.project.pending_image_limit_prompt = None;
 
         thread::spawn(move || {
-            let msg = decode_request(&cfg, request, policy);
+            let msg = decode_request(&cfg, request, policy, decode_options);
             let _ = tx.send(msg);
         });
 
-        self.project.pending_image_task = Some(PendingImageTask { rx, meta });
+        self.project.pending_image_task = Some(PendingImageTask {
+            rx,
+            meta,
+            decode_options,
+        });
         self.set_status(self.i18n().format_loading_image(&description));
     }
 
@@ -121,6 +137,7 @@ impl CurcatApp {
                     request,
                     meta: task.meta,
                     info,
+                    decode_options: task.decode_options,
                 });
                 self.set_status_warn(match self.ui.language {
                     UiLanguage::En => {
@@ -195,20 +212,46 @@ impl CurcatApp {
         });
         false
     }
+
+    fn current_decode_options(&self) -> ImageDecodeOptions {
+        let Some(viewport) = self.image.last_viewport_size else {
+            return ImageDecodeOptions::default();
+        };
+
+        let ppp = if self.image.last_pixels_per_point.is_finite() {
+            self.image.last_pixels_per_point.max(1.0)
+        } else {
+            1.0
+        };
+        let min_w = ceil_f32_to_u32(viewport.x * ppp * SVG_VIEWPORT_QUALITY_SCALE);
+        let min_h = ceil_f32_to_u32(viewport.y * ppp * SVG_VIEWPORT_QUALITY_SCALE);
+        ImageDecodeOptions {
+            svg_min_render_size: Some([min_w, min_h]),
+        }
+    }
 }
 
 fn decode_request(
     cfg: &crate::config::AppConfig,
     request: ImageLoadRequest,
     policy: ImageLoadPolicy,
+    decode_options: ImageDecodeOptions,
 ) -> ImageLoadResult {
     match request {
         ImageLoadRequest::Path(path) => {
-            let outcome = decode_image_from_path(cfg, &path, policy);
+            let outcome = if decode_options == ImageDecodeOptions::default() {
+                decode_image_from_path(cfg, &path, policy)
+            } else {
+                decode_image_from_path_with_options(cfg, &path, policy, decode_options)
+            };
             map_outcome(ImageLoadRequest::Path(path), outcome)
         }
         ImageLoadRequest::Bytes(bytes) => {
-            let outcome = decode_image_from_bytes(cfg, &bytes, policy);
+            let outcome = if decode_options == ImageDecodeOptions::default() {
+                decode_image_from_bytes(cfg, &bytes, policy)
+            } else {
+                decode_image_from_bytes_with_options(cfg, &bytes, policy, decode_options)
+            };
             map_outcome(ImageLoadRequest::Bytes(bytes), outcome)
         }
         ImageLoadRequest::ClipboardRgba {
@@ -216,7 +259,18 @@ fn decode_request(
             height,
             rgba,
         } => {
-            let outcome = decode_image_from_clipboard_rgba(cfg, width, height, &rgba, policy);
+            let outcome = if decode_options == ImageDecodeOptions::default() {
+                decode_image_from_clipboard_rgba(cfg, width, height, &rgba, policy)
+            } else {
+                decode_image_from_clipboard_rgba_with_options(
+                    cfg,
+                    width,
+                    height,
+                    &rgba,
+                    policy,
+                    decode_options,
+                )
+            };
             map_outcome(
                 ImageLoadRequest::ClipboardRgba {
                     width,
@@ -226,6 +280,23 @@ fn decode_request(
                 outcome,
             )
         }
+    }
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn ceil_f32_to_u32(value: f32) -> u32 {
+    if !value.is_finite() || value <= 1.0 {
+        return 1;
+    }
+    let max_u32_f = u32::MAX as f32;
+    if value >= max_u32_f {
+        u32::MAX
+    } else {
+        value.ceil() as u32
     }
 }
 
