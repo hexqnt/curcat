@@ -53,6 +53,7 @@ crc32fast = "1.5"
 pathdiff = "0.2"
 egui_extras = { version = "0.34", features = ["svg"] }
 resvg = "0.47"
+maud = "0.27.0"
 
 [profile.release]
 opt-level = 3

@@ -59,21 +59,27 @@ impl CurcatApp {
         self.start_export(ExportFormat::Ron);
     }
 
+    pub(crate) fn start_export_html(&mut self) {
+        self.start_export(ExportFormat::Html);
+    }
+
+    pub(crate) fn start_export_xml(&mut self) {
+        self.start_export(ExportFormat::Xml);
+    }
+
+    pub(crate) fn start_export_markdown(&mut self) {
+        self.start_export(ExportFormat::Markdown);
+    }
+
     pub(crate) fn start_export(&mut self, format: ExportFormat) {
         match self.build_export_payload() {
             Ok(payload) => {
-                let dialog_title = match (self.ui.language, format) {
-                    (UiLanguage::En, ExportFormat::Csv) => "Export CSV",
-                    (UiLanguage::En, ExportFormat::Xlsx) => "Export Excel",
-                    (UiLanguage::En, ExportFormat::Json) => "Export JSON",
-                    (UiLanguage::En, ExportFormat::Ron) => "Export RON",
-                    (UiLanguage::Ru, ExportFormat::Csv) => "Экспорт CSV",
-                    (UiLanguage::Ru, ExportFormat::Xlsx) => "Экспорт Excel",
-                    (UiLanguage::Ru, ExportFormat::Json) => "Экспорт JSON",
-                    (UiLanguage::Ru, ExportFormat::Ron) => "Экспорт RON",
+                let dialog_title = match self.ui.language {
+                    UiLanguage::En => format!("Export {}", format.label()),
+                    UiLanguage::Ru => format!("Экспорт {}", format.label()),
                 };
                 let mut dialog = Self::make_save_dialog(
-                    dialog_title,
+                    &dialog_title,
                     format.default_filename(),
                     &[format.extension()],
                     self.project.last_export_dir.as_deref(),

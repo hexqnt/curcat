@@ -209,6 +209,9 @@ pub enum TextKey {
     ExportJson,
     ExportRon,
     ExportExcel,
+    ExportHtml,
+    ExportXml,
+    ExportMarkdown,
     AddPointsBeforeExport,
     CompleteCalibrationBeforeExportCartesian,
     CompleteCalibrationBeforeExportPolar,
@@ -315,7 +318,7 @@ pub enum TextKey {
 
 impl TextKey {
     #[cfg(test)]
-    pub const ALL: [Self; 267] = [
+    pub const ALL: [Self; 270] = [
         Self::File,
         Self::Appearance,
         Self::OpenImage,
@@ -481,6 +484,9 @@ impl TextKey {
         Self::ExportJson,
         Self::ExportRon,
         Self::ExportExcel,
+        Self::ExportHtml,
+        Self::ExportXml,
+        Self::ExportMarkdown,
         Self::AddPointsBeforeExport,
         Self::CompleteCalibrationBeforeExportCartesian,
         Self::CompleteCalibrationBeforeExportPolar,
@@ -1064,6 +1070,9 @@ const fn en_text(key: TextKey) -> &'static str {
         TextKey::ExportJson => "Export JSON…",
         TextKey::ExportRon => "Export RON…",
         TextKey::ExportExcel => "Export Excel…",
+        TextKey::ExportHtml => "Export HTML…",
+        TextKey::ExportXml => "Export XML…",
+        TextKey::ExportMarkdown => "Export Markdown…",
         TextKey::AddPointsBeforeExport => "Add points before exporting to",
         TextKey::CompleteCalibrationBeforeExportCartesian => {
             "Complete both axis calibrations before exporting to"
@@ -1413,6 +1422,9 @@ const fn ru_text(key: TextKey) -> Option<&'static str> {
         TextKey::ExportJson => Some("Экспорт JSON…"),
         TextKey::ExportRon => Some("Экспорт RON…"),
         TextKey::ExportExcel => Some("Экспорт Excel…"),
+        TextKey::ExportHtml => Some("Экспорт HTML…"),
+        TextKey::ExportXml => Some("Экспорт XML…"),
+        TextKey::ExportMarkdown => Some("Экспорт Markdown…"),
         TextKey::AddPointsBeforeExport => Some("Добавьте точки перед экспортом в"),
         TextKey::CompleteCalibrationBeforeExportCartesian => {
             Some("Завершите калибровку обеих осей перед экспортом в")

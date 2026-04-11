@@ -1,7 +1,68 @@
 use super::super::icons;
 use crate::app::{CurcatApp, ExportKind, SAMPLE_COUNT_MIN};
+use crate::export::ExportFormat;
 use crate::i18n::TextKey;
 use crate::interp::InterpAlgorithm;
+
+type ExportButtonAction = (
+    icons::Icon,
+    TextKey,
+    &'static str,
+    ExportFormat,
+    fn(&mut CurcatApp),
+);
+
+const EXPORT_BUTTON_ACTIONS: [ExportButtonAction; 7] = [
+    (
+        icons::ICON_EXPORT_CSV,
+        TextKey::ExportCsv,
+        "Ctrl+Shift+C",
+        ExportFormat::Csv,
+        CurcatApp::start_export_csv,
+    ),
+    (
+        icons::ICON_EXPORT_JSON,
+        TextKey::ExportJson,
+        "Ctrl+Shift+J",
+        ExportFormat::Json,
+        CurcatApp::start_export_json,
+    ),
+    (
+        icons::ICON_EXPORT_RON,
+        TextKey::ExportRon,
+        "Ctrl+Shift+R",
+        ExportFormat::Ron,
+        CurcatApp::start_export_ron,
+    ),
+    (
+        icons::ICON_EXPORT_XLSX,
+        TextKey::ExportExcel,
+        "Ctrl+Shift+E",
+        ExportFormat::Xlsx,
+        CurcatApp::start_export_xlsx,
+    ),
+    (
+        icons::ICON_EXPORT_HTML,
+        TextKey::ExportHtml,
+        "Ctrl+Shift+H",
+        ExportFormat::Html,
+        CurcatApp::start_export_html,
+    ),
+    (
+        icons::ICON_EXPORT_XML,
+        TextKey::ExportXml,
+        "Ctrl+Shift+X",
+        ExportFormat::Xml,
+        CurcatApp::start_export_xml,
+    ),
+    (
+        icons::ICON_EXPORT_MARKDOWN,
+        TextKey::ExportMarkdown,
+        "Ctrl+Shift+M",
+        ExportFormat::Markdown,
+        CurcatApp::start_export_markdown,
+    ),
+];
 
 impl CurcatApp {
     #[allow(clippy::too_many_arguments)]
@@ -162,42 +223,16 @@ impl CurcatApp {
                 )
             }
         };
-        self.export_action_button(
-            ui,
-            can_export,
-            icons::ICON_EXPORT_CSV,
-            i18n.text(TextKey::ExportCsv),
-            "Ctrl+Shift+C",
-            &export_hint("CSV", "Ctrl+Shift+C"),
-            Self::start_export_csv,
-        );
-
-        self.export_action_button(
-            ui,
-            can_export,
-            icons::ICON_EXPORT_JSON,
-            i18n.text(TextKey::ExportJson),
-            "Ctrl+Shift+J",
-            &export_hint("JSON", "Ctrl+Shift+J"),
-            Self::start_export_json,
-        );
-        self.export_action_button(
-            ui,
-            can_export,
-            icons::ICON_EXPORT_RON,
-            i18n.text(TextKey::ExportRon),
-            "Ctrl+Shift+R",
-            &export_hint("RON", "Ctrl+Shift+R"),
-            Self::start_export_ron,
-        );
-        self.export_action_button(
-            ui,
-            can_export,
-            icons::ICON_EXPORT_XLSX,
-            i18n.text(TextKey::ExportExcel),
-            "Ctrl+Shift+E",
-            &export_hint("Excel", "Ctrl+Shift+E"),
-            Self::start_export_xlsx,
-        );
+        for (icon, text_key, shortcut, format, action) in EXPORT_BUTTON_ACTIONS {
+            self.export_action_button(
+                ui,
+                can_export,
+                icon,
+                i18n.text(text_key),
+                shortcut,
+                &export_hint(format.label(), shortcut),
+                action,
+            );
+        }
     }
 }

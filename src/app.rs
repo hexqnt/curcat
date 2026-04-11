@@ -782,6 +782,14 @@ impl CurcatApp {
             CoordSystem::Polar => ("theta", "r"),
         }
     }
+
+    fn trigger_shift_export_hotkey(&mut self, ctx: &Context, key: Key, action: fn(&mut Self)) {
+        if self.project.active_dialog.is_none()
+            && ctx.input(|i| i.key_pressed(key) && i.modifiers.command && i.modifiers.shift)
+        {
+            action(self);
+        }
+    }
 }
 
 impl eframe::App for CurcatApp {
@@ -827,29 +835,17 @@ impl eframe::App for CurcatApp {
             {
                 self.paste_image_from_clipboard(&ctx);
             }
-            // Ctrl/Cmd + Shift + C: export CSV
-            if self.project.active_dialog.is_none()
-                && ctx.input(|i| i.key_pressed(Key::C) && i.modifiers.command && i.modifiers.shift)
-            {
-                self.start_export_csv();
-            }
-            // Ctrl/Cmd + Shift + J: export JSON
-            if self.project.active_dialog.is_none()
-                && ctx.input(|i| i.key_pressed(Key::J) && i.modifiers.command && i.modifiers.shift)
-            {
-                self.start_export_json();
-            }
-            // Ctrl/Cmd + Shift + R: export RON
-            if self.project.active_dialog.is_none()
-                && ctx.input(|i| i.key_pressed(Key::R) && i.modifiers.command && i.modifiers.shift)
-            {
-                self.start_export_ron();
-            }
-            // Ctrl/Cmd + Shift + E: export Excel
-            if self.project.active_dialog.is_none()
-                && ctx.input(|i| i.key_pressed(Key::E) && i.modifiers.command && i.modifiers.shift)
-            {
-                self.start_export_xlsx();
+            // Ctrl/Cmd + Shift + [C/J/R/E/H/X/M]: export formats.
+            for (key, action) in [
+                (Key::C, Self::start_export_csv as fn(&mut Self)),
+                (Key::J, Self::start_export_json as fn(&mut Self)),
+                (Key::R, Self::start_export_ron as fn(&mut Self)),
+                (Key::E, Self::start_export_xlsx as fn(&mut Self)),
+                (Key::H, Self::start_export_html as fn(&mut Self)),
+                (Key::X, Self::start_export_xml as fn(&mut Self)),
+                (Key::M, Self::start_export_markdown as fn(&mut Self)),
+            ] {
+                self.trigger_shift_export_hotkey(&ctx, key, action);
             }
             // Ctrl/Cmd + Shift + D: clear all points
             if ctx.input(|i| i.key_pressed(Key::D) && i.modifiers.command && i.modifiers.shift) {
@@ -980,12 +976,7 @@ impl eframe::App for CurcatApp {
                     format,
                 } => {
                     let format = *format;
-                    let format_label = match format {
-                        crate::export::ExportFormat::Csv => "CSV",
-                        crate::export::ExportFormat::Xlsx => "Excel",
-                        crate::export::ExportFormat::Json => "JSON",
-                        crate::export::ExportFormat::Ron => "RON",
-                    };
+                    let format_label = format.label();
                     match Self::poll_dialog(&ctx, dialog) {
                         DialogPoll::Picked(path) => {
                             picked_export_path = Some(path.clone());

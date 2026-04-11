@@ -69,7 +69,7 @@ cargo run --release -- path/to/image.png
      - Доп. колонки (опционально):
        - distance — расстояние до предыдущей точки (первая строка пустая);
        - angle_deg — угол на точке в градусах (первая и последняя строки пустые).
-5) Экспортируйте результат в CSV/JSON/RON/XLSX.
+5) Экспортируйте результат в CSV/JSON/RON/XLSX/HTML/XML/Markdown.
 
 🕒 Поддерживаемые форматы даты/времени: `YYYY-MM-DD`, `YYYY-MM-DD HH:MM[:SS]`, а также популярные локальные варианты (`DD.MM.YYYY`, `YYYY/MM/DD`, и др.).
 
@@ -115,6 +115,9 @@ cargo run --release -- path/to/image.png
 - Ctrl + Shift + J — экспорт в JSON.
 - Ctrl + Shift + R — экспорт в RON.
 - Ctrl + Shift + E — экспорт в Excel (XLSX).
+- Ctrl + Shift + H — экспорт в HTML (таблица).
+- Ctrl + Shift + X — экспорт в XML.
+- Ctrl + Shift + M — экспорт в Markdown (таблица).
 - Ctrl + Shift + D — очистить все точки.
 - Ctrl + Z — откат/Undo последней точки.
 
@@ -175,7 +178,10 @@ language = "en"
 ## 📤 Экспорт: формат данных
 
 Во всех вариантах экспорта первые две колонки/поля — `x`, `y` (в соответствии с выбранными единицами осей: числа или дата/время).
-В JSON и RON данные лежат в массиве `points` + служебные `x_unit`/`y_unit`; значения `DateTime` записываются строкой, пустые доп. метрики — `null` (JSON) или `None` (RON).
+В JSON и RON данные лежат в массиве `points` + служебные `coord_system`/`x_unit`/`y_unit`/`x_label`/`y_label` (и `angle_unit` для полярного режима); значения `DateTime` записываются строкой, пустые доп. метрики — `null` (JSON) или `None` (RON).
+HTML-экспорт формирует полноценный `.html`-документ: блок metadata + таблица данных.
+XML-экспорт использует структуру `curcat_export` (атрибуты metadata) + `points/point/field`.
+Markdown-экспорт содержит только таблицу данных.
 
 Для режима «Raw picked points», если включены дополнительные метрики, добавляются колонки:
 
@@ -190,7 +196,7 @@ language = "en"
 - `src/types.rs` — типы осей/значений, парсинг/форматирование, преобразования и калибровка.
 - `src/image/` — загрузка/декодирование (в т.ч. SVG/SVGZ), метаданные, фильтры и трансформации изображения.
 - `src/interp.rs` — интерполяция (Linear, Step/hold, Natural cubic spline) и структуры данных.
-- `src/export.rs` — экспорт CSV/JSON/RON/XLSX.
+- `src/export.rs` — экспорт CSV/XLSX/JSON/RON/HTML/XML/Markdown.
 - `src/config.rs` — стили/скорости и загрузка конфигурации TOML.
 
 ## 🗺️ Дорожная карта к релизу

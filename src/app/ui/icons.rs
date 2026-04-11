@@ -24,6 +24,9 @@ pub enum Icon {
     ExportJson,
     ExportRon,
     ExportXlsx,
+    ExportHtml,
+    ExportXml,
+    ExportMarkdown,
     PickPoint,
     AutoPlace,
     AutoTrace,
@@ -61,6 +64,9 @@ pub const ICON_EXPORT_CSV: Icon = Icon::ExportCsv;
 pub const ICON_EXPORT_JSON: Icon = Icon::ExportJson;
 pub const ICON_EXPORT_RON: Icon = Icon::ExportRon;
 pub const ICON_EXPORT_XLSX: Icon = Icon::ExportXlsx;
+pub const ICON_EXPORT_HTML: Icon = Icon::ExportHtml;
+pub const ICON_EXPORT_XML: Icon = Icon::ExportXml;
+pub const ICON_EXPORT_MARKDOWN: Icon = Icon::ExportMarkdown;
 pub const ICON_PICK_POINT: Icon = Icon::PickPoint;
 pub const ICON_AUTO_PLACE: Icon = Icon::AutoPlace;
 pub const ICON_AUTO_TRACE: Icon = Icon::AutoTrace;
@@ -109,8 +115,12 @@ const fn source(icon: Icon) -> ImageSource<'static> {
         Icon::ExportCsv => {
             egui::include_image!("../../../assets/icons/tabler/file-type-csv.svg")
         }
-        Icon::ExportJson => egui::include_image!("../../../assets/icons/tabler/braces.svg"),
-        Icon::ExportRon => egui::include_image!("../../../assets/icons/tabler/file-code.svg"),
+        Icon::ExportJson | Icon::ExportXml => {
+            egui::include_image!("../../../assets/icons/tabler/braces.svg")
+        }
+        Icon::ExportRon | Icon::ExportHtml | Icon::ExportMarkdown => {
+            egui::include_image!("../../../assets/icons/tabler/file-code.svg")
+        }
         Icon::ExportXlsx => {
             egui::include_image!("../../../assets/icons/tabler/file-type-xls.svg")
         }

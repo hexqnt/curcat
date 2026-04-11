@@ -1,8 +1,9 @@
-//! Export helpers for writing picked points to CSV, JSON, RON, and XLSX formats.
+//! Export helpers for writing picked points to CSV, XLSX, JSON, RON, HTML, XML, and Markdown formats.
 
 use crate::interp::XYPoint;
 use crate::types::{AngleUnit, AxisUnit, AxisValue, CoordSystem};
 use chrono::{Datelike, Duration, Timelike};
+use maud::{DOCTYPE, html};
 use ron::ser::PrettyConfig;
 use rust_xlsxwriter::{ExcelDateTime, Format, Workbook, XlsxError};
 use serde::Serialize;
@@ -53,15 +54,33 @@ pub enum ExportFormat {
     Xlsx,
     Json,
     Ron,
+    Html,
+    Xml,
+    Markdown,
 }
 
 impl ExportFormat {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Csv => "CSV",
+            Self::Xlsx => "Excel",
+            Self::Json => "JSON",
+            Self::Ron => "RON",
+            Self::Html => "HTML",
+            Self::Xml => "XML",
+            Self::Markdown => "Markdown",
+        }
+    }
+
     pub const fn default_filename(self) -> &'static str {
         match self {
             Self::Csv => "curve.csv",
             Self::Xlsx => "curve.xlsx",
             Self::Json => "curve.json",
             Self::Ron => "curve.ron",
+            Self::Html => "curve.html",
+            Self::Xml => "curve.xml",
+            Self::Markdown => "curve.md",
         }
     }
 
@@ -71,6 +90,9 @@ impl ExportFormat {
             Self::Xlsx => "xlsx",
             Self::Json => "json",
             Self::Ron => "ron",
+            Self::Html => "html",
+            Self::Xml => "xml",
+            Self::Markdown => "md",
         }
     }
 
@@ -80,6 +102,9 @@ impl ExportFormat {
             Self::Xlsx => export_to_xlsx(path, payload).map_err(|e| e.to_string()),
             Self::Json => export_to_json(path, payload).map_err(|e| e.to_string()),
             Self::Ron => export_to_ron(path, payload).map_err(|e| e.to_string()),
+            Self::Html => export_to_html(path, payload).map_err(|e| e.to_string()),
+            Self::Xml => export_to_xml(path, payload).map_err(|e| e.to_string()),
+            Self::Markdown => export_to_markdown(path, payload).map_err(|e| e.to_string()),
         }
     }
 }
@@ -144,36 +169,241 @@ fn validate_extra_columns(payload: &ExportPayload) -> Result<(), String> {
     Ok(())
 }
 
-/// Write the payload to CSV at the provided path.
-///
-/// Floats are formatted with 6 fractional digits; `DateTime` values are emitted
-/// as formatted strings. Returns an error if any value is not representable.
-pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
+struct TabularExport {
+    headers: Vec<String>,
+    rows: Vec<Vec<Option<String>>>,
+}
+
+fn build_tabular_export(payload: &ExportPayload) -> anyhow::Result<TabularExport> {
     if let Err(err) = validate_extra_columns(payload) {
         anyhow::bail!(err);
     }
-    let mut wtr = csv::Writer::from_path(path)?;
     let mut headers = vec![payload.x_label.clone(), payload.y_label.clone()];
     headers.extend(payload.extra_columns.iter().map(|c| c.header.clone()));
-    wtr.write_record(headers)?;
 
+    let mut rows = Vec::with_capacity(payload.row_count());
     for row_idx in 0..payload.row_count() {
         let p = &payload.points[row_idx];
         let xv = axis_value_from_scalar_for_export(payload.x_unit, p.x, "x")?;
         let yv = axis_value_from_scalar_for_export(payload.y_unit, p.y, "y")?;
-        let mut record = vec![xv.format(), yv.format()];
+
+        let mut row = Vec::with_capacity(headers.len());
+        row.push(Some(xv.format()));
+        row.push(Some(yv.format()));
         for col in &payload.extra_columns {
             debug_assert_eq!(col.values.len(), payload.row_count());
             let cell = col
                 .values
                 .get(row_idx)
-                .and_then(|v| v.map(|val| format!("{val:.6}")))
-                .unwrap_or_default();
-            record.push(cell);
+                .and_then(|v| *v)
+                .map(format_extra_value);
+            row.push(cell);
         }
+        rows.push(row);
+    }
+
+    Ok(TabularExport { headers, rows })
+}
+
+fn format_extra_value(value: f64) -> String {
+    format!("{value:.6}")
+}
+
+fn metadata_pairs(payload: &ExportPayload) -> Vec<(&'static str, String)> {
+    let mut pairs = vec![
+        (
+            "coord_system",
+            coord_system_label(payload.coord_system).to_string(),
+        ),
+        ("x_unit", axis_unit_label(payload.x_unit).to_string()),
+        ("y_unit", axis_unit_label(payload.y_unit).to_string()),
+        ("x_label", payload.x_label.clone()),
+        ("y_label", payload.y_label.clone()),
+    ];
+    if let Some(unit) = payload.angle_unit {
+        pairs.push(("angle_unit", angle_unit_label(unit).to_string()));
+    }
+    pairs
+}
+
+fn escape_xml_text(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn escape_xml_attr(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            '\n' => out.push_str("&#10;"),
+            '\r' => out.push_str("&#13;"),
+            '\t' => out.push_str("&#9;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn escape_markdown_cell(input: &str) -> String {
+    let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
+    let mut out = String::with_capacity(normalized.len());
+    for ch in normalized.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '|' => out.push_str("\\|"),
+            '\n' => out.push_str("<br>"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Write the payload to CSV at the provided path.
+///
+/// Floats are formatted with 6 fractional digits; `DateTime` values are emitted
+/// as formatted strings. Returns an error if any value is not representable.
+pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
+    let table = build_tabular_export(payload)?;
+    let mut wtr = csv::Writer::from_path(path)?;
+    wtr.write_record(&table.headers)?;
+
+    for row in table.rows {
+        let record: Vec<String> = row.into_iter().map(Option::unwrap_or_default).collect();
         wtr.write_record(record)?;
     }
     wtr.flush()?;
+    Ok(())
+}
+
+/// Write the payload to an HTML document containing metadata and a data table.
+pub fn export_to_html(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
+    let table = build_tabular_export(payload)?;
+    let metadata = metadata_pairs(payload);
+    let doc = html! {
+        (DOCTYPE)
+        html lang="en" {
+            head {
+                meta charset="utf-8";
+                title { "Curcat export" }
+            }
+            body {
+                h1 { "Curcat export" }
+                dl {
+                    @for (name, value) in &metadata {
+                        dt { (name) }
+                        dd { (value) }
+                    }
+                }
+                table {
+                    thead {
+                        tr {
+                            @for header in &table.headers {
+                                th { (header) }
+                            }
+                        }
+                    }
+                    tbody {
+                        @for row in &table.rows {
+                            tr {
+                                @for cell in row {
+                                    td {
+                                        @if let Some(value) = cell {
+                                            (value)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    let mut writer = BufWriter::new(std::fs::File::create(path)?);
+    writer.write_all(doc.into_string().as_bytes())?;
+    writer.flush()?;
+    Ok(())
+}
+
+/// Write the payload to XML mirroring JSON metadata and point rows.
+pub fn export_to_xml(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
+    let table = build_tabular_export(payload)?;
+    let mut writer = BufWriter::new(std::fs::File::create(path)?);
+    writer.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<curcat_export")?;
+    for (name, value) in metadata_pairs(payload) {
+        let name = escape_xml_attr(name);
+        let value = escape_xml_attr(&value);
+        write!(writer, " {name}=\"{value}\"")?;
+    }
+    writer.write_all(b">\n  <points>\n")?;
+
+    for row in &table.rows {
+        writer.write_all(b"    <point>\n")?;
+        for (header, cell) in table.headers.iter().zip(row) {
+            let escaped_header = escape_xml_attr(header);
+            match cell {
+                Some(value) => {
+                    let escaped_value = escape_xml_text(value);
+                    writeln!(
+                        writer,
+                        "      <field name=\"{escaped_header}\">{escaped_value}</field>"
+                    )?;
+                }
+                None => {
+                    writeln!(writer, "      <field name=\"{escaped_header}\"/>")?;
+                }
+            }
+        }
+        writer.write_all(b"    </point>\n")?;
+    }
+
+    writer.write_all(b"  </points>\n</curcat_export>\n")?;
+    writer.flush()?;
+    Ok(())
+}
+
+/// Write the payload as a Markdown table.
+pub fn export_to_markdown(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
+    let table = build_tabular_export(payload)?;
+    let mut writer = BufWriter::new(std::fs::File::create(path)?);
+
+    writer.write_all(b"|")?;
+    for header in &table.headers {
+        let escaped = escape_markdown_cell(header);
+        write!(writer, " {escaped} |")?;
+    }
+    writer.write_all(b"\n|")?;
+    for _ in &table.headers {
+        writer.write_all(b" --- |")?;
+    }
+    writer.write_all(b"\n")?;
+
+    for row in &table.rows {
+        writer.write_all(b"|")?;
+        for cell in row {
+            let escaped = cell
+                .as_deref()
+                .map(escape_markdown_cell)
+                .unwrap_or_default();
+            write!(writer, " {escaped} |")?;
+        }
+        writer.write_all(b"\n")?;
+    }
+    writer.flush()?;
     Ok(())
 }
 
@@ -575,6 +805,7 @@ fn axis_value_from_scalar_for_xlsx(
 mod tests {
     use super::*;
     use ron::value::{Map, Value};
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn map_value<'a>(map: &'a Map, key: &str) -> &'a Value {
@@ -594,6 +825,17 @@ mod tests {
             Value::Number(value) => (*value).into_f64(),
             other => panic!("expected number for {key}, got {other:?}"),
         }
+    }
+
+    fn temp_export_path(stem: &str, ext: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "curcat_{stem}_{}.{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos(),
+            ext
+        ))
     }
 
     #[test]
@@ -618,13 +860,7 @@ mod tests {
             )],
         };
 
-        let path = std::env::temp_dir().join(format!(
-            "curcat_ron_export_test_{}.ron",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time went backwards")
-                .as_nanos()
-        ));
+        let path = temp_export_path("ron_export_test", "ron");
         export_to_ron(&path, &payload).expect("RON export failed");
         let text = std::fs::read_to_string(&path).expect("failed to read RON output");
         let parsed: Value = ron::de::from_str(&text).expect("failed to parse RON output");
@@ -697,15 +933,97 @@ mod tests {
         let check_err = validate_extra_columns(&payload).expect_err("must reject mismatch");
         assert!(check_err.contains("expected 2"));
 
-        let path = std::env::temp_dir().join(format!(
-            "curcat_csv_export_mismatch_test_{}.csv",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time went backwards")
-                .as_nanos()
-        ));
+        let path = temp_export_path("csv_export_mismatch_test", "csv");
         let export_err = export_to_csv(&path, &payload).expect_err("CSV export must fail");
         assert!(export_err.to_string().contains("expected 2"));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn export_html_contains_doctype_metadata_and_escaping() {
+        let payload = ExportPayload {
+            points: vec![XYPoint { x: 1.0, y: 2.0 }, XYPoint { x: 3.0, y: 4.0 }],
+            x_unit: AxisUnit::Float,
+            y_unit: AxisUnit::Float,
+            x_label: "x<&\"'>".to_string(),
+            y_label: "y".to_string(),
+            coord_system: CoordSystem::Cartesian,
+            angle_unit: None,
+            extra_columns: vec![ExportExtraColumn::new("extra<&\"'>", vec![None, Some(7.5)])],
+        };
+
+        let path = temp_export_path("html_export_test", "html");
+        export_to_html(&path, &payload).expect("HTML export failed");
+        let text = std::fs::read_to_string(&path).expect("failed to read HTML output");
+        let _ = std::fs::remove_file(&path);
+
+        assert!(text.to_ascii_lowercase().contains("<!doctype html>"));
+        assert!(text.contains("<dl>"));
+        assert!(
+            text.contains("<dt>x_label</dt><dd>x&lt;&amp;&quot;'&gt;</dd>")
+                || text.contains("<dt>x_label</dt><dd>x&lt;&amp;&quot;&#39;&gt;</dd>")
+        );
+        assert!(
+            text.contains("<th>x&lt;&amp;&quot;'&gt;</th>")
+                || text.contains("<th>x&lt;&amp;&quot;&#39;&gt;</th>")
+        );
+        assert!(
+            text.contains("<th>extra&lt;&amp;&quot;'&gt;</th>")
+                || text.contains("<th>extra&lt;&amp;&quot;&#39;&gt;</th>")
+        );
+        assert!(text.contains("<td></td>"));
+        assert!(text.contains("<td>7.500000</td>"));
+    }
+
+    #[test]
+    fn export_xml_contains_metadata_points_and_escaping() {
+        let payload = ExportPayload {
+            points: vec![XYPoint { x: 1.0, y: 2.0 }],
+            x_unit: AxisUnit::Float,
+            y_unit: AxisUnit::Float,
+            x_label: "x\"line\nnext".to_string(),
+            y_label: "y".to_string(),
+            coord_system: CoordSystem::Cartesian,
+            angle_unit: None,
+            extra_columns: vec![ExportExtraColumn::new("<extra&name>", vec![None])],
+        };
+
+        let path = temp_export_path("xml_export_test", "xml");
+        export_to_xml(&path, &payload).expect("XML export failed");
+        let text = std::fs::read_to_string(&path).expect("failed to read XML output");
+        let _ = std::fs::remove_file(&path);
+
+        assert!(text.contains("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
+        assert!(
+            text.contains(
+                "<curcat_export coord_system=\"cartesian\" x_unit=\"float\" y_unit=\"float\" x_label=\"x&quot;line&#10;next\" y_label=\"y\">"
+            )
+        );
+        assert!(text.contains("<points>"));
+        assert!(text.contains("<point>"));
+        assert!(text.contains("<field name=\"x&quot;line&#10;next\">1</field>"));
+        assert!(text.contains("<field name=\"&lt;extra&amp;name&gt;\"/>"));
+    }
+
+    #[test]
+    fn export_markdown_writes_table_and_escapes_special_symbols() {
+        let payload = ExportPayload {
+            points: vec![XYPoint { x: 1.0, y: 2.0 }, XYPoint { x: 3.0, y: 4.0 }],
+            x_unit: AxisUnit::Float,
+            y_unit: AxisUnit::Float,
+            x_label: "x|\nhead".to_string(),
+            y_label: "y\\head".to_string(),
+            coord_system: CoordSystem::Cartesian,
+            angle_unit: None,
+            extra_columns: vec![ExportExtraColumn::new("c|d", vec![None, Some(5.1)])],
+        };
+
+        let path = temp_export_path("markdown_export_test", "md");
+        export_to_markdown(&path, &payload).expect("Markdown export failed");
+        let text = std::fs::read_to_string(&path).expect("failed to read Markdown output");
+        let _ = std::fs::remove_file(&path);
+
+        let expected = "| x\\|<br>head | y\\\\head | c\\|d |\n| --- | --- | --- |\n| 1 | 2 |  |\n| 3 | 4 | 5.100000 |\n";
+        assert_eq!(text, expected);
     }
 }
