@@ -1,3 +1,5 @@
+#![feature(portable_simd)]
+
 mod app;
 mod config;
 mod export;
