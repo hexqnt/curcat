@@ -136,7 +136,7 @@ impl CurcatApp {
                         if ui.visuals().dark_mode {
                             github_button = github_button
                                 .fill(Color32::from_gray(230))
-                                .stroke(egui::Stroke::new(1.0, Color32::from_gray(120)));
+                                .stroke(egui::Stroke::new(1.0_f32, Color32::from_gray(120)));
                         }
                         let github_resp = ui.add(github_button).on_hover_text(hover);
                         if github_resp.clicked() {
@@ -524,7 +524,7 @@ impl CurcatApp {
     fn draw_mode_chip(ui: &mut egui::Ui, label: &str, color: Color32, font: &FontId) {
         let [r, g, b, _] = color.to_array();
         let bg = Color32::from_rgba_unmultiplied(r, g, b, 44);
-        let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(r, g, b, 150));
+        let stroke = Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(r, g, b, 150));
         egui::Frame::new()
             .fill(bg)
             .stroke(stroke)

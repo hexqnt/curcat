@@ -46,7 +46,7 @@ toml = "1.1"
 directories = "6.0"
 rust_xlsxwriter = { version = "0.94", features = ["ryu"] }
 egui-file-dialog = { version = "0.13" }
-rayon = "1.11"
+rayon = "1.12"
 bincode = { version = "2.0", features = ["serde"] }
 lz4_flex = "0.13"
 crc32fast = "1.5"

@@ -199,7 +199,7 @@ impl CurcatApp {
                     } else {
                         Color32::from_gray(90)
                     };
-                    let stroke_width = if selected { 2.0 } else { 1.0 };
+                    let stroke_width = if selected { 2.0_f32 } else { 1.0_f32 };
                     let rounding = CornerRadius::same(4);
                     ui.painter().rect_filled(rect, rounding, *color);
                     ui.painter().rect_stroke(

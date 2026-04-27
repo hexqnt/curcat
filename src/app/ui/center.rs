@@ -1711,7 +1711,7 @@ impl CurcatApp {
             painter.circle_stroke(
                 screen,
                 radius,
-                egui::Stroke::new(1.2, self.snap.snap_overlay_color),
+                egui::Stroke::new(1.2_f32, self.snap.snap_overlay_color),
             );
         }
         if let Some(preview) = snap_preview {
@@ -1719,7 +1719,7 @@ impl CurcatApp {
             painter.circle_stroke(
                 screen,
                 (point_radius + 4.0).max(6.0),
-                egui::Stroke::new(1.2, self.snap.snap_overlay_color),
+                egui::Stroke::new(1.2_f32, self.snap.snap_overlay_color),
             );
             painter.circle_filled(screen, 3.0, self.snap.snap_overlay_color);
         }
@@ -1847,7 +1847,7 @@ impl CurcatApp {
         painter.rect_stroke(
             panel_rect,
             CornerRadius::same(6),
-            egui::Stroke::new(1.0, Color32::from_gray(90)),
+            egui::Stroke::new(1.0_f32, Color32::from_gray(90)),
             egui::StrokeKind::Outside,
         );
         painter.image(
@@ -1859,7 +1859,7 @@ impl CurcatApp {
         painter.rect_stroke(
             thumb_rect,
             CornerRadius::same(3),
-            egui::Stroke::new(1.0, Color32::from_gray(130)),
+            egui::Stroke::new(1.0_f32, Color32::from_gray(130)),
             egui::StrokeKind::Outside,
         );
 
@@ -1890,7 +1890,7 @@ impl CurcatApp {
         painter.rect_stroke(
             viewport_marker,
             CornerRadius::same(2),
-            egui::Stroke::new(1.4, Color32::from_rgba_unmultiplied(r, g, b, 235)),
+            egui::Stroke::new(1.4_f32, Color32::from_rgba_unmultiplied(r, g, b, 235)),
             egui::StrokeKind::Outside,
         );
     }
@@ -1918,7 +1918,7 @@ impl CurcatApp {
         };
 
         let crosshair_color = self.config.crosshair.color32();
-        let stroke = egui::Stroke::new(1.0, crosshair_color);
+        let stroke = egui::Stroke::new(1.0_f32, crosshair_color);
         match self.calibration.coord_system {
             CoordSystem::Cartesian => {
                 painter.line_segment(
@@ -2065,7 +2065,7 @@ impl CurcatApp {
                 painter.circle_stroke(
                     badge_anchor,
                     badge_radius,
-                    egui::Stroke::new(1.0, Color32::from_gray(30)),
+                    egui::Stroke::new(1.0_f32, Color32::from_gray(30)),
                 );
                 true
             } else {
