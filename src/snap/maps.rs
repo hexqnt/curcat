@@ -6,7 +6,7 @@ use std::simd::{Simd, StdFloat};
 use super::behavior::SnapBehavior;
 use super::color::{color_luminance, color_similarity_value};
 use super::search::{refine_snap_position, search_in_level};
-use crate::util::{clamp_index, u32_to_f32};
+use crate::util::u32_to_f32;
 
 const SNAP_MAP_SIMD_LANES: usize = 8;
 const SNAP_BASE_PAR_CHUNK: usize = 4096;
@@ -23,6 +23,17 @@ fn compute_luma_similarity_chunk(
     target: Color32,
     tol: f32,
 ) {
+    assert_eq!(
+        lum.len(),
+        colors.len(),
+        "luminance and color chunks must have the same length"
+    );
+    assert_eq!(
+        similarity.len(),
+        colors.len(),
+        "similarity and color chunks must have the same length"
+    );
+
     let [tr, tg, tb, _] = target.to_array();
     let target_rgb = [f32::from(tr), f32::from(tg), f32::from(tb)];
     let zero = F32x8::splat(0.0);
@@ -36,37 +47,49 @@ fn compute_luma_similarity_chunk(
     let luma_g = F32x8::splat(LUMA_G_COEFF);
     let luma_b = F32x8::splat(LUMA_B_COEFF);
 
-    let mut i = 0usize;
-    while i + SNAP_MAP_SIMD_LANES <= colors.len() {
+    let (color_chunks, color_remainder) = colors.as_chunks::<SNAP_MAP_SIMD_LANES>();
+    let (lum_chunks, lum_remainder) = lum.as_chunks_mut::<SNAP_MAP_SIMD_LANES>();
+    let (similarity_chunks, similarity_remainder) =
+        similarity.as_chunks_mut::<SNAP_MAP_SIMD_LANES>();
+
+    for ((color_chunk, lum_chunk), similarity_chunk) in
+        color_chunks.iter().zip(lum_chunks).zip(similarity_chunks)
+    {
         let mut r = [0.0_f32; SNAP_MAP_SIMD_LANES];
         let mut g = [0.0_f32; SNAP_MAP_SIMD_LANES];
         let mut b = [0.0_f32; SNAP_MAP_SIMD_LANES];
-        for lane in 0..SNAP_MAP_SIMD_LANES {
-            let [pr, pg, pb, _] = colors[i + lane].to_array();
-            r[lane] = f32::from(pr);
-            g[lane] = f32::from(pg);
-            b[lane] = f32::from(pb);
+        for (((r, g), b), color) in r
+            .iter_mut()
+            .zip(g.iter_mut())
+            .zip(b.iter_mut())
+            .zip(color_chunk)
+        {
+            let [pr, pg, pb, _] = color.to_array();
+            *r = f32::from(pr);
+            *g = f32::from(pg);
+            *b = f32::from(pb);
         }
 
         let rf = F32x8::from_array(r);
         let gf = F32x8::from_array(g);
         let bf = F32x8::from_array(b);
-        (rf * luma_r + gf * luma_g + bf * luma_b)
-            .copy_to_slice(&mut lum[i..i + SNAP_MAP_SIMD_LANES]);
+        (rf * luma_r + gf * luma_g + bf * luma_b).copy_to_slice(lum_chunk);
 
         let dr = rf - target_r;
         let dg = gf - target_g;
         let db = bf - target_b;
         let diff = (dr * dr + dg * dg + db * db).sqrt();
         (((tolerance_vec - diff).simd_max(zero) * inv_tolerance).simd_min(one))
-            .copy_to_slice(&mut similarity[i..i + SNAP_MAP_SIMD_LANES]);
-
-        i += SNAP_MAP_SIMD_LANES;
+            .copy_to_slice(similarity_chunk);
     }
 
-    for lane in i..colors.len() {
-        lum[lane] = color_luminance(colors[lane]);
-        similarity[lane] = color_similarity_value(colors[lane], target, tol);
+    for ((lum, similarity), color) in lum_remainder
+        .iter_mut()
+        .zip(similarity_remainder)
+        .zip(color_remainder)
+    {
+        *lum = color_luminance(*color);
+        *similarity = color_similarity_value(*color, target, tol);
     }
 }
 
@@ -102,25 +125,41 @@ fn downsample_cell_checked(
 
 #[allow(clippy::suboptimal_flops)]
 fn compute_gradient_row(row: &mut [f32], lum: &[f32], row_base: usize, width: usize) {
+    assert_eq!(row.len(), width, "gradient row width mismatch");
+    assert!(
+        row_base >= width && row_base + width * 2 <= lum.len(),
+        "gradient row must have neighboring luminance rows"
+    );
+
     let max_gradient = F32x8::splat(255.0);
     let inner_end = width - 1;
+    let prev_row = &lum[row_base - width..row_base];
+    let curr_row = &lum[row_base..row_base + width];
+    let next_row = &lum[row_base + width..row_base + width * 2];
     let mut x = 1usize;
     while x + SNAP_MAP_SIMD_LANES <= inner_end {
-        let idx = row_base + x;
-        let gx = F32x8::from_slice(&lum[idx + 1..idx + 1 + SNAP_MAP_SIMD_LANES])
-            - F32x8::from_slice(&lum[idx - 1..idx - 1 + SNAP_MAP_SIMD_LANES]);
-        let gy = F32x8::from_slice(&lum[idx + width..idx + width + SNAP_MAP_SIMD_LANES])
-            - F32x8::from_slice(&lum[idx - width..idx - width + SNAP_MAP_SIMD_LANES]);
+        let gx = F32x8::from_slice(&curr_row[x + 1..x + 1 + SNAP_MAP_SIMD_LANES])
+            - F32x8::from_slice(&curr_row[x - 1..x - 1 + SNAP_MAP_SIMD_LANES]);
+        let gy = F32x8::from_slice(&next_row[x..x + SNAP_MAP_SIMD_LANES])
+            - F32x8::from_slice(&prev_row[x..x + SNAP_MAP_SIMD_LANES]);
         ((gx * gx + gy * gy).sqrt().simd_min(max_gradient))
             .copy_to_slice(&mut row[x..x + SNAP_MAP_SIMD_LANES]);
         x += SNAP_MAP_SIMD_LANES;
     }
 
-    for (offset, pixel) in row[x..inner_end].iter_mut().enumerate() {
-        let local_x = x + offset;
-        let idx = row_base + local_x;
-        let gx = lum[idx + 1] - lum[idx - 1];
-        let gy = lum[idx + width] - lum[idx - width];
+    let left = &curr_row[x - 1..inner_end - 1];
+    let right = &curr_row[x + 1..=inner_end];
+    let up = &prev_row[x..inner_end];
+    let down = &next_row[x..inner_end];
+    for ((((pixel, &left), &right), &up), &down) in row[x..inner_end]
+        .iter_mut()
+        .zip(left)
+        .zip(right)
+        .zip(up)
+        .zip(down)
+    {
+        let gx = right - left;
+        let gy = down - up;
         *pixel = gx.hypot(gy).min(255.0);
     }
 }
@@ -199,15 +238,14 @@ impl SnapMapCache {
 
     fn level_for_radius(&self, radius: f32) -> (usize, &SnapMapLevel) {
         assert!(!self.levels.is_empty(), "SnapMapCache without levels");
-        let mut chosen = 0;
+        let last_idx = self.levels.len() - 1;
         for (idx, level) in self.levels.iter().enumerate() {
             let level_scale = u32_to_f32(level.scale);
-            if radius / level_scale <= 12.0 || idx == self.levels.len() - 1 {
-                chosen = idx;
-                break;
+            if radius / level_scale <= 12.0 || idx == last_idx {
+                return (idx, level);
             }
         }
-        (chosen, &self.levels[chosen])
+        unreachable!("non-empty levels must yield a radius level")
     }
 }
 
@@ -256,29 +294,29 @@ impl SnapMapLevel {
     }
 
     fn downsample(prev: &Self) -> Option<Self> {
-        let [w, h] = prev.size;
-        if w < 2 || h < 2 {
+        let [width, height] = prev.size;
+        if width < 2 || height < 2 {
             return None;
         }
-        let new_w = w.div_ceil(2);
-        let new_h = h.div_ceil(2);
-        if new_w < 2 || new_h < 2 {
+        let new_width = width.div_ceil(2);
+        let new_height = height.div_ceil(2);
+        if new_width < 2 || new_height < 2 {
             return None;
         }
-        let mut gradient = vec![0.0; new_w * new_h];
-        let mut color_similarity = vec![0.0; new_w * new_h];
-        let interior_w = w / 2;
-        let interior_h = h / 2;
+        let mut gradient = vec![0.0; new_width * new_height];
+        let mut color_similarity = vec![0.0; new_width * new_height];
+        let interior_width = width / 2;
+        let interior_height = height / 2;
         let quarter = F32x8::splat(0.25);
         gradient
-            .par_chunks_mut(new_w)
-            .zip(color_similarity.par_chunks_mut(new_w))
+            .par_chunks_mut(new_width)
+            .zip(color_similarity.par_chunks_mut(new_width))
             .enumerate()
             .for_each(|(y, (grad_row, color_row))| {
                 let src_y = y * 2;
-                if y < interior_h {
-                    let mut x = 0usize;
-                    while x + SNAP_MAP_SIMD_LANES <= interior_w {
+                if y < interior_height {
+                    let mut dst_x = 0usize;
+                    while dst_x + SNAP_MAP_SIMD_LANES <= interior_width {
                         let mut g00 = [0.0_f32; SNAP_MAP_SIMD_LANES];
                         let mut g01 = [0.0_f32; SNAP_MAP_SIMD_LANES];
                         let mut g10 = [0.0_f32; SNAP_MAP_SIMD_LANES];
@@ -289,10 +327,10 @@ impl SnapMapLevel {
                         let mut c11 = [0.0_f32; SNAP_MAP_SIMD_LANES];
 
                         for lane in 0..SNAP_MAP_SIMD_LANES {
-                            let dst_x = x + lane;
-                            let src_x = dst_x * 2;
-                            let top = src_y * w + src_x;
-                            let bottom = top + w;
+                            let lane_dst_x = dst_x + lane;
+                            let src_x = lane_dst_x * 2;
+                            let top = src_y * width + src_x;
+                            let bottom = top + width;
                             g00[lane] = prev.gradient[top];
                             g01[lane] = prev.gradient[top + 1];
                             g10[lane] = prev.gradient[bottom];
@@ -308,26 +346,26 @@ impl SnapMapLevel {
                             + F32x8::from_array(g10)
                             + F32x8::from_array(g11))
                             * quarter)
-                            .copy_to_slice(&mut grad_row[x..x + SNAP_MAP_SIMD_LANES]);
+                            .copy_to_slice(&mut grad_row[dst_x..dst_x + SNAP_MAP_SIMD_LANES]);
                         ((F32x8::from_array(c00)
                             + F32x8::from_array(c01)
                             + F32x8::from_array(c10)
                             + F32x8::from_array(c11))
                             * quarter)
-                            .copy_to_slice(&mut color_row[x..x + SNAP_MAP_SIMD_LANES]);
-                        x += SNAP_MAP_SIMD_LANES;
+                            .copy_to_slice(&mut color_row[dst_x..dst_x + SNAP_MAP_SIMD_LANES]);
+                        dst_x += SNAP_MAP_SIMD_LANES;
                     }
 
-                    for dst_x in x..interior_w {
-                        let src_x = dst_x * 2;
-                        let top = src_y * w + src_x;
-                        let bottom = top + w;
-                        grad_row[dst_x] = (prev.gradient[top]
+                    for cell_x in dst_x..interior_width {
+                        let src_x = cell_x * 2;
+                        let top = src_y * width + src_x;
+                        let bottom = top + width;
+                        grad_row[cell_x] = (prev.gradient[top]
                             + prev.gradient[top + 1]
                             + prev.gradient[bottom]
                             + prev.gradient[bottom + 1])
                             * 0.25;
-                        color_row[dst_x] = (prev.color_similarity[top]
+                        color_row[cell_x] = (prev.color_similarity[top]
                             + prev.color_similarity[top + 1]
                             + prev.color_similarity[bottom]
                             + prev.color_similarity[bottom + 1])
@@ -335,37 +373,41 @@ impl SnapMapLevel {
                     }
                 }
 
-                let border_start = if y < interior_h { interior_w } else { 0 };
-                for x in border_start..new_w {
-                    let (g, c) = downsample_cell_checked(prev, w, h, x, y);
-                    grad_row[x] = g;
-                    color_row[x] = c;
+                let border_start = if y < interior_height {
+                    interior_width
+                } else {
+                    0
+                };
+                for (offset, (grad_cell, color_cell)) in grad_row[border_start..]
+                    .iter_mut()
+                    .zip(&mut color_row[border_start..])
+                    .enumerate()
+                {
+                    let cell_x = border_start + offset;
+                    let (gradient_avg, similarity_avg) =
+                        downsample_cell_checked(prev, width, height, cell_x, y);
+                    *grad_cell = gradient_avg;
+                    *color_cell = similarity_avg;
                 }
             });
         Some(Self {
-            size: [new_w, new_h],
+            size: [new_width, new_height],
             scale: prev.scale * 2,
             gradient,
             color_similarity,
         })
     }
 
-    pub(super) fn gradient_at(&self, x: i32, y: i32) -> f32 {
-        if self.gradient.is_empty() {
-            return 0.0;
+    pub(super) fn value_rows(&self, y: usize) -> Option<(&[f32], &[f32])> {
+        if y >= self.size[1] {
+            return None;
         }
-        let xi = clamp_index(x, self.size[0]);
-        let yi = clamp_index(y, self.size[1]);
-        self.gradient[yi * self.size[0] + xi]
-    }
-
-    pub(super) fn color_similarity_at(&self, x: i32, y: i32) -> f32 {
-        if self.color_similarity.is_empty() {
-            return 0.0;
-        }
-        let xi = clamp_index(x, self.size[0]);
-        let yi = clamp_index(y, self.size[1]);
-        self.color_similarity[yi * self.size[0] + xi]
+        let start = y.checked_mul(self.size[0])?;
+        let end = start.checked_add(self.size[0])?;
+        Some((
+            self.gradient.get(start..end)?,
+            self.color_similarity.get(start..end)?,
+        ))
     }
 }
 

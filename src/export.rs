@@ -111,15 +111,19 @@ impl ExportFormat {
 
 /// Compute per-point distances to the previous point (first entry is `None`).
 pub fn sequential_distances(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
-    let len = raw_points.len();
-    let mut values = vec![None; len];
-    for i in 1..len {
-        let prev = &raw_points[i - 1];
-        let curr = &raw_points[i];
+    let mut values = Vec::with_capacity(raw_points.len());
+    if raw_points.is_empty() {
+        return values;
+    }
+    values.push(None);
+    values.extend(raw_points.windows(2).map(|pair| {
+        let [prev, curr] = pair else {
+            unreachable!("windows(2) must yield two points")
+        };
         let dx = curr.x - prev.x;
         let dy = curr.y - prev.y;
-        values[i] = Some(dx.hypot(dy));
-    }
+        Some(dx.hypot(dy))
+    }));
     values
 }
 
@@ -131,10 +135,10 @@ pub fn turning_angles(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
     if len < 3 {
         return values;
     }
-    for i in 1..(len - 1) {
-        let prev = &raw_points[i - 1];
-        let curr = &raw_points[i];
-        let next = &raw_points[i + 1];
+    for (slot, triple) in values[1..len - 1].iter_mut().zip(raw_points.windows(3)) {
+        let [prev, curr, next] = triple else {
+            unreachable!("windows(3) must yield three points")
+        };
         let v1 = (curr.x - prev.x, curr.y - prev.y);
         let v2 = (next.x - curr.x, next.y - curr.y);
         let mag1 = v1.0.hypot(v1.1);
@@ -144,7 +148,7 @@ pub fn turning_angles(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
         }
         let dot = v1.0 * v2.0 + v1.1 * v2.1;
         let cos_theta = (dot / (mag1 * mag2)).clamp(-1.0, 1.0);
-        values[i] = Some(cos_theta.acos().to_degrees());
+        *slot = Some(cos_theta.acos().to_degrees());
     }
     values
 }
@@ -182,21 +186,20 @@ fn build_tabular_export(payload: &ExportPayload) -> anyhow::Result<TabularExport
     headers.extend(payload.extra_columns.iter().map(|c| c.header.clone()));
 
     let mut rows = Vec::with_capacity(payload.row_count());
-    for row_idx in 0..payload.row_count() {
-        let p = &payload.points[row_idx];
+    let mut extra_columns: Vec<_> = payload
+        .extra_columns
+        .iter()
+        .map(|col| (col, col.values.iter()))
+        .collect();
+    for p in &payload.points {
         let xv = axis_value_from_scalar_for_export(payload.x_unit, p.x, "x")?;
         let yv = axis_value_from_scalar_for_export(payload.y_unit, p.y, "y")?;
 
         let mut row = Vec::with_capacity(headers.len());
         row.push(Some(xv.format()));
         row.push(Some(yv.format()));
-        for col in &payload.extra_columns {
-            debug_assert_eq!(col.values.len(), payload.row_count());
-            let cell = col
-                .values
-                .get(row_idx)
-                .and_then(|v| *v)
-                .map(format_extra_value);
+        for (_, values) in &mut extra_columns {
+            let cell = values.next().copied().flatten().map(format_extra_value);
             row.push(cell);
         }
         rows.push(row);
@@ -459,6 +462,11 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
         let start = sheet_index * max_rows_per_sheet;
         let end = (start + max_rows_per_sheet).min(total_rows);
         let slice = &payload.points[start..end];
+        let mut extra_columns: Vec<_> = payload
+            .extra_columns
+            .iter()
+            .map(|col| (col, col.values[start..end].iter()))
+            .collect();
         for (row_offset, p) in slice.iter().enumerate() {
             let row = u32::try_from(row_offset + 1)
                 .map_err(|_| XlsxError::ParameterError("XLSX row index overflow.".into()))?;
@@ -512,11 +520,10 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
                 }
             }
 
-            for (col_idx, col) in payload.extra_columns.iter().enumerate() {
+            for (col_idx, (_, values)) in extra_columns.iter_mut().enumerate() {
                 let col_num = u16::try_from(col_idx + 2)
                     .map_err(|_| XlsxError::ParameterError("XLSX column index overflow.".into()))?;
-                debug_assert_eq!(col.values.len(), payload.row_count());
-                match col.values.get(start + row_offset).and_then(|v| *v) {
+                match values.next().copied().flatten() {
                     Some(value) => {
                         if !value.is_finite() {
                             return Err(XlsxError::ParameterError(format!(
@@ -545,9 +552,13 @@ pub fn export_to_json(path: &std::path::Path, payload: &ExportPayload) -> anyhow
         anyhow::bail!(err);
     }
     let mut points = Vec::with_capacity(payload.row_count());
-    for row_idx in 0..payload.row_count() {
+    let mut extra_columns: Vec<_> = payload
+        .extra_columns
+        .iter()
+        .map(|col| (col, col.values.iter()))
+        .collect();
+    for p in &payload.points {
         let mut obj = Map::new();
-        let p = &payload.points[row_idx];
         obj.insert(
             payload.x_label.clone(),
             axis_value_to_json(payload.x_unit, p.x, &payload.x_label)?,
@@ -556,9 +567,8 @@ pub fn export_to_json(path: &std::path::Path, payload: &ExportPayload) -> anyhow
             payload.y_label.clone(),
             axis_value_to_json(payload.y_unit, p.y, &payload.y_label)?,
         );
-        for col in &payload.extra_columns {
-            debug_assert_eq!(col.values.len(), payload.row_count());
-            let cell = col.values.get(row_idx).and_then(|v| *v);
+        for (col, values) in &mut extra_columns {
+            let cell = values.next().copied().flatten();
             obj.insert(col.header.clone(), optional_number_json(cell));
         }
         points.push(Value::Object(obj));
@@ -638,9 +648,13 @@ pub fn export_to_ron(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
         anyhow::bail!(err);
     }
     let mut points = Vec::with_capacity(payload.row_count());
-    for row_idx in 0..payload.row_count() {
+    let mut extra_columns: Vec<_> = payload
+        .extra_columns
+        .iter()
+        .map(|col| (col, col.values.iter()))
+        .collect();
+    for p in &payload.points {
         let mut row = BTreeMap::new();
-        let p = &payload.points[row_idx];
         row.insert(
             payload.x_label.clone(),
             axis_value_to_ron(payload.x_unit, p.x, &payload.x_label)?,
@@ -649,9 +663,8 @@ pub fn export_to_ron(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
             payload.y_label.clone(),
             axis_value_to_ron(payload.y_unit, p.y, &payload.y_label)?,
         );
-        for col in &payload.extra_columns {
-            debug_assert_eq!(col.values.len(), payload.row_count());
-            let cell = col.values.get(row_idx).and_then(|v| *v);
+        for (col, values) in &mut extra_columns {
+            let cell = values.next().copied().flatten();
             row.insert(col.header.clone(), optional_number_ron(cell));
         }
         points.push(row);

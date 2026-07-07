@@ -716,8 +716,8 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
     let trimmed = start.iter().copied().skip_while(u8::is_ascii_whitespace);
     let mut probe = [0_u8; 256];
     let mut len = 0_usize;
-    for byte in trimmed.take(256) {
-        probe[len] = byte.to_ascii_lowercase();
+    for (slot, byte) in probe.iter_mut().zip(trimmed.take(256)) {
+        *slot = byte.to_ascii_lowercase();
         len += 1;
     }
     let probe = &probe[..len];

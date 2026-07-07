@@ -91,9 +91,12 @@ pub fn auto_sample_count(
     };
 
     // Compute Y-range on the reference curve to derive an absolute tolerance.
-    let mut y_min = ref_curve[0].y;
-    let mut y_max = ref_curve[0].y;
-    for p in &ref_curve[1..] {
+    let Some((first_ref, rest_ref)) = ref_curve.split_first() else {
+        return min_samples;
+    };
+    let mut y_min = first_ref.y;
+    let mut y_max = first_ref.y;
+    for p in rest_ref {
         if p.y < y_min {
             y_min = p.y;
         }
@@ -194,16 +197,19 @@ fn build_sample_positions(points: &[XYPoint], samples: usize) -> Vec<f64> {
 
 fn interpolate_linear(points: &[XYPoint], sample_xs: &[f64]) -> Vec<XYPoint> {
     let mut out = Vec::with_capacity(sample_xs.len());
-    let mut j = 0usize;
+    let Some(last) = points.last().copied() else {
+        return out;
+    };
+    let mut segments = points.windows(2).peekable();
     for &sx in sample_xs {
-        while j + 1 < points.len() && points[j + 1].x < sx {
-            j += 1;
+        while let Some([_, next]) = segments.peek().copied()
+            && next.x < sx
+        {
+            segments.next();
         }
-        let (x0, y0) = (points[j].x, points[j].y);
-        let (x1, y1) = if j + 1 < points.len() {
-            (points[j + 1].x, points[j + 1].y)
-        } else {
-            (x0, y0)
+        let (x0, y0, x1, y1) = match segments.peek().copied() {
+            Some([left, right]) => (left.x, left.y, right.x, right.y),
+            _ => (last.x, last.y, last.x, last.y),
         };
         let sy = if (x1 - x0).abs() <= f64::EPSILON {
             y0
@@ -218,14 +224,17 @@ fn interpolate_linear(points: &[XYPoint], sample_xs: &[f64]) -> Vec<XYPoint> {
 
 fn interpolate_step(points: &[XYPoint], sample_xs: &[f64]) -> Vec<XYPoint> {
     let mut out = Vec::with_capacity(sample_xs.len());
-    let mut j = 0usize;
+    let Some(mut current) = points.first().copied() else {
+        return out;
+    };
+    let mut rest = points.iter().copied().skip(1).peekable();
     for &sx in sample_xs {
-        while j + 1 < points.len() && points[j + 1].x <= sx {
-            j += 1;
+        while rest.peek().is_some_and(|point| point.x <= sx) {
+            current = rest.next().expect("peeked point must be present");
         }
         out.push(XYPoint {
             x: sx,
-            y: points[j].y,
+            y: current.y,
         });
     }
     out
@@ -242,19 +251,24 @@ fn interpolate_cubic(points: &[XYPoint], sample_xs: &[f64]) -> Vec<XYPoint> {
     };
 
     let mut out = Vec::with_capacity(sample_xs.len());
-    let mut seg_idx = 0usize;
     let Some(last) = unique.last() else {
         return interpolate_linear(points, sample_xs);
     };
+    let Some(mut seg) = segments.first() else {
+        return interpolate_linear(points, sample_xs);
+    };
+    let Some(last_segment) = segments.last() else {
+        return interpolate_linear(points, sample_xs);
+    };
+    let mut rest = segments.iter().skip(1).peekable();
     let last_x = last.x;
     for &sx in sample_xs {
-        while seg_idx + 1 < segments.len() && sx >= segments[seg_idx + 1].x {
-            seg_idx += 1;
+        while rest.peek().is_some_and(|next| sx >= next.x) {
+            seg = rest.next().expect("peeked segment must be present");
         }
         if sx > last_x {
-            seg_idx = segments.len().saturating_sub(1);
+            seg = last_segment;
         }
-        let seg = &segments[seg_idx];
         let dx = sx - seg.x;
         let y = seg.a + seg.b * dx + seg.c * dx * dx + seg.d * dx * dx * dx;
         out.push(XYPoint { x: sx, y });
@@ -292,18 +306,30 @@ fn build_natural_cubic_segments(points: &[XYPoint]) -> Option<Vec<CubicSegment>>
     }
     let point_count = points.len();
     let mut interval_widths = vec![0.0; point_count - 1];
-    for i in 0..(point_count - 1) {
-        let delta = points[i + 1].x - points[i].x;
+    for (slot, pair) in interval_widths.iter_mut().zip(points.windows(2)) {
+        let [left, right] = pair else {
+            unreachable!("windows(2) must yield two points")
+        };
+        let delta = right.x - left.x;
         if delta.abs() <= f64::EPSILON {
             return None;
         }
-        interval_widths[i] = delta;
+        *slot = delta;
     }
 
     let mut slope_diffs = vec![0.0; point_count];
-    for i in 1..(point_count - 1) {
-        slope_diffs[i] = (3.0 / interval_widths[i]) * (points[i + 1].y - points[i].y)
-            - (3.0 / interval_widths[i - 1]) * (points[i].y - points[i - 1].y);
+    for ((slot, triple), widths) in slope_diffs[1..point_count - 1]
+        .iter_mut()
+        .zip(points.windows(3))
+        .zip(interval_widths.windows(2))
+    {
+        let [prev, curr, next] = triple else {
+            unreachable!("windows(3) must yield three points")
+        };
+        let [prev_width, width] = widths else {
+            unreachable!("windows(2) must yield two widths")
+        };
+        *slot = (3.0 / width) * (next.y - curr.y) - (3.0 / prev_width) * (curr.y - prev.y);
     }
 
     let mut tri_diagonal = vec![0.0; point_count];
@@ -338,13 +364,13 @@ fn build_natural_cubic_segments(points: &[XYPoint]) -> Option<Vec<CubicSegment>>
     }
 
     let mut segments = Vec::with_capacity(point_count - 1);
-    for i in 0..(point_count - 1) {
+    for (((point, &b), &c), &d) in points.iter().zip(&coeff_b).zip(&coeff_c).zip(&coeff_d) {
         segments.push(CubicSegment {
-            x: points[i].x,
-            a: points[i].y,
-            b: coeff_b[i],
-            c: coeff_c[i],
-            d: coeff_d[i],
+            x: point.x,
+            a: point.y,
+            b,
+            c,
+            d,
         });
     }
     Some(segments)

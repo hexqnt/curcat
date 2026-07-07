@@ -115,8 +115,8 @@ fn apply_image_filters_simd_gamma1(
     let luma_g = F32x8::splat(0.7152);
     let luma_b = F32x8::splat(0.0722);
 
-    let mut chunks = pixels.chunks_exact_mut(FILTER_SIMD_LANES);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = pixels.as_chunks_mut::<FILTER_SIMD_LANES>();
+    for chunk in chunks {
         let mut r = [0.0_f32; FILTER_SIMD_LANES];
         let mut g = [0.0_f32; FILTER_SIMD_LANES];
         let mut b = [0.0_f32; FILTER_SIMD_LANES];
@@ -163,17 +163,15 @@ fn apply_image_filters_simd_gamma1(
         gf.copy_to_slice(&mut g_out);
         bf.copy_to_slice(&mut b_out);
 
-        for lane in 0..FILTER_SIMD_LANES {
-            chunk[lane] = Color32::from_rgba_unmultiplied(
-                float_to_u8(r_out[lane]),
-                float_to_u8(g_out[lane]),
-                float_to_u8(b_out[lane]),
-                a[lane],
-            );
+        for ((((pixel, &r), &g), &b), &a) in
+            chunk.iter_mut().zip(&r_out).zip(&g_out).zip(&b_out).zip(&a)
+        {
+            *pixel =
+                Color32::from_rgba_unmultiplied(float_to_u8(r), float_to_u8(g), float_to_u8(b), a);
         }
     }
 
-    for pixel in chunks.into_remainder() {
+    for pixel in remainder {
         apply_filter_scalar_pixel(pixel, filters, contrast_factor, 1.0);
     }
 }
@@ -236,21 +234,24 @@ fn box_blur(image: &ColorImage, radius: u32) -> Vec<Color32> {
     let mut horiz = vec![[0u8; 4]; width * height];
     let mut row_prefix = vec![U32x4::splat(0); width + 1];
 
-    for y in 0..height {
-        let row_start = y * row_len;
+    for (src_row, horiz_row) in image
+        .pixels
+        .chunks_exact(row_len)
+        .zip(horiz.chunks_exact_mut(row_len))
+    {
         row_prefix[0] = U32x4::splat(0);
-        for x in 0..width {
-            let [r, g, b, a] = image.pixels[row_start + x].to_array();
+        for (x, pixel) in src_row.iter().enumerate() {
+            let [r, g, b, a] = pixel.to_array();
             let rgba = U32x4::from_array([u32::from(r), u32::from(g), u32::from(b), u32::from(a)]);
             row_prefix[x + 1] = row_prefix[x] + rgba;
         }
-        for x in 0..width {
+        for (x, out_pixel) in horiz_row.iter_mut().enumerate() {
             let x0 = x.saturating_sub(radius);
             let x1 = (x + radius).min(width - 1);
             let count = u32::try_from(x1 - x0 + 1).unwrap_or(u32::MAX);
             let sum = row_prefix[x1 + 1];
             let base = row_prefix[x0];
-            horiz[row_start + x] = avg_rgba(sum, base, count);
+            *out_pixel = avg_rgba(sum, base, count);
         }
     }
 

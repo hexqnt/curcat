@@ -53,6 +53,7 @@ impl SampleAccum {
 
 #[allow(clippy::suboptimal_flops)]
 fn accumulate_sampled_colors_simd(pixels: &[Color32], step: usize) -> SampleAccum {
+    assert!(step > 0, "sample step must be positive");
     if pixels.is_empty() {
         return SampleAccum::zero();
     }
@@ -72,11 +73,16 @@ fn accumulate_sampled_colors_simd(pixels: &[Color32], step: usize) -> SampleAccu
         let mut r = [0.0_f32; PALETTE_SIMD_LANES];
         let mut g = [0.0_f32; PALETTE_SIMD_LANES];
         let mut b = [0.0_f32; PALETTE_SIMD_LANES];
-        for lane in 0..PALETTE_SIMD_LANES {
-            let [pr, pg, pb, _] = pixels[offset + lane * step].to_array();
-            r[lane] = f32::from(pr);
-            g[lane] = f32::from(pg);
-            b[lane] = f32::from(pb);
+        for (((r, g), b), pixel) in r
+            .iter_mut()
+            .zip(g.iter_mut())
+            .zip(b.iter_mut())
+            .zip(pixels[offset..offset + lane_span].iter().step_by(step))
+        {
+            let [pr, pg, pb, _] = pixel.to_array();
+            *r = f32::from(pr);
+            *g = f32::from(pg);
+            *b = f32::from(pb);
         }
 
         let rf = F32x8::from_array(r);
@@ -95,8 +101,8 @@ fn accumulate_sampled_colors_simd(pixels: &[Color32], step: usize) -> SampleAccu
     let mut sum_b = blue_sum_vec.reduce_sum();
     let mut sum_luma = luma_sum_vec.reduce_sum();
 
-    while offset < pixels.len() {
-        let [r, g, b, _] = pixels[offset].to_array();
+    for pixel in pixels[offset..].iter().step_by(step) {
+        let [r, g, b, _] = pixel.to_array();
         let rf = f32::from(r);
         let gf = f32::from(g);
         let bf = f32::from(b);
@@ -105,7 +111,6 @@ fn accumulate_sampled_colors_simd(pixels: &[Color32], step: usize) -> SampleAccu
         sum_b += bf;
         sum_luma += srgb_luminance_components(rf, gf, bf);
         samples += 1;
-        offset = offset.saturating_add(step);
     }
 
     SampleAccum {

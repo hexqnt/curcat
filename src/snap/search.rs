@@ -35,8 +35,18 @@ pub(super) fn search_in_level(
     let max_y = (cy + reach).min(height - 2);
     let mut best: Option<SnapCandidate> = None;
 
+    let min_x_usize = usize::try_from(min_x).ok()?;
+    let max_x_usize = usize::try_from(max_x).ok()?;
+    let x_end = max_x_usize.checked_add(1)?;
+
     for y in min_y..=max_y {
-        for x in min_x..=max_x {
+        let y_usize = usize::try_from(y).ok()?;
+        let (gradient_row, color_row) = level.value_rows(y_usize)?;
+        let gradient_cells = gradient_row.get(min_x_usize..x_end)?;
+        let color_cells = color_row.get(min_x_usize..x_end)?;
+        for (x, (&gradient, &color_similarity)) in
+            (min_x..=max_x).zip(gradient_cells.iter().zip(color_cells))
+        {
             let xf = i32_to_f32(x);
             let yf = i32_to_f32(y);
             let dx = xf - center_x;
@@ -45,8 +55,6 @@ pub(super) fn search_in_level(
             if dist_sq > radius_sq {
                 continue;
             }
-            let gradient = level.gradient_at(x, y);
-            let color_similarity = level.color_similarity_at(x, y);
             let feature_strength = behavior.feature_strength(gradient, color_similarity);
             if feature_strength <= 0.0 {
                 continue;
@@ -91,22 +99,46 @@ pub(super) fn refine_snap_position(
     };
     let ax = saturating_f32_to_i32(approx.x.clamp(1.0, i32_to_f32(width - 2)).round());
     let ay = saturating_f32_to_i32(approx.y.clamp(1.0, i32_to_f32(height - 2)).round());
+    let min_x = (ax - 1).max(0);
+    let max_x = (ax + 1).min(width - 1);
+    let min_y = (ay - 1).max(0);
+    let max_y = (ay + 1).min(height - 1);
+    let Ok(min_x_usize) = usize::try_from(min_x) else {
+        return approx;
+    };
+    let Ok(max_x_usize) = usize::try_from(max_x) else {
+        return approx;
+    };
+    let Some(x_end) = max_x_usize.checked_add(1) else {
+        return approx;
+    };
 
     let mut sum = 0.0;
     let mut sx = 0.0;
     let mut sy = 0.0;
-    for dy in -1..=1 {
-        for dx in -1..=1 {
-            let px = (ax + dx).clamp(0, width - 1);
-            let py = (ay + dy).clamp(0, height - 1);
-            let strength = behavior
-                .feature_strength(level.gradient_at(px, py), level.color_similarity_at(px, py));
+    for py in min_y..=max_y {
+        let Ok(py_usize) = usize::try_from(py) else {
+            continue;
+        };
+        let Some((gradient_row, color_row)) = level.value_rows(py_usize) else {
+            continue;
+        };
+        let Some(gradient_cells) = gradient_row.get(min_x_usize..x_end) else {
+            continue;
+        };
+        let Some(color_cells) = color_row.get(min_x_usize..x_end) else {
+            continue;
+        };
+        for (px, (&gradient, &color_similarity)) in
+            (min_x..=max_x).zip(gradient_cells.iter().zip(color_cells))
+        {
+            let strength = behavior.feature_strength(gradient, color_similarity);
             if strength <= 0.0 {
                 continue;
             }
             sum += strength;
-            sx += strength * i32_to_f32(px);
-            sy += strength * i32_to_f32(py);
+            sx = strength.mul_add(i32_to_f32(px), sx);
+            sy = strength.mul_add(i32_to_f32(py), sy);
         }
     }
     if sum > 0.0 {

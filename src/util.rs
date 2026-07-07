@@ -14,18 +14,6 @@ pub fn rounded_u8(value: f32) -> u8 {
     }
 }
 
-pub fn clamp_index(value: i32, len: usize) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    let last = len - 1;
-    let Ok(last_i32) = i32::try_from(last) else {
-        return last;
-    };
-    let clamped = value.clamp(0, last_i32);
-    usize::try_from(clamped).unwrap_or(last)
-}
-
 pub const fn u32_to_f32(value: u32) -> f32 {
     #[allow(clippy::cast_precision_loss)]
     {
