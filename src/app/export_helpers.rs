@@ -95,11 +95,11 @@ impl CurcatApp {
             CoordSystem::Cartesian => {
                 let x_unit = x_mapping
                     .as_ref()
-                    .map(|mapping| mapping.unit)
+                    .map(crate::types::AxisMapping::unit)
                     .ok_or("Complete both axis calibrations before export.")?;
                 let y_unit = y_mapping
                     .as_ref()
-                    .map(|mapping| mapping.unit)
+                    .map(crate::types::AxisMapping::unit)
                     .ok_or("Complete both axis calibrations before export.")?;
                 (x_unit, y_unit, None)
             }

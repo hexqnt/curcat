@@ -99,13 +99,15 @@ impl CurcatApp {
             .cal_x
             .mapping()
             .and_then(|map| {
-                let delta = map.p2 - map.p1;
+                let (p1, p2) = map.endpoints();
+                let delta = p2 - p1;
                 let len = delta.length();
                 if len <= f32::EPSILON {
                     return None;
                 }
                 let mut dir = delta / len;
-                if map.v2.to_scalar_seconds() < map.v1.to_scalar_seconds() {
+                let (v1, v2) = map.values();
+                if v2.to_scalar_seconds() < v1.to_scalar_seconds() {
                     dir = -dir;
                 }
                 Some(dir)

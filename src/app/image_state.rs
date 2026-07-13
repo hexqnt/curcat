@@ -4,7 +4,7 @@ use crate::image::{
 };
 use egui::{ColorImage, Pos2, Vec2};
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+use std::sync::{Arc, mpsc::Receiver};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone, Copy)]
@@ -109,7 +109,7 @@ impl PendingImageLimitPrompt {
 
 pub struct ImageState {
     pub(super) image: Option<LoadedImage>,
-    pub(super) base_pixels: Option<ColorImage>,
+    pub(super) base_pixels: Option<Arc<ColorImage>>,
     pub(super) filters: ImageFilters,
     pub(super) meta: Option<ImageMeta>,
     pub(super) transform: ImageTransformRecord,

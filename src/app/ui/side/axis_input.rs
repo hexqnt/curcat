@@ -4,10 +4,9 @@ use crate::i18n::UiLanguage;
 use crate::types::AxisUnit;
 use egui::{
     Pos2, Rect, Response, RichText, TextBuffer, TextEdit,
-    text::{CCursor, CCursorRange},
+    text::{CCursor, CCursorRange, CharIndex},
 };
 use std::any::TypeId;
-use std::ops::Range;
 
 /// Normalize axis input text by removing invalid characters and fixing decimals.
 pub fn sanitize_axis_text(value: &mut String, unit: AxisUnit) {
@@ -59,7 +58,7 @@ impl TextBuffer for AxisFilteredText<'_> {
         self.value.as_str()
     }
 
-    fn insert_text(&mut self, text: &str, char_index: usize) -> usize {
+    fn insert_text(&mut self, text: &str, char_index: CharIndex) -> usize {
         let filtered: String = text
             .chars()
             .filter_map(|ch| {
@@ -78,17 +77,18 @@ impl TextBuffer for AxisFilteredText<'_> {
             return 0;
         }
         let byte_idx = TextBuffer::byte_index_from_char_index(self, char_index);
-        self.value.insert_str(byte_idx, &filtered);
+        self.value.insert_str(byte_idx.into(), &filtered);
         filtered.chars().count()
     }
 
-    fn delete_char_range(&mut self, char_range: Range<usize>) {
+    fn delete_char_range(&mut self, char_range: std::ops::Range<CharIndex>) {
         if char_range.start >= char_range.end {
             return;
         }
         let byte_start = TextBuffer::byte_index_from_char_index(self, char_range.start);
         let byte_end = TextBuffer::byte_index_from_char_index(self, char_range.end);
-        self.value.drain(byte_start..byte_end);
+        self.value
+            .drain(usize::from(byte_start)..usize::from(byte_end));
     }
 
     fn type_id(&self) -> TypeId {

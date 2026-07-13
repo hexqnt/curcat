@@ -63,29 +63,33 @@ mod tests {
 
     #[test]
     fn axis_mapping_log10_interpolates_midpoint() {
-        let mapping = AxisMapping {
-            p1: Pos2::new(0.0, 0.0),
-            p2: Pos2::new(10.0, 0.0),
-            v1: AxisValue::Float(1.0),
-            v2: AxisValue::Float(100.0),
-            scale: ScaleKind::Log10,
-            unit: AxisUnit::Float,
-        };
+        let mapping = AxisMapping::try_new(
+            Pos2::new(0.0, 0.0),
+            Pos2::new(10.0, 0.0),
+            AxisValue::Float(1.0),
+            AxisValue::Float(100.0),
+            ScaleKind::Log10,
+            AxisUnit::Float,
+        )
+        .expect("valid mapping");
         let value = mapping.numeric_at_t(0.5).expect("log10 value");
         assert!((value - 10.0).abs() < 1.0e-6);
     }
 
     #[test]
     fn axis_mapping_log10_rejects_nonpositive_values() {
-        let mapping = AxisMapping {
-            p1: Pos2::new(0.0, 0.0),
-            p2: Pos2::new(10.0, 0.0),
-            v1: AxisValue::Float(-1.0),
-            v2: AxisValue::Float(100.0),
-            scale: ScaleKind::Log10,
-            unit: AxisUnit::Float,
-        };
-        assert!(mapping.numeric_at_t(0.5).is_none());
+        let mapping = AxisMapping::try_new(
+            Pos2::new(0.0, 0.0),
+            Pos2::new(10.0, 0.0),
+            AxisValue::Float(-1.0),
+            AxisValue::Float(100.0),
+            ScaleKind::Log10,
+            AxisUnit::Float,
+        );
+        assert_eq!(
+            mapping,
+            Err(AxisMappingError::LogScaleRequiresPositiveValues)
+        );
     }
 
     #[test]
@@ -96,14 +100,15 @@ mod tests {
         let end = DateTime::<Utc>::from_timestamp(86_400 * 2, 0)
             .expect("timestamp")
             .naive_utc();
-        let mapping = AxisMapping {
-            p1: Pos2::new(0.0, 0.0),
-            p2: Pos2::new(10.0, 0.0),
-            v1: AxisValue::DateTime(start),
-            v2: AxisValue::DateTime(end),
-            scale: ScaleKind::Linear,
-            unit: AxisUnit::DateTime,
-        };
+        let mapping = AxisMapping::try_new(
+            Pos2::new(0.0, 0.0),
+            Pos2::new(10.0, 0.0),
+            AxisValue::DateTime(start),
+            AxisValue::DateTime(end),
+            ScaleKind::Linear,
+            AxisUnit::DateTime,
+        )
+        .expect("valid mapping");
         let value = mapping.value_at(Pos2::new(5.0, 0.0)).expect("value");
         let expected = AxisValue::DateTime(
             DateTime::<Utc>::from_timestamp(86_400, 0)

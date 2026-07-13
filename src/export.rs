@@ -3,7 +3,6 @@
 use crate::interp::XYPoint;
 use crate::types::{AngleUnit, AxisUnit, AxisValue, CoordSystem};
 use chrono::{Datelike, Duration, Timelike};
-use maud::{DOCTYPE, html};
 use ron::ser::PrettyConfig;
 use rust_xlsxwriter::{ExcelDateTime, Format, Workbook, XlsxError};
 use serde::Serialize;
@@ -173,60 +172,68 @@ fn validate_extra_columns(payload: &ExportPayload) -> Result<(), String> {
     Ok(())
 }
 
-struct TabularExport {
-    headers: Vec<String>,
-    rows: Vec<Vec<Option<String>>>,
+struct TabularExport<'a> {
+    payload: &'a ExportPayload,
+    headers: Vec<&'a str>,
 }
 
-fn build_tabular_export(payload: &ExportPayload) -> anyhow::Result<TabularExport> {
-    if let Err(err) = validate_extra_columns(payload) {
-        anyhow::bail!(err);
-    }
-    let mut headers = vec![payload.x_label.clone(), payload.y_label.clone()];
-    headers.extend(payload.extra_columns.iter().map(|c| c.header.clone()));
-
-    let mut rows = Vec::with_capacity(payload.row_count());
-    let mut extra_columns: Vec<_> = payload
-        .extra_columns
-        .iter()
-        .map(|col| (col, col.values.iter()))
-        .collect();
-    for p in &payload.points {
-        let xv = axis_value_from_scalar_for_export(payload.x_unit, p.x, "x")?;
-        let yv = axis_value_from_scalar_for_export(payload.y_unit, p.y, "y")?;
-
-        let mut row = Vec::with_capacity(headers.len());
-        row.push(Some(xv.format()));
-        row.push(Some(yv.format()));
-        for (_, values) in &mut extra_columns {
-            let cell = values.next().copied().flatten().map(format_extra_value);
-            row.push(cell);
+impl<'a> TabularExport<'a> {
+    fn try_new(payload: &'a ExportPayload) -> anyhow::Result<Self> {
+        if let Err(err) = validate_extra_columns(payload) {
+            anyhow::bail!(err);
         }
-        rows.push(row);
+        let mut headers = Vec::with_capacity(payload.extra_columns.len() + 2);
+        headers.extend([payload.x_label.as_str(), payload.y_label.as_str()]);
+        headers.extend(
+            payload
+                .extra_columns
+                .iter()
+                .map(|column| column.header.as_str()),
+        );
+        Ok(Self { payload, headers })
     }
 
-    Ok(TabularExport { headers, rows })
+    fn rows(&self) -> impl Iterator<Item = anyhow::Result<Vec<Option<String>>>> + '_ {
+        self.payload
+            .points
+            .iter()
+            .enumerate()
+            .map(|(row_index, point)| self.format_row(row_index, point))
+    }
+
+    fn format_row(&self, row_index: usize, point: &XYPoint) -> anyhow::Result<Vec<Option<String>>> {
+        let xv = axis_value_from_scalar_for_export(self.payload.x_unit, point.x, "x")?;
+        let yv = axis_value_from_scalar_for_export(self.payload.y_unit, point.y, "y")?;
+        let mut row = Vec::with_capacity(self.headers.len());
+        row.extend([Some(xv.format()), Some(yv.format())]);
+        row.extend(
+            self.payload
+                .extra_columns
+                .iter()
+                .map(|column| column.values[row_index].map(format_extra_value)),
+        );
+        Ok(row)
+    }
 }
 
 fn format_extra_value(value: f64) -> String {
     format!("{value:.6}")
 }
 
-fn metadata_pairs(payload: &ExportPayload) -> Vec<(&'static str, String)> {
-    let mut pairs = vec![
-        (
-            "coord_system",
-            coord_system_label(payload.coord_system).to_string(),
-        ),
-        ("x_unit", axis_unit_label(payload.x_unit).to_string()),
-        ("y_unit", axis_unit_label(payload.y_unit).to_string()),
-        ("x_label", payload.x_label.clone()),
-        ("y_label", payload.y_label.clone()),
-    ];
-    if let Some(unit) = payload.angle_unit {
-        pairs.push(("angle_unit", angle_unit_label(unit).to_string()));
-    }
-    pairs
+fn metadata_pairs(payload: &ExportPayload) -> impl Iterator<Item = (&'static str, &str)> {
+    [
+        ("coord_system", coord_system_label(payload.coord_system)),
+        ("x_unit", axis_unit_label(payload.x_unit)),
+        ("y_unit", axis_unit_label(payload.y_unit)),
+        ("x_label", payload.x_label.as_str()),
+        ("y_label", payload.y_label.as_str()),
+    ]
+    .into_iter()
+    .chain(
+        payload
+            .angle_unit
+            .map(|unit| ("angle_unit", angle_unit_label(unit))),
+    )
 }
 
 fn escape_xml_text(input: &str) -> String {
@@ -260,6 +267,20 @@ fn escape_xml_attr(input: &str) -> String {
     out
 }
 
+fn escape_html_text(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 fn escape_markdown_cell(input: &str) -> String {
     let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
     let mut out = String::with_capacity(normalized.len());
@@ -279,13 +300,13 @@ fn escape_markdown_cell(input: &str) -> String {
 /// Floats are formatted with 6 fractional digits; `DateTime` values are emitted
 /// as formatted strings. Returns an error if any value is not representable.
 pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
-    let table = build_tabular_export(payload)?;
+    let table = TabularExport::try_new(payload)?;
     let mut wtr = csv::Writer::from_path(path)?;
     wtr.write_record(&table.headers)?;
 
-    for row in table.rows {
-        let record: Vec<String> = row.into_iter().map(Option::unwrap_or_default).collect();
-        wtr.write_record(record)?;
+    for row in table.rows() {
+        let row = row?;
+        wtr.write_record(row.iter().map(|cell| cell.as_deref().unwrap_or_default()))?;
     }
     wtr.flush()?;
     Ok(())
@@ -293,70 +314,56 @@ pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
 
 /// Write the payload to an HTML document containing metadata and a data table.
 pub fn export_to_html(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
-    let table = build_tabular_export(payload)?;
-    let metadata = metadata_pairs(payload);
-    let doc = html! {
-        (DOCTYPE)
-        html lang="en" {
-            head {
-                meta charset="utf-8";
-                title { "Curcat export" }
-            }
-            body {
-                h1 { "Curcat export" }
-                dl {
-                    @for (name, value) in &metadata {
-                        dt { (name) }
-                        dd { (value) }
-                    }
-                }
-                table {
-                    thead {
-                        tr {
-                            @for header in &table.headers {
-                                th { (header) }
-                            }
-                        }
-                    }
-                    tbody {
-                        @for row in &table.rows {
-                            tr {
-                                @for cell in row {
-                                    td {
-                                        @if let Some(value) = cell {
-                                            (value)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    };
-
+    let table = TabularExport::try_new(payload)?;
     let mut writer = BufWriter::new(std::fs::File::create(path)?);
-    writer.write_all(doc.into_string().as_bytes())?;
+    writer.write_all(
+        b"<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Curcat export</title></head><body><h1>Curcat export</h1><dl>",
+    )?;
+    for (name, value) in metadata_pairs(payload) {
+        write!(
+            writer,
+            "<dt>{}</dt><dd>{}</dd>",
+            escape_html_text(name),
+            escape_html_text(value)
+        )?;
+    }
+    writer.write_all(b"</dl><table><thead><tr>")?;
+    for header in &table.headers {
+        write!(writer, "<th>{}</th>", escape_html_text(header))?;
+    }
+    writer.write_all(b"</tr></thead><tbody>")?;
+    for row in table.rows() {
+        writer.write_all(b"<tr>")?;
+        for cell in row? {
+            writer.write_all(b"<td>")?;
+            if let Some(value) = cell {
+                writer.write_all(escape_html_text(&value).as_bytes())?;
+            }
+            writer.write_all(b"</td>")?;
+        }
+        writer.write_all(b"</tr>")?;
+    }
+    writer.write_all(b"</tbody></table></body></html>")?;
     writer.flush()?;
     Ok(())
 }
 
 /// Write the payload to XML mirroring JSON metadata and point rows.
 pub fn export_to_xml(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
-    let table = build_tabular_export(payload)?;
+    let table = TabularExport::try_new(payload)?;
     let mut writer = BufWriter::new(std::fs::File::create(path)?);
     writer.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<curcat_export")?;
     for (name, value) in metadata_pairs(payload) {
         let name = escape_xml_attr(name);
-        let value = escape_xml_attr(&value);
+        let value = escape_xml_attr(value);
         write!(writer, " {name}=\"{value}\"")?;
     }
     writer.write_all(b">\n  <points>\n")?;
 
-    for row in &table.rows {
+    for row in table.rows() {
+        let row = row?;
         writer.write_all(b"    <point>\n")?;
-        for (header, cell) in table.headers.iter().zip(row) {
+        for (header, cell) in table.headers.iter().zip(&row) {
             let escaped_header = escape_xml_attr(header);
             match cell {
                 Some(value) => {
@@ -381,7 +388,7 @@ pub fn export_to_xml(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
 
 /// Write the payload as a Markdown table.
 pub fn export_to_markdown(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
-    let table = build_tabular_export(payload)?;
+    let table = TabularExport::try_new(payload)?;
     let mut writer = BufWriter::new(std::fs::File::create(path)?);
 
     writer.write_all(b"|")?;
@@ -395,9 +402,10 @@ pub fn export_to_markdown(path: &std::path::Path, payload: &ExportPayload) -> an
     }
     writer.write_all(b"\n")?;
 
-    for row in &table.rows {
+    for row in table.rows() {
+        let row = row?;
         writer.write_all(b"|")?;
-        for cell in row {
+        for cell in &row {
             let escaped = cell
                 .as_deref()
                 .map(escape_markdown_cell)

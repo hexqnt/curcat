@@ -19,18 +19,12 @@ pub enum AxisMappingError {
 /// Mapping between two calibration points and their axis values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AxisMapping {
-    /// First calibration point in pixels.
-    pub p1: Pos2,
-    /// Second calibration point in pixels.
-    pub p2: Pos2,
-    /// Value at the first calibration point.
-    pub v1: AxisValue,
-    /// Value at the second calibration point.
-    pub v2: AxisValue,
-    /// Scale kind for the axis.
-    pub scale: ScaleKind,
-    /// Units for the axis.
-    pub unit: AxisUnit,
+    p1: Pos2,
+    p2: Pos2,
+    v1: AxisValue,
+    v2: AxisValue,
+    scale: ScaleKind,
+    unit: AxisUnit,
 }
 
 impl AxisMapping {
@@ -55,6 +49,21 @@ impl AxisMapping {
             scale,
             unit,
         })
+    }
+
+    /// Возвращает калибровочные точки в пиксельных координатах.
+    pub const fn endpoints(&self) -> (Pos2, Pos2) {
+        (self.p1, self.p2)
+    }
+
+    /// Возвращает значения в калибровочных точках.
+    pub const fn values(&self) -> (&AxisValue, &AxisValue) {
+        (&self.v1, &self.v2)
+    }
+
+    /// Возвращает единицу измерения оси.
+    pub const fn unit(&self) -> AxisUnit {
+        self.unit
     }
 
     /// Validate a value pair for the target unit/scale combination.

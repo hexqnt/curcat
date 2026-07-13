@@ -237,7 +237,7 @@ impl ExportConfig {
     }
 }
 
-/// Root application configuration loaded from TOML.
+/// Настройки пользовательского интерфейса.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {

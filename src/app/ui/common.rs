@@ -26,7 +26,7 @@ pub fn side_section_card<R>(
 /// Отрисовать секцию боковой панели как карточку со сворачиваемым заголовком.
 pub fn side_section_card_collapsible(
     ui: &mut egui::Ui,
-    id_salt: impl std::hash::Hash,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
     title: impl Into<egui::WidgetText>,
     add_contents: impl FnOnce(&mut egui::Ui),
 ) {

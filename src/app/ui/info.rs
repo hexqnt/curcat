@@ -556,11 +556,11 @@ impl CurcatApp {
         };
 
         if let (Some(range), Some(map)) = (numeric_range, mapping) {
-            let min = AxisValue::from_scalar_seconds(map.unit, range.min)
+            let min = AxisValue::from_scalar_seconds(map.unit(), range.min)
                 .map_or_else(|| out_of_range.to_string(), |v| v.format());
-            let max = AxisValue::from_scalar_seconds(map.unit, range.max)
+            let max = AxisValue::from_scalar_seconds(map.unit(), range.max)
                 .map_or_else(|| out_of_range.to_string(), |v| v.format());
-            let span = format_span(map.unit, range.span());
+            let span = format_span(map.unit(), range.span());
             ui.label(self.i18n().format_axis_range(label, &min, &max, &span));
             if let Some(pix) = pixel_range {
                 ui.label(

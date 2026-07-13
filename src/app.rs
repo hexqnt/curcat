@@ -18,6 +18,7 @@ use egui::{Color32, Context, Key, Pos2, Vec2, pos2};
 use egui_file_dialog::{DialogState, FileDialog};
 use std::{
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
@@ -382,6 +383,10 @@ impl CurcatApp {
         let Some(image) = self.image.image.as_mut() else {
             return;
         };
+        if self.image.filters.is_identity() {
+            image.replace_pixels(Arc::clone(base));
+            return;
+        }
         let filtered = apply_image_filters(base, self.image.filters);
         image.replace_pixels(filtered);
     }
@@ -420,7 +425,7 @@ impl CurcatApp {
     }
 
     fn set_loaded_image(&mut self, mut image: LoadedImage, meta: Option<ImageMeta>) {
-        let base_pixels = image.pixels.clone();
+        let base_pixels = Arc::clone(&image.pixels);
         if !self.image.filters.is_identity() {
             let filtered = apply_image_filters(&base_pixels, self.image.filters);
             image.replace_pixels(filtered);
@@ -442,6 +447,7 @@ impl CurcatApp {
         let Some(base) = self.image.base_pixels.as_mut() else {
             return;
         };
+        let base = Arc::make_mut(base);
         let old_size = base.size;
         match op {
             ImageTransformOp::RotateCw => rotate_color_image_cw(base),
@@ -900,19 +906,21 @@ impl eframe::App for CurcatApp {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
 
-        egui::Panel::top("top").show_inside(root_ui, |ui| self.ui_top(ui));
-        egui::Panel::bottom("status").show_inside(root_ui, |ui| self.ui_status_bar(ui));
+        egui::Panel::top("top").show(root_ui, |ui| self.ui_top(ui));
+        egui::Panel::bottom("status").show(root_ui, |ui| self.ui_status_bar(ui));
         let side_panel = match self.ui.side_position {
             SidePanelPosition::Left => egui::Panel::left("side"),
             SidePanelPosition::Right => egui::Panel::right("side"),
         };
+        let mut side_open = self.ui.side_open;
         side_panel
             .resizable(true)
             .default_size(280.0)
-            .show_animated_inside(root_ui, self.ui.side_open, |ui| {
+            .show_collapsible(root_ui, &mut side_open, |ui| {
                 self.ui_side_calibration(ui);
             });
-        egui::CentralPanel::default().show_inside(root_ui, |ui| self.ui_central_image(&ctx, ui));
+        self.ui.side_open = side_open;
+        egui::CentralPanel::default().show(root_ui, |ui| self.ui_central_image(&ctx, ui));
         self.ui_image_info_window(&ctx);
         self.ui_image_filters_window(&ctx);
         self.ui_auto_trace_window(&ctx);

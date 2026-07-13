@@ -1,6 +1,7 @@
 use egui::{Color32, ColorImage, Context, TextureHandle, TextureOptions};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Minimum pixel count before parallelizing per-pixel transforms.
 const PARALLEL_PIXEL_THRESHOLD: usize = 262_144; // 512x512
@@ -79,21 +80,21 @@ impl ImageTransformRecord {
 pub struct LoadedImage {
     pub size: [usize; 2],
     pub texture: TextureHandle,
-    pub pixels: ColorImage,
+    pub pixels: Arc<ColorImage>,
 }
 
-#[allow(dead_code)]
 impl LoadedImage {
     fn refresh_texture(&mut self) {
         self.size = self.pixels.size;
         self.texture
-            .set(self.pixels.clone(), TextureOptions::LINEAR);
+            .set(Arc::clone(&self.pixels), TextureOptions::LINEAR);
     }
 
     /// Construct a `LoadedImage` from in-memory pixels and upload a texture.
     pub fn from_color_image(ctx: &Context, pixels: ColorImage) -> Self {
         let size = pixels.size;
-        let texture = ctx.load_texture("loaded_image", pixels.clone(), TextureOptions::LINEAR);
+        let pixels = Arc::new(pixels);
+        let texture = ctx.load_texture("loaded_image", Arc::clone(&pixels), TextureOptions::LINEAR);
         Self {
             size,
             texture,
@@ -101,33 +102,9 @@ impl LoadedImage {
         }
     }
 
-    /// Rotate the image 90 degrees clockwise, updating pixels and texture.
-    pub fn rotate_90_cw(&mut self) {
-        rotate_color_image_cw(&mut self.pixels);
-        self.refresh_texture();
-    }
-
-    /// Rotate the image 90 degrees counter-clockwise, updating pixels and texture.
-    pub fn rotate_90_ccw(&mut self) {
-        rotate_color_image_ccw(&mut self.pixels);
-        self.refresh_texture();
-    }
-
-    /// Mirror the image horizontally (left-right), updating pixels and texture.
-    pub fn flip_horizontal(&mut self) {
-        flip_color_image_horizontal(&mut self.pixels);
-        self.refresh_texture();
-    }
-
-    /// Mirror the image vertically (top-bottom), updating pixels and texture.
-    pub fn flip_vertical(&mut self) {
-        flip_color_image_vertical(&mut self.pixels);
-        self.refresh_texture();
-    }
-
     /// Replace pixel data and refresh the texture.
-    pub fn replace_pixels(&mut self, pixels: ColorImage) {
-        self.pixels = pixels;
+    pub fn replace_pixels(&mut self, pixels: impl Into<Arc<ColorImage>>) {
+        self.pixels = pixels.into();
         self.refresh_texture();
     }
 }
@@ -240,37 +217,44 @@ mod tests {
 
     #[test]
     fn rotate_90_cw_maps_pixels() {
-        let ctx = Context::default();
-        let mut image = LoadedImage::from_color_image(&ctx, test_image());
-        image.rotate_90_cw();
+        let mut image = test_image();
+        rotate_color_image_cw(&mut image);
         assert_eq!(image.size, [2, 3]);
-        assert_eq!(ids_from_image(&image.pixels), vec![4, 1, 5, 2, 6, 3]);
+        assert_eq!(ids_from_image(&image), vec![4, 1, 5, 2, 6, 3]);
     }
 
     #[test]
     fn rotate_90_ccw_maps_pixels() {
-        let ctx = Context::default();
-        let mut image = LoadedImage::from_color_image(&ctx, test_image());
-        image.rotate_90_ccw();
+        let mut image = test_image();
+        rotate_color_image_ccw(&mut image);
         assert_eq!(image.size, [2, 3]);
-        assert_eq!(ids_from_image(&image.pixels), vec![3, 6, 2, 5, 1, 4]);
+        assert_eq!(ids_from_image(&image), vec![3, 6, 2, 5, 1, 4]);
     }
 
     #[test]
     fn flip_horizontal_maps_pixels() {
-        let ctx = Context::default();
-        let mut image = LoadedImage::from_color_image(&ctx, test_image());
-        image.flip_horizontal();
+        let mut image = test_image();
+        flip_color_image_horizontal(&mut image);
         assert_eq!(image.size, [3, 2]);
-        assert_eq!(ids_from_image(&image.pixels), vec![3, 2, 1, 6, 5, 4]);
+        assert_eq!(ids_from_image(&image), vec![3, 2, 1, 6, 5, 4]);
     }
 
     #[test]
     fn flip_vertical_maps_pixels() {
-        let ctx = Context::default();
-        let mut image = LoadedImage::from_color_image(&ctx, test_image());
-        image.flip_vertical();
+        let mut image = test_image();
+        flip_color_image_vertical(&mut image);
         assert_eq!(image.size, [3, 2]);
-        assert_eq!(ids_from_image(&image.pixels), vec![4, 5, 6, 1, 2, 3]);
+        assert_eq!(ids_from_image(&image), vec![4, 5, 6, 1, 2, 3]);
+    }
+
+    #[test]
+    fn replace_pixels_reuses_shared_buffer() {
+        let ctx = Context::default();
+        let mut loaded = LoadedImage::from_color_image(&ctx, test_image());
+        let shared = Arc::new(test_image());
+
+        loaded.replace_pixels(Arc::clone(&shared));
+
+        assert!(Arc::ptr_eq(&loaded.pixels, &shared));
     }
 }

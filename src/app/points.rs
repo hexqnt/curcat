@@ -2,7 +2,6 @@ use super::{AxisMapping, CurcatApp};
 use crate::interp::XYPoint;
 use crate::types::{CoordSystem, PolarMapping};
 use egui::Pos2;
-use std::cmp::Ordering;
 
 #[derive(Debug, Clone)]
 pub struct PickedPoint {
@@ -99,7 +98,7 @@ impl CurcatApp {
             }
             self.points
                 .cached_sorted_preview
-                .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+                .sort_by(|a, b| a.0.total_cmp(&b.0));
             self.points.sorted_preview_dirty = false;
         }
         &self.points.cached_sorted_preview
@@ -115,7 +114,7 @@ impl CurcatApp {
             }
             self.points
                 .cached_sorted_numeric
-                .sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(Ordering::Equal));
+                .sort_by(|a, b| a.x.total_cmp(&b.x));
             self.points.sorted_numeric_dirty = false;
         }
         &self.points.cached_sorted_numeric
