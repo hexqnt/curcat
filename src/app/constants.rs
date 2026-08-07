@@ -27,6 +27,7 @@ pub const CAL_LINE_OUTLINE_WIDTH: f32 = 3.2;
 pub const CAL_OUTLINE_ALPHA: u8 = 180;
 pub const CAL_ANGLE_SNAP_STEP_RAD: f32 = std::f32::consts::PI / 12.0;
 pub const ATTENTION_BLINK_SPEED: f32 = 2.2;
+pub const ATTENTION_REPAINT_INTERVAL_MS: u64 = 50;
 pub const ATTENTION_ALPHA_MIN: f32 = 0.35;
 pub const ATTENTION_ALPHA_MAX: f32 = 1.0;
 pub const ATTENTION_OUTLINE_PAD: f32 = 2.0;

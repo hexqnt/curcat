@@ -895,15 +895,16 @@ impl eframe::App for CurcatApp {
         }
 
         let needs_open_hint = self.image.image.is_none();
-        let needs_cal_hint = match self.calibration.coord_system {
-            CoordSystem::Cartesian => {
-                ui::common::axis_needs_attention(&self.calibration.cal_x)
-                    || ui::common::axis_needs_attention(&self.calibration.cal_y)
-            }
-            CoordSystem::Polar => self.polar_needs_attention(),
-        };
+        let needs_cal_hint = self.ui.side_open
+            && match self.calibration.coord_system {
+                CoordSystem::Cartesian => {
+                    ui::common::axis_needs_attention(&self.calibration.cal_x)
+                        || ui::common::axis_needs_attention(&self.calibration.cal_y)
+                }
+                CoordSystem::Polar => self.polar_needs_attention(),
+            };
         if needs_open_hint || needs_cal_hint {
-            ctx.request_repaint_after(Duration::from_millis(16));
+            ctx.request_repaint_after(Duration::from_millis(ATTENTION_REPAINT_INTERVAL_MS));
         }
 
         egui::Panel::top("top").show(root_ui, |ui| self.ui_top(ui));

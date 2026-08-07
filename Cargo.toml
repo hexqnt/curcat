@@ -1,6 +1,6 @@
 [package]
 name = "curcat"
-version = "0.9.14"
+version = "0.9.15"
 edition = "2024"
 license = "Apache-2.0 OR MIT"
 description = "Digitize curves from chart images; calibrate axes, interpolate, export CSV/JSON/XLSX."
@@ -44,15 +44,15 @@ serde_json = "1.0"
 ron = "0.12"
 toml = "1.1"
 directories = "6.0"
-rust_xlsxwriter = { version = "0.96", features = ["ryu"] }
+rust_xlsxwriter = { version = "0.97", features = ["ryu"] }
 egui-file-dialog = { version = "0.14" }
 rayon = "1.12"
 bincode = { version = "2.0", features = ["serde"] }
-lz4_flex = "0.13"
+lz4_flex = "0.14"
 crc32fast = "1.5"
 pathdiff = "0.2"
 egui_extras = { version = "0.35", features = ["svg"] }
-resvg = "0.47"
+resvg = "0.48"
 
 [profile.release]
 opt-level = 3
@@ -60,6 +60,12 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
+
+# Release-оптимизации с символами для perf и других профилировщиков.
+[profile.profiling]
+inherits = "release"
+debug = 1
+strip = false
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
