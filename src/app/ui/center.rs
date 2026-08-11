@@ -553,11 +553,7 @@ impl CurcatApp {
                     eprintln!("[DnD] hover[{idx}] path={:?} mime={}", h.path, h.mime);
                 }
                 for (idx, f) in i.raw.dropped_files.iter().enumerate() {
-                    let blen = f.bytes.as_ref().map_or(0, |b| b.len());
-                    eprintln!(
-                        "[DnD] drop[{idx}] name='{}' mime={} path={:?} bytes={} last_modified={:?}",
-                        f.name, f.mime, f.path, blen, f.last_modified
-                    );
+                    eprintln!("[DnD] drop[{idx}] path={}", f.path().display());
                 }
             }
 
@@ -566,14 +562,18 @@ impl CurcatApp {
             }
 
             for f in &i.raw.dropped_files {
-                if let Some(path) = f.path.as_ref() {
-                    return DropAction::LoadPath(path.clone());
+                let path = f.path();
+                if !path.as_os_str().is_empty() {
+                    return DropAction::LoadPath(path.to_path_buf());
                 }
-                if let Some(bytes) = f.bytes.as_ref() {
+
+                if let Ok(bytes) = f.bytes() {
                     return DropAction::LoadBytes {
-                        name: (!f.name.is_empty()).then(|| f.name.clone()),
-                        bytes: bytes.to_vec(),
-                        last_modified: f.last_modified,
+                        name: path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned()),
+                        bytes,
+                        last_modified: None,
                     };
                 }
             }
@@ -2661,7 +2661,7 @@ impl CurcatApp {
                 if alpha <= f32::EPSILON || !prev_speed.is_finite() || prev_speed <= f32::EPSILON {
                     inst_speed
                 } else {
-                    prev_speed + alpha * (inst_speed - prev_speed)
+                    alpha.mul_add(inst_speed - prev_speed, prev_speed)
                 };
         } else {
             self.interaction.auto_place_state.speed_ewma = 0.0;

@@ -12,8 +12,8 @@ categories = ["graphics", "visualization", "gui"]
 
 [dependencies]
 arboard = "3.6"
-egui = "0.35"
-eframe = { version = "0.35", default-features = false, features = [
+egui = "0.36"
+eframe = { version = "0.36", default-features = false, features = [
     "glow",
     "default_fonts",
     "persistence",
@@ -45,13 +45,13 @@ ron = "0.12"
 toml = "1.1"
 directories = "6.0"
 rust_xlsxwriter = { version = "0.97", features = ["ryu"] }
-egui-file-dialog = { version = "0.14" }
+egui-file-dialog = { version = "0.15" }
 rayon = "1.12"
 bincode = { version = "2.0", features = ["serde"] }
 lz4_flex = "0.14"
 crc32fast = "1.5"
 pathdiff = "0.2"
-egui_extras = { version = "0.35", features = ["svg"] }
+egui_extras = { version = "0.36", features = ["svg"] }
 resvg = "0.48"
 
 [profile.release]
@@ -66,6 +66,10 @@ panic = "abort"
 inherits = "release"
 debug = 1
 strip = false
+
+[[bench]]
+name = "pixel_pipeline"
+harness = false
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

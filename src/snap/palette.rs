@@ -1,8 +1,9 @@
-use crate::util::rounded_u8;
 use egui::{Color32, ColorImage};
 use rayon::prelude::*;
-use std::simd::Simd;
 use std::simd::num::SimdFloat;
+
+use crate::pixel_simd::{F32x8, LANES, unpack_rgba_block};
+use crate::util::rounded_u8;
 
 /// Lightweight summary of an image's average color properties.
 #[derive(Debug, Clone, Copy)]
@@ -13,12 +14,10 @@ struct ImageColorStats {
     saturation: f32,
 }
 
-const PALETTE_SIMD_LANES: usize = 8;
 const SNAP_PARALLEL_SAMPLE_BLOCKS: usize = 32;
 const LUMA_R_COEFF: f32 = 0.2126;
 const LUMA_G_COEFF: f32 = 0.7152;
 const LUMA_B_COEFF: f32 = 0.0722;
-type F32x8 = Simd<f32, PALETTE_SIMD_LANES>;
 
 #[derive(Debug, Clone, Copy, Default)]
 struct SampleAccum {
@@ -65,34 +64,21 @@ fn accumulate_sampled_colors_simd(pixels: &[Color32], step: usize) -> SampleAccu
     let luma_r = F32x8::splat(LUMA_R_COEFF);
     let luma_g = F32x8::splat(LUMA_G_COEFF);
     let luma_b = F32x8::splat(LUMA_B_COEFF);
-    let lane_span = step.saturating_mul(PALETTE_SIMD_LANES);
+    let lane_span = step.saturating_mul(LANES);
 
     let mut offset = 0usize;
     let mut samples = 0usize;
     while lane_span > 0 && offset + lane_span <= pixels.len() {
-        let mut r = [0.0_f32; PALETTE_SIMD_LANES];
-        let mut g = [0.0_f32; PALETTE_SIMD_LANES];
-        let mut b = [0.0_f32; PALETTE_SIMD_LANES];
-        for (((r, g), b), pixel) in r
-            .iter_mut()
-            .zip(g.iter_mut())
-            .zip(b.iter_mut())
-            .zip(pixels[offset..offset + lane_span].iter().step_by(step))
-        {
-            let [pr, pg, pb, _] = pixel.to_array();
-            *r = f32::from(pr);
-            *g = f32::from(pg);
-            *b = f32::from(pb);
-        }
-
-        let rf = F32x8::from_array(r);
-        let gf = F32x8::from_array(g);
-        let bf = F32x8::from_array(b);
+        let colors = std::array::from_fn(|lane| pixels[offset + lane * step]);
+        let channels = unpack_rgba_block(&colors);
+        let rf = channels.red;
+        let gf = channels.green;
+        let bf = channels.blue;
         red_sum_vec += rf;
         green_sum_vec += gf;
         blue_sum_vec += bf;
         luma_sum_vec += rf * luma_r + gf * luma_g + bf * luma_b;
-        samples += PALETTE_SIMD_LANES;
+        samples += LANES;
         offset += lane_span;
     }
 
@@ -130,7 +116,7 @@ impl ImageColorStats {
             return None;
         }
         let step = (total_pixels / SNAP_COLOR_SAMPLE_TARGET).max(1);
-        let simd_block = step.checked_mul(PALETTE_SIMD_LANES).unwrap_or(step);
+        let simd_block = step.checked_mul(LANES).unwrap_or(step);
         let parallel_chunk = simd_block
             .checked_mul(SNAP_PARALLEL_SAMPLE_BLOCKS)
             .unwrap_or(simd_block)

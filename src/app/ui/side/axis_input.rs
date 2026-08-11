@@ -119,7 +119,7 @@ impl CurcatApp {
         let mut pick_rect = None;
         let mut requested_pick = None;
         let row_height = ui.spacing().interact_size.y;
-        let row_spacing_x = 6.0;
+        let row_spacing_x: f32 = 6.0;
         let available_width = ui.available_width().max(220.0);
         let label_width = match language {
             UiLanguage::En => 70.0,
@@ -129,8 +129,9 @@ impl CurcatApp {
             UiLanguage::En => 82.0,
             UiLanguage::Ru => 90.0,
         };
-        let value_width =
-            (available_width - label_width - pick_width - row_spacing_x * 2.0).clamp(64.0, 110.0);
+        let value_width = row_spacing_x
+            .mul_add(-2.0, available_width - label_width - pick_width)
+            .clamp(64.0, 110.0);
 
         ui.horizontal(|ui| {
             ui.style_mut().spacing.item_spacing.x = row_spacing_x;

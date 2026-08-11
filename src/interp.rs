@@ -189,7 +189,7 @@ fn build_sample_positions(points: &[XYPoint], samples: usize) -> Vec<f64> {
         if i + 1 == samples {
             xs.push(x_max);
         } else {
-            xs.push(x_min + step * usize_to_f64(i));
+            xs.push(step.mul_add(usize_to_f64(i), x_min));
         }
     }
     xs

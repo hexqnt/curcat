@@ -51,7 +51,7 @@ pub(super) fn search_in_level(
             let yf = i32_to_f32(y);
             let dx = xf - center_x;
             let dy = yf - center_y;
-            let dist_sq = dx * dx + dy * dy;
+            let dist_sq = dy.mul_add(dy, dx * dx);
             if dist_sq > radius_sq {
                 continue;
             }
