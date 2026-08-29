@@ -65,8 +65,8 @@ jobs:
           VERSION="${{ github.ref_name }}"
           ARCHIVE="curcat-${VERSION}-${{ matrix.target }}.zip"
           rm -f "$ARCHIVE"
-          if [ -f Readme.md ]; then
-            zip -j "$ARCHIVE" target/release/curcat Readme.md
+          if [ -f README.md ]; then
+            zip -j "$ARCHIVE" target/release/curcat README.md
           else
             zip -j "$ARCHIVE" target/release/curcat
           fi
@@ -79,7 +79,7 @@ jobs:
           $archive = "curcat-$version-${{ matrix.target }}.zip"
           if (Test-Path $archive) { Remove-Item $archive }
           $files = @("target/release/curcat.exe")
-          if (Test-Path "Readme.md") { $files += "Readme.md" }
+          if (Test-Path "README.md") { $files += "README.md" }
           Compress-Archive -Path $files -DestinationPath $archive -Force
 
       - name: Package (macOS)
@@ -88,8 +88,8 @@ jobs:
           VERSION="${{ github.ref_name }}"
           ARCHIVE="curcat-${VERSION}-${{ matrix.target }}.zip"
           rm -f "$ARCHIVE"
-          if [ -f Readme.md ]; then
-            zip -j "$ARCHIVE" target/release/curcat Readme.md
+          if [ -f README.md ]; then
+            zip -j "$ARCHIVE" target/release/curcat README.md
           else
             zip -j "$ARCHIVE" target/release/curcat
           fi
