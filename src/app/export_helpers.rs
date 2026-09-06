@@ -1,4 +1,4 @@
-//! Helpers for formatting and preparing export payloads.
+//! Подготовка данных и дополнительных столбцов для экспорта.
 
 use super::CurcatApp;
 use crate::export::{ExportExtraColumn, ExportPayload, sequential_distances, turning_angles};
@@ -119,56 +119,34 @@ impl CurcatApp {
             polar_mapping.as_ref(),
         );
 
-        match self.export.export_kind {
-            super::ExportKind::Interpolated => {
-                let data = self.build_interpolated_samples();
-                if data.is_empty() {
-                    Err("Nothing to export. Add data points first.")
-                } else {
-                    let mut extra_columns = Vec::new();
-                    if self.calibration.coord_system == CoordSystem::Polar
-                        && self.export.polar_export_include_cartesian
-                        && let Some(unit) = angle_unit
-                    {
-                        extra_columns.extend(Self::polar_cartesian_columns(&data, unit));
-                    }
-                    Ok(ExportPayload {
-                        points: data,
-                        x_unit,
-                        y_unit,
-                        x_label: x_label.to_string(),
-                        y_label: y_label.to_string(),
-                        coord_system: self.calibration.coord_system,
-                        angle_unit,
-                        extra_columns,
-                    })
-                }
-            }
-            super::ExportKind::RawPoints => {
-                let data = self.collect_numeric_points_in_order();
-                if data.is_empty() {
-                    Err("Nothing to export. Add data points first.")
-                } else {
-                    let mut extras = self.build_raw_extra_columns(&data);
-                    if self.calibration.coord_system == CoordSystem::Polar
-                        && self.export.polar_export_include_cartesian
-                        && let Some(unit) = angle_unit
-                    {
-                        extras.extend(Self::polar_cartesian_columns(&data, unit));
-                    }
-                    Ok(ExportPayload {
-                        points: data,
-                        x_unit,
-                        y_unit,
-                        x_label: x_label.to_string(),
-                        y_label: y_label.to_string(),
-                        coord_system: self.calibration.coord_system,
-                        angle_unit,
-                        extra_columns: extras,
-                    })
-                }
-            }
+        let data = match self.export.export_kind {
+            super::ExportKind::Interpolated => self.build_interpolated_samples(),
+            super::ExportKind::RawPoints => self.collect_numeric_points_in_order(),
+        };
+        if data.is_empty() {
+            return Err("Nothing to export. Add data points first.");
         }
+
+        let mut extra_columns = match self.export.export_kind {
+            super::ExportKind::Interpolated => Vec::new(),
+            super::ExportKind::RawPoints => self.build_raw_extra_columns(&data),
+        };
+        if self.calibration.coord_system == CoordSystem::Polar
+            && self.export.polar_export_include_cartesian
+            && let Some(unit) = angle_unit
+        {
+            extra_columns.extend(Self::polar_cartesian_columns(&data, unit));
+        }
+        Ok(ExportPayload {
+            points: data,
+            x_unit,
+            y_unit,
+            x_label: x_label.to_string(),
+            y_label: y_label.to_string(),
+            coord_system: self.calibration.coord_system,
+            angle_unit,
+            extra_columns,
+        })
     }
 
     fn build_raw_extra_columns(&self, raw_points: &[XYPoint]) -> Vec<ExportExtraColumn> {
@@ -191,7 +169,7 @@ impl CurcatApp {
     fn polar_cartesian_columns(
         points: &[XYPoint],
         angle_unit: AngleUnit,
-    ) -> Vec<ExportExtraColumn> {
+    ) -> [ExportExtraColumn; 2] {
         let mut xs = Vec::with_capacity(points.len());
         let mut ys = Vec::with_capacity(points.len());
         for p in points {
@@ -208,7 +186,7 @@ impl CurcatApp {
             xs.push(Some(r * theta.cos()));
             ys.push(Some(r * theta.sin()));
         }
-        vec![
+        [
             ExportExtraColumn::new("x", xs),
             ExportExtraColumn::new("y", ys),
         ]

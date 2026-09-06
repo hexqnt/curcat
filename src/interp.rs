@@ -65,7 +65,7 @@ pub fn auto_sample_count(
     rel_tolerance: f64,
     ref_target_samples: usize,
 ) -> usize {
-    let mut min_samples = min_samples.max(2);
+    let min_samples = min_samples.max(2);
     let max_samples = max_samples.max(min_samples);
 
     if points.len() < 2 {
@@ -78,10 +78,7 @@ pub fn auto_sample_count(
 
     let ref_samples = ref_target_samples
         .max(MIN_REF_SAMPLES)
-        .min(max_samples.max(min_samples).max(MIN_REF_SAMPLES));
-    if ref_samples <= 1 {
-        return min_samples;
-    }
+        .min(max_samples.max(MIN_REF_SAMPLES));
 
     let ref_xs = build_sample_positions(points, ref_samples);
     let ref_curve = match algo {
@@ -115,11 +112,6 @@ pub fn auto_sample_count(
     }
 
     let abs_tolerance = (y_range * clamped_rel_tolerance).max(MIN_ABS_TOLERANCE);
-
-    // Clamp min_samples so that it is not larger than max_samples.
-    if min_samples > max_samples {
-        min_samples = max_samples;
-    }
 
     let mut current = min_samples;
 
@@ -200,7 +192,7 @@ fn interpolate_linear(points: &[XYPoint], sample_xs: &[f64]) -> Vec<XYPoint> {
     let Some(last) = points.last().copied() else {
         return out;
     };
-    let mut segments = points.windows(2).peekable();
+    let mut segments = points.array_windows::<2>().peekable();
     for &sx in sample_xs {
         while let Some([_, next]) = segments.peek().copied()
             && next.x < sx
@@ -229,8 +221,8 @@ fn interpolate_step(points: &[XYPoint], sample_xs: &[f64]) -> Vec<XYPoint> {
     };
     let mut rest = points.iter().copied().skip(1).peekable();
     for &sx in sample_xs {
-        while rest.peek().is_some_and(|point| point.x <= sx) {
-            current = rest.next().expect("peeked point must be present");
+        while let Some(point) = rest.next_if(|point| point.x <= sx) {
+            current = point;
         }
         out.push(XYPoint {
             x: sx,
@@ -263,8 +255,8 @@ fn interpolate_cubic(points: &[XYPoint], sample_xs: &[f64]) -> Vec<XYPoint> {
     let mut rest = segments.iter().skip(1).peekable();
     let last_x = last.x;
     for &sx in sample_xs {
-        while rest.peek().is_some_and(|next| sx >= next.x) {
-            seg = rest.next().expect("peeked segment must be present");
+        while let Some(next) = rest.next_if(|next| sx >= next.x) {
+            seg = next;
         }
         if sx > last_x {
             seg = last_segment;
@@ -306,10 +298,7 @@ fn build_natural_cubic_segments(points: &[XYPoint]) -> Option<Vec<CubicSegment>>
     }
     let point_count = points.len();
     let mut interval_widths = vec![0.0; point_count - 1];
-    for (slot, pair) in interval_widths.iter_mut().zip(points.windows(2)) {
-        let [left, right] = pair else {
-            unreachable!("windows(2) must yield two points")
-        };
+    for (slot, [left, right]) in interval_widths.iter_mut().zip(points.array_windows::<2>()) {
         let delta = right.x - left.x;
         if delta.abs() <= f64::EPSILON {
             return None;
@@ -318,17 +307,11 @@ fn build_natural_cubic_segments(points: &[XYPoint]) -> Option<Vec<CubicSegment>>
     }
 
     let mut slope_diffs = vec![0.0; point_count];
-    for ((slot, triple), widths) in slope_diffs[1..point_count - 1]
+    for ((slot, [prev, curr, next]), [prev_width, width]) in slope_diffs[1..point_count - 1]
         .iter_mut()
-        .zip(points.windows(3))
-        .zip(interval_widths.windows(2))
+        .zip(points.array_windows::<3>())
+        .zip(interval_widths.array_windows::<2>())
     {
-        let [prev, curr, next] = triple else {
-            unreachable!("windows(3) must yield three points")
-        };
-        let [prev_width, width] = widths else {
-            unreachable!("windows(2) must yield two widths")
-        };
         *slot = (3.0 / width) * (next.y - curr.y) - (3.0 / prev_width) * (curr.y - prev.y);
     }
 
@@ -415,6 +398,31 @@ mod tests {
         assert!(approx_eq(out[0].y, 0.0, 1.0e-9));
         assert!(approx_eq(out[1].y, 0.0, 1.0e-9));
         assert!(approx_eq(out[2].y, 10.0, 1.0e-9));
+    }
+
+    #[test]
+    fn interpolate_cubic_preserves_knots_and_keeps_last_duplicate() {
+        let points = [
+            XYPoint { x: 0.0, y: 0.0 },
+            XYPoint { x: 1.0, y: 1.0 },
+            XYPoint { x: 2.0, y: 0.0 },
+        ];
+        let duplicates = [points[0], XYPoint { x: 1.0, y: -8.0 }, points[1], points[2]];
+        for input in [&points[..], &duplicates[..]] {
+            let out = interpolate_sorted(input, 5, InterpAlgorithm::NaturalCubic);
+            let expected = [
+                (0.0, 0.0),
+                (0.5, 0.6875),
+                (1.0, 1.0),
+                (1.5, 0.6875),
+                (2.0, 0.0),
+            ];
+            assert_eq!(out.len(), expected.len());
+            for (point, (x, y)) in out.iter().zip(expected) {
+                assert!(approx_eq(point.x, x, 1.0e-9));
+                assert!(approx_eq(point.y, y, 1.0e-9));
+            }
+        }
     }
 
     #[test]
