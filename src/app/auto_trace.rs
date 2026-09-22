@@ -146,17 +146,9 @@ impl CurcatApp {
             }
         }
 
-        let mut deduped: Vec<Pos2> = Vec::new();
-        for p in points {
-            if deduped
-                .last()
-                .is_none_or(|last| (*last - p).length() > cfg.dedup_radius)
-            {
-                deduped.push(p);
-            }
-        }
+        retain_separated_points(&mut points, cfg.dedup_radius);
 
-        if deduped.is_empty() {
+        if points.is_empty() {
             self.set_status(match self.ui.language {
                 UiLanguage::En => "Auto-trace found no points.",
                 UiLanguage::Ru => "Авто-трассировка не нашла точек.",
@@ -164,11 +156,12 @@ impl CurcatApp {
             return;
         }
 
-        for p in &deduped {
-            self.points.points.push(PickedPoint::new(*p));
-        }
+        let added = points.len();
+        self.points
+            .points
+            .extend(points.into_iter().map(PickedPoint::new));
         self.mark_points_dirty();
-        self.set_status(self.i18n().format_auto_trace_added(deduped.len()));
+        self.set_status(self.i18n().format_auto_trace_added(added));
     }
 
     fn auto_trace_direction(
@@ -227,5 +220,46 @@ impl CurcatApp {
         }
 
         points
+    }
+}
+
+fn retain_separated_points(points: &mut Vec<Pos2>, radius: f32) {
+    let mut last = None;
+    points.retain(|&point| {
+        if last.is_none_or(|last: Pos2| (last - point).length() > radius) {
+            last = Some(point);
+            true
+        } else {
+            false
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::pos2;
+
+    #[test]
+    fn deduplication_compares_with_last_retained_point() {
+        let mut points = vec![
+            pos2(0.0, 0.0),
+            pos2(1.0, 0.0),
+            pos2(2.0, 0.0),
+            pos2(3.5, 0.0),
+            pos2(4.0, 0.0),
+        ];
+        retain_separated_points(&mut points, 1.5);
+        assert_eq!(points, [pos2(0.0, 0.0), pos2(2.0, 0.0), pos2(4.0, 0.0)]);
+    }
+
+    #[test]
+    fn deduplication_handles_empty_and_repeated_points() {
+        let mut points = Vec::new();
+        retain_separated_points(&mut points, 0.0);
+        assert_eq!(points, [] as [Pos2; 0]);
+        points.extend([pos2(2.0, 3.0); 3]);
+        retain_separated_points(&mut points, 0.0);
+        assert_eq!(points, [pos2(2.0, 3.0)]);
     }
 }

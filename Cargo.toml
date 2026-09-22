@@ -5,7 +5,6 @@ edition = "2024"
 license = "Apache-2.0 OR MIT"
 description = "Digitize curves from chart images; calibrate axes, interpolate, export CSV/JSON/XLSX."
 repository = "https://github.com/hexqnt/curcat"
-homepage = "https://github.com/hexqnt/curcat"
 readme = "README.md"
 keywords = ["digitizer", "chart", "graph", "egui", "calibration"]
 categories = ["graphics", "visualization", "gui"]

@@ -1,5 +1,9 @@
 //! Export helpers for writing picked points to CSV, XLSX, JSON, RON, HTML, XML, and Markdown formats.
 
+mod escape;
+
+use escape::{escape_html_text, escape_markdown_cell, escape_xml_attr, escape_xml_text};
+
 use crate::interp::XYPoint;
 use crate::types::{AngleUnit, AxisUnit, AxisValue, CoordSystem};
 use chrono::{Datelike, Duration, Timelike};
@@ -115,10 +119,7 @@ pub fn sequential_distances(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
         return values;
     }
     values.push(None);
-    values.extend(raw_points.windows(2).map(|pair| {
-        let [prev, curr] = pair else {
-            unreachable!("windows(2) must yield two points")
-        };
+    values.extend(raw_points.array_windows::<2>().map(|[prev, curr]| {
         let dx = curr.x - prev.x;
         let dy = curr.y - prev.y;
         Some(dx.hypot(dy))
@@ -134,10 +135,10 @@ pub fn turning_angles(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
     if len < 3 {
         return values;
     }
-    for (slot, triple) in values[1..len - 1].iter_mut().zip(raw_points.windows(3)) {
-        let [prev, curr, next] = triple else {
-            unreachable!("windows(3) must yield three points")
-        };
+    for (slot, [prev, curr, next]) in values[1..len - 1]
+        .iter_mut()
+        .zip(raw_points.array_windows::<3>())
+    {
         let v1 = (curr.x - prev.x, curr.y - prev.y);
         let v2 = (next.x - curr.x, next.y - curr.y);
         let mag1 = v1.0.hypot(v1.1);
@@ -177,6 +178,23 @@ struct TabularExport<'a> {
     headers: Vec<&'a str>,
 }
 
+/// Основные значения проверены до записи строки; дополнительные ячейки форматируются по мере чтения.
+struct TabularRow<'a> {
+    axes: [String; 2],
+    extra_columns: &'a [ExportExtraColumn],
+    index: usize,
+}
+
+impl TabularRow<'_> {
+    fn cells(self) -> impl Iterator<Item = Option<String>> {
+        self.axes.into_iter().map(Some).chain(
+            self.extra_columns
+                .iter()
+                .map(move |column| column.values[self.index].map(format_extra_value)),
+        )
+    }
+}
+
 impl<'a> TabularExport<'a> {
     fn try_new(payload: &'a ExportPayload) -> anyhow::Result<Self> {
         if let Err(err) = validate_extra_columns(payload) {
@@ -193,7 +211,7 @@ impl<'a> TabularExport<'a> {
         Ok(Self { payload, headers })
     }
 
-    fn rows(&self) -> impl Iterator<Item = anyhow::Result<Vec<Option<String>>>> + '_ {
+    fn rows(&self) -> impl Iterator<Item = anyhow::Result<TabularRow<'a>>> + '_ {
         self.payload
             .points
             .iter()
@@ -201,18 +219,14 @@ impl<'a> TabularExport<'a> {
             .map(|(row_index, point)| self.format_row(row_index, point))
     }
 
-    fn format_row(&self, row_index: usize, point: &XYPoint) -> anyhow::Result<Vec<Option<String>>> {
+    fn format_row(&self, row_index: usize, point: &XYPoint) -> anyhow::Result<TabularRow<'a>> {
         let xv = axis_value_from_scalar_for_export(self.payload.x_unit, point.x, "x")?;
         let yv = axis_value_from_scalar_for_export(self.payload.y_unit, point.y, "y")?;
-        let mut row = Vec::with_capacity(self.headers.len());
-        row.extend([Some(xv.format()), Some(yv.format())]);
-        row.extend(
-            self.payload
-                .extra_columns
-                .iter()
-                .map(|column| column.values[row_index].map(format_extra_value)),
-        );
-        Ok(row)
+        Ok(TabularRow {
+            axes: [xv.format(), yv.format()],
+            extra_columns: &self.payload.extra_columns,
+            index: row_index,
+        })
     }
 }
 
@@ -236,65 +250,6 @@ fn metadata_pairs(payload: &ExportPayload) -> impl Iterator<Item = (&'static str
     )
 }
 
-fn escape_xml_text(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-fn escape_xml_attr(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            '\n' => out.push_str("&#10;"),
-            '\r' => out.push_str("&#13;"),
-            '\t' => out.push_str("&#9;"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-fn escape_html_text(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-fn escape_markdown_cell(input: &str) -> String {
-    let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
-    let mut out = String::with_capacity(normalized.len());
-    for ch in normalized.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '|' => out.push_str("\\|"),
-            '\n' => out.push_str("<br>"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
 /// Write the payload to CSV at the provided path.
 ///
 /// Floats are formatted with 6 fractional digits; `DateTime` values are emitted
@@ -306,7 +261,7 @@ pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
 
     for row in table.rows() {
         let row = row?;
-        wtr.write_record(row.iter().map(|cell| cell.as_deref().unwrap_or_default()))?;
+        wtr.write_record(row.cells().map(Option::unwrap_or_default))?;
     }
     wtr.flush()?;
     Ok(())
@@ -334,10 +289,10 @@ pub fn export_to_html(path: &std::path::Path, payload: &ExportPayload) -> anyhow
     writer.write_all(b"</tr></thead><tbody>")?;
     for row in table.rows() {
         writer.write_all(b"<tr>")?;
-        for cell in row? {
+        for cell in row?.cells() {
             writer.write_all(b"<td>")?;
             if let Some(value) = cell {
-                writer.write_all(escape_html_text(&value).as_bytes())?;
+                write!(writer, "{}", escape_html_text(&value))?;
             }
             writer.write_all(b"</td>")?;
         }
@@ -363,11 +318,11 @@ pub fn export_to_xml(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
     for row in table.rows() {
         let row = row?;
         writer.write_all(b"    <point>\n")?;
-        for (header, cell) in table.headers.iter().zip(&row) {
+        for (header, cell) in table.headers.iter().zip(row.cells()) {
             let escaped_header = escape_xml_attr(header);
             match cell {
                 Some(value) => {
-                    let escaped_value = escape_xml_text(value);
+                    let escaped_value = escape_xml_text(&value);
                     writeln!(
                         writer,
                         "      <field name=\"{escaped_header}\">{escaped_value}</field>"
@@ -405,11 +360,8 @@ pub fn export_to_markdown(path: &std::path::Path, payload: &ExportPayload) -> an
     for row in table.rows() {
         let row = row?;
         writer.write_all(b"|")?;
-        for cell in &row {
-            let escaped = cell
-                .as_deref()
-                .map(escape_markdown_cell)
-                .unwrap_or_default();
+        for cell in row.cells() {
+            let escaped = escape_markdown_cell(cell.as_deref().unwrap_or_default());
             write!(writer, " {escaped} |")?;
         }
         writer.write_all(b"\n")?;
@@ -617,15 +569,15 @@ pub fn export_to_json(path: &std::path::Path, payload: &ExportPayload) -> anyhow
 }
 
 #[derive(Debug, Serialize)]
-struct RonExport {
+struct RonExport<'a> {
     coord_system: &'static str,
     x_unit: &'static str,
     y_unit: &'static str,
-    x_label: String,
-    y_label: String,
+    x_label: &'a str,
+    y_label: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     angle_unit: Option<&'static str>,
-    points: Vec<BTreeMap<String, RonValue>>,
+    points: Vec<BTreeMap<&'a str, RonValue>>,
 }
 
 #[derive(Debug, Clone)]
@@ -664,16 +616,16 @@ pub fn export_to_ron(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
     for p in &payload.points {
         let mut row = BTreeMap::new();
         row.insert(
-            payload.x_label.clone(),
+            payload.x_label.as_str(),
             axis_value_to_ron(payload.x_unit, p.x, &payload.x_label)?,
         );
         row.insert(
-            payload.y_label.clone(),
+            payload.y_label.as_str(),
             axis_value_to_ron(payload.y_unit, p.y, &payload.y_label)?,
         );
         for (col, values) in &mut extra_columns {
             let cell = values.next().copied().flatten();
-            row.insert(col.header.clone(), optional_number_ron(cell));
+            row.insert(col.header.as_str(), optional_number_ron(cell));
         }
         points.push(row);
     }
@@ -682,8 +634,8 @@ pub fn export_to_ron(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
         coord_system: coord_system_label(payload.coord_system),
         x_unit: axis_unit_label(payload.x_unit),
         y_unit: axis_unit_label(payload.y_unit),
-        x_label: payload.x_label.clone(),
-        y_label: payload.y_label.clone(),
+        x_label: payload.x_label.as_str(),
+        y_label: payload.y_label.as_str(),
         angle_unit: payload.angle_unit.map(angle_unit_label),
         points,
     };
@@ -857,6 +809,37 @@ mod tests {
                 .as_nanos(),
             ext
         ))
+    }
+
+    #[test]
+    fn export_csv_preserves_quoting_dates_and_empty_cells() {
+        let payload = ExportPayload {
+            points: vec![
+                XYPoint { x: 0.0, y: -0.0 },
+                XYPoint {
+                    x: 1.5,
+                    y: 1.234_567_89,
+                },
+            ],
+            x_unit: AxisUnit::DateTime,
+            y_unit: AxisUnit::Float,
+            x_label: "Время, UTC".into(),
+            y_label: "Y\"value".into(),
+            coord_system: CoordSystem::Cartesian,
+            angle_unit: None,
+            extra_columns: vec![ExportExtraColumn::new(
+                "extra\ncolumn",
+                vec![None, Some(2.5)],
+            )],
+        };
+        let path = temp_export_path("csv_quoting", "csv");
+        export_to_csv(&path, &payload).expect("CSV export failed");
+        let text = std::fs::read_to_string(&path).expect("failed to read CSV output");
+        std::fs::remove_file(path).expect("failed to remove CSV output");
+        assert_eq!(
+            text,
+            "\"Время, UTC\",\"Y\"\"value\",\"extra\ncolumn\"\n1970-01-01 00:00:00,0,\n1970-01-01 00:00:01.5,1.234568,2.500000\n"
+        );
     }
 
     #[test]

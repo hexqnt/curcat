@@ -149,40 +149,47 @@ pub fn rotate_color_image_ccw(image: &mut ColorImage) {
     *image = ColorImage::new([height, width], rotated_pixels);
 }
 
-/// Mirror the color image horizontally (left-right).
+/// Отражает изображение по горизонтали, переиспользуя буфер пикселей.
 pub fn flip_color_image_horizontal(image: &mut ColorImage) {
     let [width, height] = image.size;
     if width == 0 || height == 0 {
         return;
     }
     let total_pixels = width * height;
-    let pixels = &image.pixels;
-    let flipped_pixels = map_pixels(total_pixels, |idx| {
-        let x = idx % width;
-        let y = idx / width;
-        let src_x = width - 1 - x;
-        let src_idx = y * width + src_x;
-        pixels[src_idx]
-    });
-    *image = ColorImage::new([width, height], flipped_pixels);
+    let pixels = &mut image.pixels[..total_pixels];
+    if total_pixels >= PARALLEL_PIXEL_THRESHOLD {
+        pixels.par_chunks_exact_mut(width).for_each(<[_]>::reverse);
+    } else {
+        pixels.chunks_exact_mut(width).for_each(<[_]>::reverse);
+    }
+    let pixels = std::mem::take(&mut image.pixels);
+    *image = ColorImage::new([width, height], pixels);
 }
 
-/// Mirror the color image vertically (top-bottom).
+/// Отражает изображение по вертикали, меняя местами строки без дополнительного буфера.
 pub fn flip_color_image_vertical(image: &mut ColorImage) {
     let [width, height] = image.size;
     if width == 0 || height == 0 {
         return;
     }
     let total_pixels = width * height;
-    let pixels = &image.pixels;
-    let flipped_pixels = map_pixels(total_pixels, |idx| {
-        let x = idx % width;
-        let y = idx / width;
-        let src_y = height - 1 - y;
-        let src_idx = src_y * width + x;
-        pixels[src_idx]
-    });
-    *image = ColorImage::new([width, height], flipped_pixels);
+    let (top, rest) = image.pixels[..total_pixels].split_at_mut((height / 2) * width);
+    // При нечётной высоте центральная строка остаётся на месте.
+    let bottom = &mut rest[(height % 2) * width..];
+    if total_pixels >= PARALLEL_PIXEL_THRESHOLD {
+        top.par_chunks_exact_mut(width)
+            .zip(bottom.par_chunks_exact_mut(width).rev())
+            .for_each(|(top, bottom)| top.swap_with_slice(bottom));
+    } else {
+        for (top, bottom) in top
+            .chunks_exact_mut(width)
+            .zip(bottom.chunks_exact_mut(width).rev())
+        {
+            top.swap_with_slice(bottom);
+        }
+    }
+    let pixels = std::mem::take(&mut image.pixels);
+    *image = ColorImage::new([width, height], pixels);
 }
 
 #[cfg(test)]
@@ -245,6 +252,49 @@ mod tests {
         flip_color_image_vertical(&mut image);
         assert_eq!(image.size, [3, 2]);
         assert_eq!(ids_from_image(&image), vec![4, 5, 6, 1, 2, 3]);
+    }
+
+    #[test]
+    fn flips_match_pixel_mapping_and_reuse_storage() {
+        for [width, height] in [
+            [1, 1],
+            [1, 7],
+            [7, 1],
+            [3, 5],
+            [4, 6],
+            [513, 513],
+            [512, 512],
+        ] {
+            let original = ColorImage::new(
+                [width, height],
+                (0..width * height)
+                    .map(|index| color_id(u8::try_from(index % 251).unwrap()))
+                    .collect(),
+            );
+            for horizontal in [false, true] {
+                let mut image = original.clone();
+                let storage = image.pixels.as_ptr();
+                let flip = if horizontal {
+                    flip_color_image_horizontal
+                } else {
+                    flip_color_image_vertical
+                };
+                flip(&mut image);
+                assert_eq!(image.pixels.as_ptr(), storage);
+                assert_eq!(image.size, original.size);
+                for (index, pixel) in image.pixels.iter().enumerate() {
+                    let (x, y) = (index % width, index / width);
+                    let source = if horizontal {
+                        y * width + width - 1 - x
+                    } else {
+                        (height - 1 - y) * width + x
+                    };
+                    assert_eq!(*pixel, original.pixels[source]);
+                }
+                flip(&mut image);
+                assert_eq!(image.pixels, original.pixels);
+            }
+        }
     }
 
     #[test]
