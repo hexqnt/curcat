@@ -1,6 +1,5 @@
 use super::{CurcatApp, PickedPoint};
 use crate::i18n::UiLanguage;
-use crate::snap::SnapBehavior;
 use crate::types::CoordSystem;
 use crate::util::safe_usize_to_f32;
 use egui::{Pos2, Vec2};
@@ -124,27 +123,14 @@ impl CurcatApp {
             return;
         };
 
-        let mut points = Vec::new();
-        match cfg.direction {
-            AutoTraceDirection::Forward => {
-                points.push(start);
-                points.extend(self.auto_trace_direction(start, axis_dir, 1.0, size, behavior, cfg));
-            }
-            AutoTraceDirection::Backward => {
-                points.push(start);
-                points
-                    .extend(self.auto_trace_direction(start, axis_dir, -1.0, size, behavior, cfg));
-            }
-            AutoTraceDirection::Both => {
-                let mut back =
-                    self.auto_trace_direction(start, axis_dir, -1.0, size, behavior, cfg);
-                let forward = self.auto_trace_direction(start, axis_dir, 1.0, size, behavior, cfg);
-                back.reverse();
-                points.extend(back);
-                points.push(start);
-                points.extend(forward);
-            }
-        }
+        let walk = TraceWalk {
+            axis_dir,
+            size,
+            cfg,
+        };
+        let mut points = walk.collect(start, |probe| {
+            self.find_snap_point_with_radius(probe, cfg.search_radius, behavior)
+        });
 
         retain_separated_points(&mut points, cfg.dedup_radius);
 
@@ -163,63 +149,94 @@ impl CurcatApp {
         self.mark_points_dirty();
         self.set_status(self.i18n().format_auto_trace_added(added));
     }
+}
 
-    fn auto_trace_direction(
-        &mut self,
-        start: Pos2,
-        axis_dir: Vec2,
-        dir_sign: f32,
-        size: [usize; 2],
-        behavior: SnapBehavior,
-        cfg: AutoTraceConfig,
-    ) -> Vec<Pos2> {
-        if size[0] == 0 || size[1] == 0 {
-            return Vec::new();
+#[derive(Clone, Copy)]
+enum TraceSense {
+    Forward,
+    Backward,
+}
+
+impl TraceSense {
+    const fn sign(self) -> f32 {
+        match self {
+            Self::Forward => 1.0,
+            Self::Backward => -1.0,
         }
+    }
+}
+
+/// Геометрия прохода не зависит от UI; поиск кандидата передаётся вызывающей стороной.
+struct TraceWalk {
+    axis_dir: Vec2,
+    size: [usize; 2],
+    cfg: AutoTraceConfig,
+}
+
+impl TraceWalk {
+    fn collect(&self, start: Pos2, mut find: impl FnMut(Pos2) -> Option<Pos2>) -> Vec<Pos2> {
         let mut points = Vec::new();
+        match self.cfg.direction {
+            AutoTraceDirection::Forward => {
+                points.push(start);
+                self.extend(start, TraceSense::Forward, &mut points, &mut find);
+            }
+            AutoTraceDirection::Backward => {
+                points.push(start);
+                self.extend(start, TraceSense::Backward, &mut points, &mut find);
+            }
+            AutoTraceDirection::Both => {
+                self.extend(start, TraceSense::Backward, &mut points, &mut find);
+                points.reverse();
+                points.push(start);
+                self.extend(start, TraceSense::Forward, &mut points, &mut find);
+            }
+        }
+        points
+    }
+
+    fn extend(
+        &self,
+        start: Pos2,
+        sense: TraceSense,
+        points: &mut Vec<Pos2>,
+        find: &mut impl FnMut(Pos2) -> Option<Pos2>,
+    ) {
+        let [width, height] = self.size;
+        if width == 0 || height == 0 {
+            return;
+        }
+        let cfg = self.cfg;
         let mut anchor = start;
         let mut probe = start;
         let mut misses = 0u32;
-        let step = axis_dir * cfg.step_px * dir_sign.signum();
-        let max_x = safe_usize_to_f32(size[0].saturating_sub(1));
-        let max_y = safe_usize_to_f32(size[1].saturating_sub(1));
+        let sign = sense.sign();
+        let step = self.axis_dir * cfg.step_px * sign;
+        let max_x = safe_usize_to_f32(width - 1);
+        let max_y = safe_usize_to_f32(height - 1);
 
         for _ in 0..cfg.max_points {
             probe += step;
             if probe.x < 0.0 || probe.x > max_x || probe.y < 0.0 || probe.y > max_y {
                 break;
             }
-
-            let candidate = self.find_snap_point_with_radius(probe, cfg.search_radius, behavior);
-            if let Some(pos) = candidate {
-                let progress = (pos - anchor).dot(axis_dir) * dir_sign.signum();
-                if progress < cfg.min_advance {
-                    misses = misses.saturating_add(1);
-                    if misses > cfg.max_misses {
-                        break;
-                    }
+            if let Some(pos) = find(probe) {
+                let progress = (pos - anchor).dot(self.axis_dir) * sign;
+                let rejected =
+                    progress < cfg.min_advance || (pos - anchor).length() <= cfg.dedup_radius;
+                if !rejected {
+                    points.push(pos);
+                    anchor = pos;
+                    probe = anchor;
+                    misses = 0;
                     continue;
-                }
-                if (pos - anchor).length() <= cfg.dedup_radius {
-                    misses = misses.saturating_add(1);
-                    if misses > cfg.max_misses {
-                        break;
-                    }
-                    continue;
-                }
-                points.push(pos);
-                anchor = pos;
-                probe = anchor;
-                misses = 0;
-            } else {
-                misses = misses.saturating_add(1);
-                if misses > cfg.max_misses {
-                    break;
                 }
             }
+            misses = misses.saturating_add(1);
+            if misses > cfg.max_misses {
+                break;
+            }
         }
-
-        points
     }
 }
 
@@ -239,6 +256,104 @@ fn retain_separated_points(points: &mut Vec<Pos2>, radius: f32) {
 mod tests {
     use super::*;
     use egui::pos2;
+
+    fn trace_walk(direction: AutoTraceDirection) -> TraceWalk {
+        TraceWalk {
+            axis_dir: Vec2::X,
+            size: [11, 11],
+            cfg: AutoTraceConfig {
+                direction,
+                step_px: 2.0,
+                ..AutoTraceConfig::default()
+            },
+        }
+    }
+
+    #[test]
+    fn tracing_preserves_direction_order_and_image_boundaries() {
+        for (direction, expected, expected_probes) in [
+            (
+                AutoTraceDirection::Forward,
+                vec![5.0, 7.0, 9.0],
+                vec![7.0, 9.0],
+            ),
+            (
+                AutoTraceDirection::Backward,
+                vec![5.0, 3.0, 1.0],
+                vec![3.0, 1.0],
+            ),
+            (
+                AutoTraceDirection::Both,
+                vec![1.0, 3.0, 5.0, 7.0, 9.0],
+                vec![3.0, 1.0, 7.0, 9.0],
+            ),
+        ] {
+            let walk = trace_walk(direction);
+            let mut probes = Vec::new();
+            let points = walk.collect(pos2(5.0, 1.0), |probe| {
+                probes.push(probe.x);
+                Some(probe)
+            });
+            assert_eq!(
+                points,
+                expected
+                    .into_iter()
+                    .map(|x| pos2(x, 1.0))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(probes, expected_probes);
+        }
+    }
+
+    #[test]
+    fn tracing_resets_misses_on_success_and_counts_rejected_candidates() {
+        let mut walk = trace_walk(AutoTraceDirection::Forward);
+        walk.cfg.max_misses = 1;
+        let mut candidates = [
+            None,
+            Some(pos2(4.0, 1.0)),
+            Some(pos2(3.0, 1.0)),
+            Some(pos2(5.0, 1.0)),
+        ]
+        .into_iter();
+        let mut probes = Vec::new();
+        let points = walk.collect(pos2(0.0, 1.0), |probe| {
+            probes.push(probe.x);
+            candidates.next().expect("unexpected extra probe")
+        });
+        assert_eq!(points, [pos2(0.0, 1.0), pos2(4.0, 1.0)]);
+        assert_eq!(probes, [2.0, 4.0, 6.0, 8.0]);
+    }
+
+    #[test]
+    fn tracing_limits_attempts_even_when_candidates_are_missing() {
+        let mut walk = trace_walk(AutoTraceDirection::Forward);
+        walk.cfg.max_points = 3;
+        let mut attempts = 0;
+        let points = walk.collect(pos2(0.0, 1.0), |_| {
+            attempts += 1;
+            None
+        });
+        assert_eq!(attempts, 3);
+        assert_eq!(points, [pos2(0.0, 1.0)]);
+    }
+
+    #[test]
+    fn tracing_follows_rotated_axis() {
+        let mut walk = trace_walk(AutoTraceDirection::Both);
+        walk.axis_dir = -Vec2::Y;
+        let points = walk.collect(pos2(1.0, 5.0), Some);
+        assert_eq!(
+            points,
+            [
+                pos2(1.0, 9.0),
+                pos2(1.0, 7.0),
+                pos2(1.0, 5.0),
+                pos2(1.0, 3.0),
+                pos2(1.0, 1.0)
+            ]
+        );
+    }
 
     #[test]
     fn deduplication_compares_with_last_retained_point() {

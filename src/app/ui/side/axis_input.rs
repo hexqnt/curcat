@@ -7,6 +7,7 @@ use egui::{
     text::{CCursor, CCursorRange, CharIndex},
 };
 use std::any::TypeId;
+use std::borrow::Cow;
 
 /// Normalize axis input text by removing invalid characters and fixing decimals.
 pub fn sanitize_axis_text(value: &mut String, unit: AxisUnit) {
@@ -38,6 +39,27 @@ const fn axis_char_allowed(unit: AxisUnit, ch: char) -> bool {
     }
 }
 
+/// Обычный ввод заимствуется; буфер нужен только при удалении или замене символов.
+fn filtered_axis_text(text: &str, unit: AxisUnit) -> Cow<'_, str> {
+    let map_char = |ch| {
+        axis_char_allowed(unit, ch).then_some(if unit == AxisUnit::Float && ch == ',' {
+            '.'
+        } else {
+            ch
+        })
+    };
+    let Some((first_changed, _)) = text
+        .char_indices()
+        .find(|&(_, ch)| map_char(ch) != Some(ch))
+    else {
+        return Cow::Borrowed(text);
+    };
+    let mut filtered = String::with_capacity(text.len());
+    filtered.push_str(&text[..first_changed]);
+    filtered.extend(text[first_changed..].chars().filter_map(map_char));
+    Cow::Owned(filtered)
+}
+
 struct AxisFilteredText<'a> {
     value: &'a mut String,
     unit: AxisUnit,
@@ -59,20 +81,7 @@ impl TextBuffer for AxisFilteredText<'_> {
     }
 
     fn insert_text(&mut self, text: &str, char_index: CharIndex) -> usize {
-        let filtered: String = text
-            .chars()
-            .filter_map(|ch| {
-                if !axis_char_allowed(self.unit, ch) {
-                    return None;
-                }
-                let mapped = if matches!(self.unit, AxisUnit::Float) && ch == ',' {
-                    '.'
-                } else {
-                    ch
-                };
-                Some(mapped)
-            })
-            .collect();
+        let filtered = filtered_axis_text(text, self.unit);
         if filtered.is_empty() {
             return 0;
         }
@@ -225,5 +234,42 @@ impl CurcatApp {
         let range = CCursorRange::two(CCursor::default(), CCursor::new(end));
         state.cursor.set_char_range(Some(range));
         TextEdit::store_state(&response.ctx, response.id, state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_axis_input_is_borrowed() {
+        for (unit, text) in [
+            (AxisUnit::Float, ""),
+            (AxisUnit::Float, "-1.25e+3"),
+            (AxisUnit::Float, " NaN inf\t"),
+            (AxisUnit::DateTime, "2026-09-22T12:30:45+03:00"),
+        ] {
+            let filtered = filtered_axis_text(text, unit);
+            assert!(matches!(filtered, Cow::Borrowed(_)));
+            assert_eq!(filtered, text);
+        }
+    }
+
+    #[test]
+    fn pasted_axis_input_preserves_filtering_rules() {
+        for (unit, input, expected) in [
+            (AxisUnit::Float, "12,34", "12.34"),
+            (AxisUnit::Float, "θ=−12,3 📈", "12.3 "),
+            (AxisUnit::Float, "abc123", "a123"),
+            (
+                AxisUnit::DateTime,
+                "2026/09/22\t12:30\nZ",
+                "2026/09/2212:30Z",
+            ),
+            (AxisUnit::DateTime, "1,5", "15"),
+            (AxisUnit::DateTime, "текст📈", ""),
+        ] {
+            assert_eq!(filtered_axis_text(input, unit), expected);
+        }
     }
 }

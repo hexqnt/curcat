@@ -37,13 +37,11 @@ fn decode_payload_v1(bytes: &[u8]) -> anyhow::Result<ProjectPayloadV1> {
 
 /// Save a project with compression and an atomic temp-file swap.
 pub fn save_project(path: &Path, payload: &ProjectPayload) -> anyhow::Result<()> {
-    let encoded = encode_payload(payload)?;
-    let compressed = compress_prepend_size(&encoded);
-    let mut buffer = Vec::with_capacity(PROJECT_MAGIC.len() + 4 + compressed.len());
-    buffer.extend_from_slice(PROJECT_MAGIC);
-    buffer.extend_from_slice(&PROJECT_VERSION.to_le_bytes());
-    buffer.extend_from_slice(&compressed);
-    write_atomic(path, &buffer)
+    let compressed = compress_prepend_size(&encode_payload(payload)?);
+    write_atomic(
+        path,
+        &[PROJECT_MAGIC, &PROJECT_VERSION.to_le_bytes(), &compressed],
+    )
 }
 
 /// Load a project: validate header, decompress, and resolve the image path.

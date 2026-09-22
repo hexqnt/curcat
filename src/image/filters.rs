@@ -617,11 +617,13 @@ mod tests {
 
     #[test]
     fn box_blur_simd_channels_match_scalar_reference() {
-        let image = test_image(13, 9);
-        for radius in [1_u32, 2, 3, 4] {
-            let simd = box_blur(&image, radius);
-            let scalar = box_blur_scalar_reference(&image, radius);
-            assert_eq!(simd, scalar);
+        for [width, height] in [[1, 1], [1, 17], [17, 1], [2, 3], [13, 9], [49, 3]] {
+            let image = test_image(width, height);
+            for radius in [0_u32, 1, 2, 3, 4, 24] {
+                let simd = box_blur(&image, radius);
+                let scalar = box_blur_scalar_reference(&image, radius);
+                assert_eq!(simd, scalar, "size: {width}x{height}, radius: {radius}");
+            }
         }
     }
 

@@ -72,7 +72,8 @@ fn sync_parent_dir(path: &Path) -> io::Result<()> {
     }
 }
 
-pub(super) fn write_atomic(path: &Path, data: &[u8]) -> anyhow::Result<()> {
+/// Записывает части файла без объединяющего буфера и атомарно заменяет целевой файл.
+pub(super) fn write_atomic(path: &Path, parts: &[&[u8]]) -> anyhow::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
     let tmp_path = build_temp_path(path);
@@ -82,8 +83,10 @@ pub(super) fn write_atomic(path: &Path, data: &[u8]) -> anyhow::Result<()> {
             .create_new(true)
             .open(&tmp_path)
             .with_context(|| format!("Failed to create temp file {}", tmp_path.display()))?;
-        file.write_all(data)
-            .with_context(|| format!("Failed to write {}", tmp_path.display()))?;
+        for part in parts {
+            file.write_all(part)
+                .with_context(|| format!("Failed to write {}", tmp_path.display()))?;
+        }
         file.sync_all()
             .with_context(|| format!("Failed to sync {}", tmp_path.display()))?;
     }

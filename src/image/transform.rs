@@ -63,16 +63,13 @@ impl ImageTransformRecord {
         }
     }
 
-    /// Expand stored state into a sequence of operations to reapply.
-    pub fn replay_operations(self) -> Vec<ImageTransformOp> {
-        let mut ops = Vec::new();
-        for _ in 0..(self.rotation_quarters % 4) {
-            ops.push(ImageTransformOp::RotateCw);
-        }
-        if self.reflected {
-            ops.push(ImageTransformOp::FlipHorizontal);
-        }
-        ops
+    /// Восстанавливает последовательность операций без промежуточного массива.
+    pub fn replay_operations(self) -> impl Iterator<Item = ImageTransformOp> {
+        std::iter::repeat_n(
+            ImageTransformOp::RotateCw,
+            usize::from(self.rotation_quarters % 4),
+        )
+        .chain(self.reflected.then_some(ImageTransformOp::FlipHorizontal))
     }
 }
 

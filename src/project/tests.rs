@@ -74,6 +74,41 @@ fn save_and_load_roundtrip() {
 }
 
 #[test]
+fn save_preserves_binary_format_and_replaces_existing_file() {
+    let dir = unique_temp_dir("save_format");
+    let project_path = dir.join("project.curcat");
+    fs::write(&project_path, b"previous project contents").expect("write previous project");
+    let mut payload = sample_payload(Path::new("image.png"), 0x1234_5678);
+    payload.title = Some("График θ 📈".into());
+    payload.description = None;
+    for point_count in [0_u16, 1, 4096] {
+        payload.points = (0..point_count)
+            .map(|i| PointRecord {
+                pixel: [f32::from(i), 2.0],
+                x_numeric: Some(f64::from(i)),
+                y_numeric: None,
+            })
+            .collect();
+        let encoded = bincode::serde::encode_to_vec(
+            &payload,
+            bincode::config::standard().with_little_endian(),
+        )
+        .expect("encode reference payload");
+        let compressed = lz4_flex::block::compress_prepend_size(&encoded);
+        let mut expected = b"CURCAT\x02\x00\x00\x00".to_vec();
+        expected.extend_from_slice(&compressed);
+
+        save_project(&project_path, &payload).expect("save project");
+        assert_eq!(fs::read(&project_path).expect("read project"), expected);
+        assert_eq!(
+            fs::read_dir(&dir).expect("read project directory").count(),
+            1
+        );
+    }
+    fs::remove_dir_all(dir).expect("remove test directory");
+}
+
+#[test]
 fn load_warns_on_checksum_mismatch() {
     let dir = unique_temp_dir("checksum");
     let image_path = dir.join("image.bin");
