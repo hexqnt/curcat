@@ -21,7 +21,7 @@ Curcat is a desktop graph digitizer for extracting numerical data from plots, sc
 
 - Cartesian and polar coordinate systems
 - Linear and logarithmic axes, with numeric and date/time values
-- Manual point picking and automatic curve tracing
+- Manual point picking and semi-automatic curve tracing
 - Linear, step, and natural cubic spline interpolation
 - CSV, JSON, RON, XLSX, HTML, XML, and Markdown export
 - Project files for saving and resuming your work
