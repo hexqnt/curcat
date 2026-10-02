@@ -1,10 +1,29 @@
 use super::interaction::DragTarget;
 use crate::types::{
-    AngleDirection, AngleUnit, AxisMapping, AxisUnit, AxisValue, CoordSystem, PolarMapping,
-    PolarMappingParams, ScaleKind, parse_axis_value,
+    AngleDirection, AngleUnit, AxisCalibrationValues, AxisMapping, AxisUnit, AxisValue,
+    CoordSystem, PolarMapping, PolarMappingParams, ScaleKind, parse_axis_value,
 };
 use egui::Pos2;
 use std::cell::RefCell;
+
+/// Active calibration; Cartesian axes can be ready independently.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum CalibrationMapping {
+    Cartesian {
+        x: Option<AxisMapping>,
+        y: Option<AxisMapping>,
+    },
+    Polar(Option<PolarMapping>),
+}
+
+impl CalibrationMapping {
+    pub(super) const fn is_ready(self) -> bool {
+        match self {
+            Self::Cartesian { x, y } => x.is_some() && y.is_some(),
+            Self::Polar(mapping) => mapping.is_some(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct CalSnapGuide {
@@ -109,7 +128,7 @@ impl ParsedAxisValueCache {
             self.text.push_str(text);
             self.value = parse_axis_value(text, unit);
         }
-        self.value.clone()
+        self.value
     }
 }
 
@@ -153,13 +172,14 @@ impl AxisCalUi {
     pub(super) fn mapping(&self) -> Option<AxisMapping> {
         let (p1, p2) = (self.p1?, self.p2?);
         let (v1, v2) = self.parsed_values();
-        AxisMapping::try_new(p1, p2, v1?, v2?, self.scale, self.unit).ok()
+        let values = AxisCalibrationValues::try_new(v1?, v2?, self.scale).ok()?;
+        AxisMapping::try_new(p1, p2, values).ok()
     }
 
     pub(super) fn value_invalid_flags(&self) -> (bool, bool) {
         let (v1, v2) = self.parsed_values();
         let invalid_pair = if let (Some(a), Some(b)) = (&v1, &v2) {
-            AxisMapping::validate_value_pair(self.scale, self.unit, a, b).is_err()
+            AxisCalibrationValues::try_new(*a, *b, self.scale).is_err()
         } else {
             false
         };
@@ -180,42 +200,16 @@ impl PolarCalUi {
     pub(super) fn mapping(&self) -> Option<PolarMapping> {
         let origin = self.origin?;
 
-        if self.radius.unit != AxisUnit::Float || self.angle.unit != AxisUnit::Float {
-            return None;
-        }
-
         let (radius_v1, radius_v2) = self.radius.parsed_values();
         let (AxisValue::Float(radius_v1), AxisValue::Float(radius_v2)) = (radius_v1?, radius_v2?)
         else {
             return None;
         };
-        if AxisMapping::validate_value_pair(
-            self.radius.scale,
-            AxisUnit::Float,
-            &AxisValue::Float(radius_v1),
-            &AxisValue::Float(radius_v2),
-        )
-        .is_err()
-        {
-            return None;
-        }
-
         let (angle_v1, angle_v2) = self.angle.parsed_values();
         let (AxisValue::Float(angle_v1), AxisValue::Float(angle_v2)) = (angle_v1?, angle_v2?)
         else {
             return None;
         };
-        if AxisMapping::validate_value_pair(
-            ScaleKind::Linear,
-            AxisUnit::Float,
-            &AxisValue::Float(angle_v1),
-            &AxisValue::Float(angle_v2),
-        )
-        .is_err()
-        {
-            return None;
-        }
-
         let rp1 = self.radius.p1?;
         let rp2 = self.radius.p2?;
         let ap1 = self.angle.p1?;
@@ -241,5 +235,38 @@ impl PolarCalUi {
             angle_direction: self.angle_direction,
         })
         .ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_values_follow_text_and_unit_changes() {
+        let mut axis = AxisCalUi::with_values(
+            AxisUnit::Float,
+            ScaleKind::Linear,
+            Some(Pos2::ZERO),
+            Some(Pos2::new(10.0, 0.0)),
+            "0".to_owned(),
+            "10".to_owned(),
+        );
+        assert_eq!(axis.mapping().unwrap().numeric_at_t(0.5), Some(5.0));
+        axis.v2_text = "20".to_owned();
+        assert_eq!(axis.mapping().unwrap().numeric_at_t(0.5), Some(10.0));
+        axis.v2_text = "NaN".to_owned();
+        assert!(axis.mapping().is_none());
+        assert_eq!(axis.value_invalid_flags(), (false, true));
+
+        axis.v1_text = "2024-01-01".to_owned();
+        axis.v2_text = "2024-01-02".to_owned();
+        assert!(axis.mapping().is_none());
+        axis.unit = AxisUnit::DateTime;
+        assert_eq!(axis.mapping().unwrap().unit(), AxisUnit::DateTime);
+        assert_eq!(axis.value_invalid_flags(), (false, false));
+        axis.scale = ScaleKind::Log10;
+        assert!(axis.mapping().is_none());
+        assert_eq!(axis.value_invalid_flags(), (true, true));
     }
 }

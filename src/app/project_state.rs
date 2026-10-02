@@ -175,14 +175,7 @@ impl CurcatApp {
             anyhow::bail!("Cannot save project: image was not loaded from a file");
         };
 
-        let (x_mapping, y_mapping) = self.cartesian_mappings();
-        let polar_mapping = self.polar_mapping();
-        self.ensure_point_numeric_cache(
-            self.calibration.coord_system,
-            x_mapping.as_ref(),
-            y_mapping.as_ref(),
-            polar_mapping.as_ref(),
-        );
+        self.ensure_point_numeric_cache(self.calibration_mapping());
 
         let points = self
             .points
@@ -402,10 +395,7 @@ impl CurcatApp {
         self.calibration.calibration_angle_snap = plan.payload.calibration.calibration_angle_snap;
         self.calibration.show_calibration_segments =
             plan.payload.calibration.show_calibration_segments;
-        self.points.last_x_mapping = None;
-        self.points.last_y_mapping = None;
-        self.points.last_polar_mapping = None;
-        self.points.last_coord_system = self.calibration.coord_system;
+        self.points.last_mapping = None;
         self.calibration.pick_mode = PickMode::None;
         self.calibration.pending_value_focus = None;
         self.clear_calibration_drag_runtime();

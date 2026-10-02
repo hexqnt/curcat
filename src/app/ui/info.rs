@@ -1,6 +1,6 @@
 use super::super::{
-    APP_REPOSITORY, APP_VERSION, CurcatApp, PickMode, StatusLevel, describe_aspect_ratio,
-    format_system_time, human_readable_bytes, total_pixel_count,
+    APP_REPOSITORY, APP_VERSION, CalibrationMapping, CurcatApp, PickMode, StatusLevel,
+    describe_aspect_ratio, format_system_time, human_readable_bytes, total_pixel_count,
 };
 use super::icons;
 use super::stats::{AxisKind, axis_length, format_span};
@@ -248,12 +248,13 @@ impl CurcatApp {
 
         let (x_mapping, y_mapping) = self.cartesian_mappings();
         let polar_mapping = self.polar_mapping();
-        self.ensure_point_numeric_cache(
-            self.calibration.coord_system,
-            x_mapping.as_ref(),
-            y_mapping.as_ref(),
-            polar_mapping.as_ref(),
-        );
+        self.ensure_point_numeric_cache(match self.calibration.coord_system {
+            CoordSystem::Cartesian => CalibrationMapping::Cartesian {
+                x: x_mapping,
+                y: y_mapping,
+            },
+            CoordSystem::Polar => CalibrationMapping::Polar(polar_mapping),
+        });
 
         let mut open = self.ui.points_info_window_open;
         let i18n = self.i18n();
@@ -556,9 +557,9 @@ impl CurcatApp {
         };
 
         if let (Some(range), Some(map)) = (numeric_range, mapping) {
-            let min = AxisValue::from_scalar_seconds(map.unit(), range.min)
+            let min = AxisValue::from_scalar(map.unit(), range.min)
                 .map_or_else(|| out_of_range.to_string(), |v| v.format());
-            let max = AxisValue::from_scalar_seconds(map.unit(), range.max)
+            let max = AxisValue::from_scalar(map.unit(), range.max)
                 .map_or_else(|| out_of_range.to_string(), |v| v.format());
             let span = format_span(map.unit(), range.span());
             ui.label(self.i18n().format_axis_range(label, &min, &max, &span));

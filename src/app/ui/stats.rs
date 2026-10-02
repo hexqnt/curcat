@@ -130,7 +130,7 @@ pub fn axis_length(cal: &AxisCalUi) -> Option<f32> {
 
 pub fn format_span(unit: AxisUnit, span: f64) -> String {
     match unit {
-        AxisUnit::Float => AxisValue::from_scalar_seconds(AxisUnit::Float, span)
+        AxisUnit::Float => AxisValue::from_scalar(AxisUnit::Float, span)
             .map_or_else(|| format!("{span:.6}"), |v| v.format()),
         AxisUnit::DateTime => format_duration(span),
     }

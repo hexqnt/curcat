@@ -1,6 +1,7 @@
 use super::super::{
-    AutoPlaceState, AxisValueField, CalIntSnapSticky, CalSnapEndpoint, CalSnapGuide, CurcatApp,
-    DragTarget, PickMode, PointInputMode, PrimaryPressInfo, safe_usize_to_f32,
+    AutoPlaceState, AxisValueField, CalIntSnapSticky, CalSnapEndpoint, CalSnapGuide,
+    CalibrationMapping, CurcatApp, DragTarget, PickMode, PointInputMode, PrimaryPressInfo,
+    safe_usize_to_f32,
 };
 use super::icons;
 
@@ -2169,9 +2170,9 @@ impl CurcatApp {
                     .hover_pos()
                     .or(pointer_pos)
                     .or_else(|| Self::pos_in_rect(pointer_state.latest_pos, rect));
-                let pointer_pixel = hover_pos.map(&to_pixel);
+                let pointer_pixel = hover_pos.map(to_pixel);
                 let hover_pos_only = response.hover_pos();
-                let hover_pixel = hover_pos_only.map(&to_pixel);
+                let hover_pixel = hover_pos_only.map(to_pixel);
                 self.calibration.snap_guides = empty_calibration_guides();
                 if self.calibration.dragging_handle.is_none() {
                     self.update_calibration_pick_preview_guides(hover_pixel, base_size);
@@ -2409,12 +2410,13 @@ impl CurcatApp {
                     }
                 }
 
-                self.ensure_point_numeric_cache(
-                    self.calibration.coord_system,
-                    x_mapping.as_ref(),
-                    y_mapping.as_ref(),
-                    polar_mapping.as_ref(),
-                );
+                self.ensure_point_numeric_cache(match self.calibration.coord_system {
+                    CoordSystem::Cartesian => CalibrationMapping::Cartesian {
+                        x: x_mapping,
+                        y: y_mapping,
+                    },
+                    CoordSystem::Polar => CalibrationMapping::Polar(polar_mapping),
+                });
                 self.draw_calibration_overlay(&painter, rect);
 
                 let point_style = &self.config.curve_points;

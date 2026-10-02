@@ -38,6 +38,8 @@ mod snap_state;
 mod ui;
 mod ui_state;
 
+use calibration::CalibrationMapping;
+
 pub use crate::util::safe_usize_to_f32;
 pub use auto_trace::{AutoTraceConfig, AutoTraceDirection};
 pub use calibration::{
@@ -153,10 +155,7 @@ impl Default for CurcatApp {
                 cached_sorted_numeric: Vec::new(),
                 sorted_preview_dirty: true,
                 sorted_numeric_dirty: true,
-                last_x_mapping: None,
-                last_y_mapping: None,
-                last_polar_mapping: None,
-                last_coord_system: CoordSystem::Cartesian,
+                last_mapping: None,
                 show_curve_segments: true,
             },
             snap: SnapState {
@@ -755,12 +754,16 @@ impl CurcatApp {
     }
 
     fn calibration_ready(&self) -> bool {
+        self.calibration_mapping().is_ready()
+    }
+
+    fn calibration_mapping(&self) -> CalibrationMapping {
         match self.calibration.coord_system {
             CoordSystem::Cartesian => {
                 let (x, y) = self.cartesian_mappings();
-                x.is_some() && y.is_some()
+                CalibrationMapping::Cartesian { x, y }
             }
-            CoordSystem::Polar => self.polar_mapping().is_some(),
+            CoordSystem::Polar => CalibrationMapping::Polar(self.polar_mapping()),
         }
     }
 
@@ -995,7 +998,8 @@ impl eframe::App for CurcatApp {
                                 }
                                 Err(e) => {
                                     self.set_status_error(
-                                        self.i18n().format_export_failed(format_label, &e),
+                                        self.i18n()
+                                            .format_export_failed(format_label, &e.to_string()),
                                     );
                                 }
                             }

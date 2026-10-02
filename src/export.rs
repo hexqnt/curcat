@@ -1,6 +1,9 @@
 //! Export helpers for writing picked points to CSV, XLSX, JSON, RON, HTML, XML, and Markdown formats.
 
+mod data;
 mod escape;
+
+pub use data::{ExportCoordinates, ExportExtraColumn, ExportPayload, ExtraColumnLengthMismatch};
 
 use escape::{escape_html_text, escape_markdown_cell, escape_xml_attr, escape_xml_text};
 
@@ -14,42 +17,6 @@ use serde::ser::Serializer;
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 use std::io::{BufWriter, Write};
-
-/// Export-ready dataset plus axis units and optional computed columns.
-#[derive(Debug, Clone)]
-pub struct ExportPayload {
-    pub points: Vec<XYPoint>,
-    pub x_unit: AxisUnit,
-    pub y_unit: AxisUnit,
-    pub x_label: String,
-    pub y_label: String,
-    pub coord_system: CoordSystem,
-    pub angle_unit: Option<AngleUnit>,
-    pub extra_columns: Vec<ExportExtraColumn>,
-}
-
-/// Optional per-row numeric column aligned with the exported points.
-#[derive(Debug, Clone)]
-pub struct ExportExtraColumn {
-    pub header: String,
-    pub values: Vec<Option<f64>>,
-}
-
-impl ExportExtraColumn {
-    /// Create a new extra column with a header and row-aligned values.
-    pub fn new(header: impl Into<String>, values: Vec<Option<f64>>) -> Self {
-        Self {
-            header: header.into(),
-            values,
-        }
-    }
-}
-
-impl ExportPayload {
-    const fn row_count(&self) -> usize {
-        self.points.len()
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
@@ -99,15 +66,15 @@ impl ExportFormat {
         }
     }
 
-    pub fn export(self, path: &std::path::Path, payload: &ExportPayload) -> Result<(), String> {
+    pub fn export(self, path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
         match self {
-            Self::Csv => export_to_csv(path, payload).map_err(|e| e.to_string()),
-            Self::Xlsx => export_to_xlsx(path, payload).map_err(|e| e.to_string()),
-            Self::Json => export_to_json(path, payload).map_err(|e| e.to_string()),
-            Self::Ron => export_to_ron(path, payload).map_err(|e| e.to_string()),
-            Self::Html => export_to_html(path, payload).map_err(|e| e.to_string()),
-            Self::Xml => export_to_xml(path, payload).map_err(|e| e.to_string()),
-            Self::Markdown => export_to_markdown(path, payload).map_err(|e| e.to_string()),
+            Self::Csv => export_to_csv(path, payload),
+            Self::Xlsx => export_to_xlsx(path, payload).map_err(Into::into),
+            Self::Json => export_to_json(path, payload),
+            Self::Ron => export_to_ron(path, payload),
+            Self::Html => export_to_html(path, payload),
+            Self::Xml => export_to_xml(path, payload),
+            Self::Markdown => export_to_markdown(path, payload),
         }
     }
 }
@@ -156,29 +123,7 @@ pub fn turning_angles(raw_points: &[XYPoint]) -> Vec<Option<f64>> {
 const XLSX_MAX_ROWS: u32 = 1_048_576;
 const XLSX_MAX_COLS: u16 = 16_384;
 
-fn validate_extra_columns(payload: &ExportPayload) -> Result<(), String> {
-    let expected_rows = payload.row_count();
-    if let Some((index, column)) = payload
-        .extra_columns
-        .iter()
-        .enumerate()
-        .find(|(_, col)| col.values.len() != expected_rows)
-    {
-        return Err(format!(
-            "Extra column '{}' (index {index}) has {} rows, expected {expected_rows}.",
-            column.header,
-            column.values.len()
-        ));
-    }
-    Ok(())
-}
-
-struct TabularExport<'a> {
-    payload: &'a ExportPayload,
-    headers: Vec<&'a str>,
-}
-
-/// Основные значения проверены до записи строки; дополнительные ячейки форматируются по мере чтения.
+/// Axis values are checked before writing a row; extra cells are formatted as they are consumed.
 struct TabularRow<'a> {
     axes: [String; 2],
     extra_columns: &'a [ExportExtraColumn],
@@ -195,37 +140,24 @@ impl TabularRow<'_> {
     }
 }
 
-impl<'a> TabularExport<'a> {
-    fn try_new(payload: &'a ExportPayload) -> anyhow::Result<Self> {
-        if let Err(err) = validate_extra_columns(payload) {
-            anyhow::bail!(err);
-        }
-        let mut headers = Vec::with_capacity(payload.extra_columns.len() + 2);
-        headers.extend([payload.x_label.as_str(), payload.y_label.as_str()]);
-        headers.extend(
-            payload
-                .extra_columns
+impl ExportPayload {
+    fn headers(&self) -> impl Iterator<Item = &str> {
+        [self.x_label(), self.y_label()].into_iter().chain(
+            self.extra_columns()
                 .iter()
                 .map(|column| column.header.as_str()),
-        );
-        Ok(Self { payload, headers })
+        )
     }
 
-    fn rows(&self) -> impl Iterator<Item = anyhow::Result<TabularRow<'a>>> + '_ {
-        self.payload
-            .points
-            .iter()
-            .enumerate()
-            .map(|(row_index, point)| self.format_row(row_index, point))
-    }
-
-    fn format_row(&self, row_index: usize, point: &XYPoint) -> anyhow::Result<TabularRow<'a>> {
-        let xv = axis_value_from_scalar_for_export(self.payload.x_unit, point.x, "x")?;
-        let yv = axis_value_from_scalar_for_export(self.payload.y_unit, point.y, "y")?;
-        Ok(TabularRow {
-            axes: [xv.format(), yv.format()],
-            extra_columns: &self.payload.extra_columns,
-            index: row_index,
+    fn formatted_rows(&self) -> impl Iterator<Item = anyhow::Result<TabularRow<'_>>> {
+        self.points().iter().enumerate().map(|(index, point)| {
+            let x = axis_value_from_scalar_for_export(self.x_unit(), point.x, "x")?;
+            let y = axis_value_from_scalar_for_export(self.y_unit(), point.y, "y")?;
+            Ok(TabularRow {
+                axes: [x.format(), y.format()],
+                extra_columns: self.extra_columns(),
+                index,
+            })
         })
     }
 }
@@ -236,16 +168,16 @@ fn format_extra_value(value: f64) -> String {
 
 fn metadata_pairs(payload: &ExportPayload) -> impl Iterator<Item = (&'static str, &str)> {
     [
-        ("coord_system", coord_system_label(payload.coord_system)),
-        ("x_unit", axis_unit_label(payload.x_unit)),
-        ("y_unit", axis_unit_label(payload.y_unit)),
-        ("x_label", payload.x_label.as_str()),
-        ("y_label", payload.y_label.as_str()),
+        ("coord_system", coord_system_label(payload.coord_system())),
+        ("x_unit", axis_unit_label(payload.x_unit())),
+        ("y_unit", axis_unit_label(payload.y_unit())),
+        ("x_label", payload.x_label()),
+        ("y_label", payload.y_label()),
     ]
     .into_iter()
     .chain(
         payload
-            .angle_unit
+            .angle_unit()
             .map(|unit| ("angle_unit", angle_unit_label(unit))),
     )
 }
@@ -255,11 +187,10 @@ fn metadata_pairs(payload: &ExportPayload) -> impl Iterator<Item = (&'static str
 /// Floats are formatted with 6 fractional digits; `DateTime` values are emitted
 /// as formatted strings. Returns an error if any value is not representable.
 pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
-    let table = TabularExport::try_new(payload)?;
     let mut wtr = csv::Writer::from_path(path)?;
-    wtr.write_record(&table.headers)?;
+    wtr.write_record(payload.headers())?;
 
-    for row in table.rows() {
+    for row in payload.formatted_rows() {
         let row = row?;
         wtr.write_record(row.cells().map(Option::unwrap_or_default))?;
     }
@@ -269,7 +200,6 @@ pub fn export_to_csv(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
 
 /// Write the payload to an HTML document containing metadata and a data table.
 pub fn export_to_html(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
-    let table = TabularExport::try_new(payload)?;
     let mut writer = BufWriter::new(std::fs::File::create(path)?);
     writer.write_all(
         b"<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Curcat export</title></head><body><h1>Curcat export</h1><dl>",
@@ -283,11 +213,11 @@ pub fn export_to_html(path: &std::path::Path, payload: &ExportPayload) -> anyhow
         )?;
     }
     writer.write_all(b"</dl><table><thead><tr>")?;
-    for header in &table.headers {
+    for header in payload.headers() {
         write!(writer, "<th>{}</th>", escape_html_text(header))?;
     }
     writer.write_all(b"</tr></thead><tbody>")?;
-    for row in table.rows() {
+    for row in payload.formatted_rows() {
         writer.write_all(b"<tr>")?;
         for cell in row?.cells() {
             writer.write_all(b"<td>")?;
@@ -305,7 +235,6 @@ pub fn export_to_html(path: &std::path::Path, payload: &ExportPayload) -> anyhow
 
 /// Write the payload to XML mirroring JSON metadata and point rows.
 pub fn export_to_xml(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
-    let table = TabularExport::try_new(payload)?;
     let mut writer = BufWriter::new(std::fs::File::create(path)?);
     writer.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<curcat_export")?;
     for (name, value) in metadata_pairs(payload) {
@@ -315,10 +244,10 @@ pub fn export_to_xml(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
     }
     writer.write_all(b">\n  <points>\n")?;
 
-    for row in table.rows() {
+    for row in payload.formatted_rows() {
         let row = row?;
         writer.write_all(b"    <point>\n")?;
-        for (header, cell) in table.headers.iter().zip(row.cells()) {
+        for (header, cell) in payload.headers().zip(row.cells()) {
             let escaped_header = escape_xml_attr(header);
             match cell {
                 Some(value) => {
@@ -343,21 +272,20 @@ pub fn export_to_xml(path: &std::path::Path, payload: &ExportPayload) -> anyhow:
 
 /// Write the payload as a Markdown table.
 pub fn export_to_markdown(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
-    let table = TabularExport::try_new(payload)?;
     let mut writer = BufWriter::new(std::fs::File::create(path)?);
 
     writer.write_all(b"|")?;
-    for header in &table.headers {
+    for header in payload.headers() {
         let escaped = escape_markdown_cell(header);
         write!(writer, " {escaped} |")?;
     }
     writer.write_all(b"\n|")?;
-    for _ in &table.headers {
+    for _ in payload.headers() {
         writer.write_all(b" --- |")?;
     }
     writer.write_all(b"\n")?;
 
-    for row in table.rows() {
+    for row in payload.formatted_rows() {
         let row = row?;
         writer.write_all(b"|")?;
         for cell in row.cells() {
@@ -376,11 +304,8 @@ pub fn export_to_markdown(path: &std::path::Path, payload: &ExportPayload) -> an
 /// when needed. Non-finite numbers and unrepresentable datetimes return errors.
 #[allow(clippy::too_many_lines)]
 pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result<(), XlsxError> {
-    if let Err(err) = validate_extra_columns(payload) {
-        return Err(XlsxError::ParameterError(err));
-    }
     let mut workbook = Workbook::new();
-    let total_columns = payload.extra_columns.len().saturating_add(2);
+    let total_columns = payload.extra_columns().len().saturating_add(2);
     let total_columns_u16 = u16::try_from(total_columns)
         .map_err(|_| XlsxError::ParameterError("XLSX export exceeds column index range.".into()))?;
     if total_columns_u16 > XLSX_MAX_COLS {
@@ -411,9 +336,9 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
         };
         worksheet.set_name(&sheet_name)?;
 
-        worksheet.write_string(0, 0, &payload.x_label)?;
-        worksheet.write_string(0, 1, &payload.y_label)?;
-        for (idx, col) in payload.extra_columns.iter().enumerate() {
+        worksheet.write_string(0, 0, payload.x_label())?;
+        worksheet.write_string(0, 1, payload.y_label())?;
+        for (idx, col) in payload.extra_columns().iter().enumerate() {
             let col_idx = u16::try_from(idx + 2)
                 .map_err(|_| XlsxError::ParameterError("XLSX column index overflow.".into()))?;
             worksheet.write_string(0, col_idx, &col.header)?;
@@ -421,69 +346,43 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
 
         let start = sheet_index * max_rows_per_sheet;
         let end = (start + max_rows_per_sheet).min(total_rows);
-        let slice = &payload.points[start..end];
-        let mut extra_columns: Vec<_> = payload
-            .extra_columns
-            .iter()
-            .map(|col| (col, col.values[start..end].iter()))
-            .collect();
+        let slice = &payload.points()[start..end];
         for (row_offset, p) in slice.iter().enumerate() {
             let row = u32::try_from(row_offset + 1)
                 .map_err(|_| XlsxError::ParameterError("XLSX row index overflow.".into()))?;
-            match payload.x_unit {
-                AxisUnit::Float => {
-                    if !p.x.is_finite() {
-                        return Err(XlsxError::ParameterError(format!(
-                            "XLSX export cannot represent non-finite x value {x}.",
-                            x = p.x
-                        )));
+            for (column, axis_label, unit, value) in [
+                (0, "x", payload.x_unit(), p.x),
+                (1, "y", payload.y_unit(), p.y),
+            ] {
+                match unit {
+                    AxisUnit::Float => {
+                        if !value.is_finite() {
+                            return Err(XlsxError::ParameterError(format!(
+                                "XLSX export cannot represent non-finite {axis_label} value {value}."
+                            )));
+                        }
+                        worksheet.write_number_with_format(row, column, value, &num_format)?;
                     }
-                    worksheet.write_number_with_format(row, 0, p.x, &num_format)?;
-                }
-                AxisUnit::DateTime => {
-                    let xv = axis_value_from_scalar_for_xlsx(payload.x_unit, p.x, "x")?;
-                    if let Some(excel_dt) = axis_value_to_excel_datetime(&xv) {
-                        worksheet.write_datetime_with_format(
-                            row,
-                            0,
-                            &excel_dt,
-                            &datetime_format,
-                        )?;
-                    } else {
-                        worksheet.write_string(row, 0, xv.format())?;
-                    }
-                }
-            }
-
-            match payload.y_unit {
-                AxisUnit::Float => {
-                    if !p.y.is_finite() {
-                        return Err(XlsxError::ParameterError(format!(
-                            "XLSX export cannot represent non-finite y value {y}.",
-                            y = p.y
-                        )));
-                    }
-                    worksheet.write_number_with_format(row, 1, p.y, &num_format)?;
-                }
-                AxisUnit::DateTime => {
-                    let yv = axis_value_from_scalar_for_xlsx(payload.y_unit, p.y, "y")?;
-                    if let Some(excel_dt) = axis_value_to_excel_datetime(&yv) {
-                        worksheet.write_datetime_with_format(
-                            row,
-                            1,
-                            &excel_dt,
-                            &datetime_format,
-                        )?;
-                    } else {
-                        worksheet.write_string(row, 1, yv.format())?;
+                    AxisUnit::DateTime => {
+                        let axis_value = axis_value_from_scalar_for_xlsx(unit, value, axis_label)?;
+                        if let Some(excel_dt) = axis_value_to_excel_datetime(&axis_value) {
+                            worksheet.write_datetime_with_format(
+                                row,
+                                column,
+                                &excel_dt,
+                                &datetime_format,
+                            )?;
+                        } else {
+                            worksheet.write_string(row, column, axis_value.format())?;
+                        }
                     }
                 }
             }
 
-            for (col_idx, (_, values)) in extra_columns.iter_mut().enumerate() {
+            for (col_idx, column) in payload.extra_columns().iter().enumerate() {
                 let col_num = u16::try_from(col_idx + 2)
                     .map_err(|_| XlsxError::ParameterError("XLSX column index overflow.".into()))?;
-                match values.next().copied().flatten() {
+                match column.values[start + row_offset] {
                     Some(value) => {
                         if !value.is_finite() {
                             return Err(XlsxError::ParameterError(format!(
@@ -508,27 +407,19 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
 /// The output contains `x_unit`, `y_unit`, and a `points` array. Floats are
 /// rounded to 6 fractional digits; `DateTime` values are emitted as strings.
 pub fn export_to_json(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
-    if let Err(err) = validate_extra_columns(payload) {
-        anyhow::bail!(err);
-    }
     let mut points = Vec::with_capacity(payload.row_count());
-    let mut extra_columns: Vec<_> = payload
-        .extra_columns
-        .iter()
-        .map(|col| (col, col.values.iter()))
-        .collect();
-    for p in &payload.points {
+    for (row_index, p) in payload.points().iter().enumerate() {
         let mut obj = Map::new();
         obj.insert(
-            payload.x_label.clone(),
-            axis_value_to_json(payload.x_unit, p.x, &payload.x_label)?,
+            payload.x_label().to_owned(),
+            axis_value_to_json(payload.x_unit(), p.x, payload.x_label())?,
         );
         obj.insert(
-            payload.y_label.clone(),
-            axis_value_to_json(payload.y_unit, p.y, &payload.y_label)?,
+            payload.y_label().to_owned(),
+            axis_value_to_json(payload.y_unit(), p.y, payload.y_label())?,
         );
-        for (col, values) in &mut extra_columns {
-            let cell = values.next().copied().flatten();
+        for col in payload.extra_columns() {
+            let cell = col.values[row_index];
             obj.insert(col.header.clone(), optional_number_json(cell));
         }
         points.push(Value::Object(obj));
@@ -537,25 +428,25 @@ pub fn export_to_json(path: &std::path::Path, payload: &ExportPayload) -> anyhow
     let mut root = Map::new();
     root.insert(
         "coord_system".to_string(),
-        Value::String(coord_system_label(payload.coord_system).to_string()),
+        Value::String(coord_system_label(payload.coord_system()).to_string()),
     );
     root.insert(
         "x_unit".to_string(),
-        Value::String(axis_unit_label(payload.x_unit).to_string()),
+        Value::String(axis_unit_label(payload.x_unit()).to_string()),
     );
     root.insert(
         "y_unit".to_string(),
-        Value::String(axis_unit_label(payload.y_unit).to_string()),
+        Value::String(axis_unit_label(payload.y_unit()).to_string()),
     );
     root.insert(
         "x_label".to_string(),
-        Value::String(payload.x_label.clone()),
+        Value::String(payload.x_label().to_owned()),
     );
     root.insert(
         "y_label".to_string(),
-        Value::String(payload.y_label.clone()),
+        Value::String(payload.y_label().to_owned()),
     );
-    if let Some(unit) = payload.angle_unit {
+    if let Some(unit) = payload.angle_unit() {
         root.insert(
             "angle_unit".to_string(),
             Value::String(angle_unit_label(unit).to_string()),
@@ -604,39 +495,31 @@ impl Serialize for RonValue {
 ///
 /// The output mirrors the JSON structure, using `None` for missing values.
 pub fn export_to_ron(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
-    if let Err(err) = validate_extra_columns(payload) {
-        anyhow::bail!(err);
-    }
     let mut points = Vec::with_capacity(payload.row_count());
-    let mut extra_columns: Vec<_> = payload
-        .extra_columns
-        .iter()
-        .map(|col| (col, col.values.iter()))
-        .collect();
-    for p in &payload.points {
+    for (row_index, p) in payload.points().iter().enumerate() {
         let mut row = BTreeMap::new();
         row.insert(
-            payload.x_label.as_str(),
-            axis_value_to_ron(payload.x_unit, p.x, &payload.x_label)?,
+            payload.x_label(),
+            axis_value_to_ron(payload.x_unit(), p.x, payload.x_label())?,
         );
         row.insert(
-            payload.y_label.as_str(),
-            axis_value_to_ron(payload.y_unit, p.y, &payload.y_label)?,
+            payload.y_label(),
+            axis_value_to_ron(payload.y_unit(), p.y, payload.y_label())?,
         );
-        for (col, values) in &mut extra_columns {
-            let cell = values.next().copied().flatten();
+        for col in payload.extra_columns() {
+            let cell = col.values[row_index];
             row.insert(col.header.as_str(), optional_number_ron(cell));
         }
         points.push(row);
     }
 
     let doc = RonExport {
-        coord_system: coord_system_label(payload.coord_system),
-        x_unit: axis_unit_label(payload.x_unit),
-        y_unit: axis_unit_label(payload.y_unit),
-        x_label: payload.x_label.as_str(),
-        y_label: payload.y_label.as_str(),
-        angle_unit: payload.angle_unit.map(angle_unit_label),
+        coord_system: coord_system_label(payload.coord_system()),
+        x_unit: axis_unit_label(payload.x_unit()),
+        y_unit: axis_unit_label(payload.y_unit()),
+        x_label: payload.x_label(),
+        y_label: payload.y_label(),
+        angle_unit: payload.angle_unit().map(angle_unit_label),
         points,
     };
 
@@ -667,39 +550,31 @@ const fn angle_unit_label(unit: AngleUnit) -> &'static str {
     }
 }
 
-fn axis_value_to_json(
-    unit: AxisUnit,
-    scalar_seconds: f64,
-    axis_label: &str,
-) -> anyhow::Result<Value> {
+fn axis_value_to_json(unit: AxisUnit, scalar: f64, axis_label: &str) -> anyhow::Result<Value> {
     match unit {
         AxisUnit::Float => {
-            if !scalar_seconds.is_finite() {
-                anyhow::bail!("Cannot export non-finite float value {scalar_seconds}.");
+            if !scalar.is_finite() {
+                anyhow::bail!("Cannot export non-finite float value {scalar}.");
             }
-            Ok(rounded_number_json(scalar_seconds))
+            Ok(rounded_number_json(scalar))
         }
         AxisUnit::DateTime => {
-            let value = axis_value_from_scalar_for_export(unit, scalar_seconds, axis_label)?;
+            let value = axis_value_from_scalar_for_export(unit, scalar, axis_label)?;
             Ok(Value::String(value.format()))
         }
     }
 }
 
-fn axis_value_to_ron(
-    unit: AxisUnit,
-    scalar_seconds: f64,
-    axis_label: &str,
-) -> anyhow::Result<RonValue> {
+fn axis_value_to_ron(unit: AxisUnit, scalar: f64, axis_label: &str) -> anyhow::Result<RonValue> {
     match unit {
         AxisUnit::Float => {
-            if !scalar_seconds.is_finite() {
-                anyhow::bail!("Cannot export non-finite float value {scalar_seconds}.");
+            if !scalar.is_finite() {
+                anyhow::bail!("Cannot export non-finite float value {scalar}.");
             }
-            Ok(number_to_ron_value(scalar_seconds))
+            Ok(number_to_ron_value(scalar))
         }
         AxisUnit::DateTime => {
-            let value = axis_value_from_scalar_for_export(unit, scalar_seconds, axis_label)?;
+            let value = axis_value_from_scalar_for_export(unit, scalar, axis_label)?;
             Ok(RonValue::String(value.format()))
         }
     }
@@ -753,7 +628,7 @@ fn axis_value_from_scalar_for_export(
     scalar: f64,
     axis_label: &str,
 ) -> anyhow::Result<AxisValue> {
-    AxisValue::from_scalar_seconds(unit, scalar).ok_or_else(|| {
+    AxisValue::from_scalar(unit, scalar).ok_or_else(|| {
         anyhow::anyhow!(
             "Cannot export {axis_label} value {scalar}: not representable as {}.",
             axis_unit_label(unit)
@@ -766,7 +641,7 @@ fn axis_value_from_scalar_for_xlsx(
     scalar: f64,
     axis_label: &str,
 ) -> Result<AxisValue, XlsxError> {
-    AxisValue::from_scalar_seconds(unit, scalar).ok_or_else(|| {
+    AxisValue::from_scalar(unit, scalar).ok_or_else(|| {
         XlsxError::ParameterError(format!(
             "XLSX export cannot represent {axis_label} value {scalar} as {}.",
             axis_unit_label(unit)
@@ -813,25 +688,25 @@ mod tests {
 
     #[test]
     fn export_csv_preserves_quoting_dates_and_empty_cells() {
-        let payload = ExportPayload {
-            points: vec![
+        let payload = ExportPayload::try_new(
+            vec![
                 XYPoint { x: 0.0, y: -0.0 },
                 XYPoint {
                     x: 1.5,
                     y: 1.234_567_89,
                 },
             ],
-            x_unit: AxisUnit::DateTime,
-            y_unit: AxisUnit::Float,
-            x_label: "Время, UTC".into(),
-            y_label: "Y\"value".into(),
-            coord_system: CoordSystem::Cartesian,
-            angle_unit: None,
-            extra_columns: vec![ExportExtraColumn::new(
+            ExportCoordinates::Cartesian {
+                x_unit: AxisUnit::DateTime,
+                y_unit: AxisUnit::Float,
+            },
+            ["Время, UTC".into(), "Y\"value".into()],
+            vec![ExportExtraColumn::new(
                 "extra\ncolumn",
                 vec![None, Some(2.5)],
             )],
-        };
+        )
+        .expect("valid export payload");
         let path = temp_export_path("csv_quoting", "csv");
         export_to_csv(&path, &payload).expect("CSV export failed");
         let text = std::fs::read_to_string(&path).expect("failed to read CSV output");
@@ -844,25 +719,25 @@ mod tests {
 
     #[test]
     fn export_ron_rounds_and_preserves_none() {
-        let payload = ExportPayload {
-            points: vec![
+        let payload = ExportPayload::try_new(
+            vec![
                 XYPoint {
                     x: 1.234_567_89,
                     y: 2.0,
                 },
                 XYPoint { x: 3.0, y: 4.0 },
             ],
-            x_unit: AxisUnit::Float,
-            y_unit: AxisUnit::Float,
-            x_label: "X".to_string(),
-            y_label: "Y".to_string(),
-            coord_system: CoordSystem::Cartesian,
-            angle_unit: None,
-            extra_columns: vec![ExportExtraColumn::new(
+            ExportCoordinates::Cartesian {
+                x_unit: AxisUnit::Float,
+                y_unit: AxisUnit::Float,
+            },
+            ["X".to_string(), "Y".to_string()],
+            vec![ExportExtraColumn::new(
                 "extra",
                 vec![None, Some(9.876_543_21)],
             )],
-        };
+        )
+        .expect("valid export payload");
 
         let path = temp_export_path("ron_export_test", "ron");
         export_to_ron(&path, &payload).expect("RON export failed");
@@ -922,39 +797,140 @@ mod tests {
     }
 
     #[test]
-    fn export_rejects_mismatched_extra_column_lengths() {
-        let payload = ExportPayload {
-            points: vec![XYPoint { x: 1.0, y: 2.0 }, XYPoint { x: 3.0, y: 4.0 }],
-            x_unit: AxisUnit::Float,
-            y_unit: AxisUnit::Float,
-            x_label: "X".to_string(),
-            y_label: "Y".to_string(),
-            coord_system: CoordSystem::Cartesian,
-            angle_unit: None,
-            extra_columns: vec![ExportExtraColumn::new("extra", vec![Some(1.0)])],
-        };
+    fn payload_rejects_mismatched_extra_column_lengths() {
+        for actual_rows in [0, 1, 3] {
+            let error = ExportPayload::try_new(
+                vec![XYPoint { x: 1.0, y: 2.0 }, XYPoint { x: 3.0, y: 4.0 }],
+                ExportCoordinates::Cartesian {
+                    x_unit: AxisUnit::Float,
+                    y_unit: AxisUnit::Float,
+                },
+                ["X".into(), "Y".into()],
+                vec![
+                    ExportExtraColumn::new("valid", vec![None; 2]),
+                    ExportExtraColumn::new("extra", vec![Some(1.0); actual_rows]),
+                ],
+            )
+            .expect_err("must reject mismatch");
+            assert_eq!(
+                error,
+                ExtraColumnLengthMismatch {
+                    column_index: 1,
+                    column_header: "extra".into(),
+                    actual_rows,
+                    expected_rows: 2,
+                }
+            );
+            assert!(error.to_string().contains("expected 2"));
+        }
+    }
 
-        let check_err = validate_extra_columns(&payload).expect_err("must reject mismatch");
-        assert!(check_err.contains("expected 2"));
+    #[test]
+    fn empty_payload_preserves_headers_and_empty_json_points() {
+        let payload = ExportPayload::try_new(
+            Vec::new(),
+            ExportCoordinates::Cartesian {
+                x_unit: AxisUnit::Float,
+                y_unit: AxisUnit::Float,
+            },
+            ["x".into(), "y".into()],
+            vec![ExportExtraColumn::new("extra", Vec::new())],
+        )
+        .unwrap();
+        let csv_path = temp_export_path("empty_payload", "csv");
+        ExportFormat::Csv.export(&csv_path, &payload).unwrap();
+        assert_eq!(std::fs::read_to_string(&csv_path).unwrap(), "x,y,extra\n");
+        std::fs::remove_file(csv_path).unwrap();
+        let json_path = temp_export_path("empty_payload", "json");
+        ExportFormat::Json.export(&json_path, &payload).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&json_path).unwrap()).unwrap();
+        std::fs::remove_file(json_path).unwrap();
+        assert_eq!(json["points"], serde_json::json!([]));
+        assert!(json.get("angle_unit").is_none());
+    }
 
-        let path = temp_export_path("csv_export_mismatch_test", "csv");
-        let export_err = export_to_csv(&path, &payload).expect_err("CSV export must fail");
-        assert!(export_err.to_string().contains("expected 2"));
-        let _ = std::fs::remove_file(&path);
+    #[test]
+    fn polar_export_preserves_angle_metadata_in_json_and_ron() {
+        for (angle_unit, expected_unit) in
+            [(AngleUnit::Degrees, "deg"), (AngleUnit::Radians, "rad")]
+        {
+            let payload = ExportPayload::try_new(
+                vec![XYPoint { x: 1.0, y: 2.0 }],
+                ExportCoordinates::Polar { angle_unit },
+                ["theta".into(), "radius".into()],
+                Vec::new(),
+            )
+            .unwrap();
+            let json_path = temp_export_path("polar_metadata", "json");
+            ExportFormat::Json.export(&json_path, &payload).unwrap();
+            let json: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&json_path).unwrap()).unwrap();
+            std::fs::remove_file(json_path).unwrap();
+            assert_eq!(json["coord_system"], "polar");
+            assert_eq!(json["x_unit"], "float");
+            assert_eq!(json["y_unit"], "float");
+            assert_eq!(json["angle_unit"], expected_unit);
+            assert_eq!(json["points"][0]["theta"], 1.0);
+            assert_eq!(json["points"][0]["radius"], 2.0);
+
+            let ron_path = temp_export_path("polar_metadata", "ron");
+            ExportFormat::Ron.export(&ron_path, &payload).unwrap();
+            let ron: Value = ron::from_str(&std::fs::read_to_string(&ron_path).unwrap()).unwrap();
+            std::fs::remove_file(ron_path).unwrap();
+            let Value::Map(root) = ron else {
+                panic!("expected RON map");
+            };
+            assert_eq!(string_value(&root, "coord_system"), "polar");
+            assert_eq!(string_value(&root, "x_unit"), "float");
+            assert_eq!(string_value(&root, "y_unit"), "float");
+            let Value::Option(Some(unit)) = map_value(&root, "angle_unit") else {
+                panic!("expected optional angle unit");
+            };
+            assert_eq!(unit.as_ref(), &Value::String(expected_unit.to_owned()));
+        }
+    }
+
+    #[test]
+    fn export_format_preserves_underlying_xlsx_error() {
+        for (x_unit, y_unit, x, y, axis_label) in [
+            (AxisUnit::Float, AxisUnit::Float, f64::NAN, 1.0, "x"),
+            (AxisUnit::Float, AxisUnit::Float, 1.0, f64::INFINITY, "y"),
+            (AxisUnit::DateTime, AxisUnit::Float, f64::MAX, 1.0, "x"),
+            (AxisUnit::Float, AxisUnit::DateTime, 1.0, f64::MAX, "y"),
+        ] {
+            let payload = ExportPayload::try_new(
+                vec![XYPoint { x, y }],
+                ExportCoordinates::Cartesian { x_unit, y_unit },
+                ["x".into(), "y".into()],
+                Vec::new(),
+            )
+            .unwrap();
+            let path = temp_export_path("xlsx_unrepresentable_axis", "xlsx");
+            let error = ExportFormat::Xlsx
+                .export(&path, &payload)
+                .expect_err("invalid XLSX axis value must fail");
+            assert!(matches!(
+                error.downcast_ref::<XlsxError>(),
+                Some(XlsxError::ParameterError(_))
+            ));
+            assert!(error.to_string().contains(&format!("{axis_label} value")));
+            assert!(!path.exists());
+        }
     }
 
     #[test]
     fn export_html_contains_doctype_metadata_and_escaping() {
-        let payload = ExportPayload {
-            points: vec![XYPoint { x: 1.0, y: 2.0 }, XYPoint { x: 3.0, y: 4.0 }],
-            x_unit: AxisUnit::Float,
-            y_unit: AxisUnit::Float,
-            x_label: "x<&\"'>".to_string(),
-            y_label: "y".to_string(),
-            coord_system: CoordSystem::Cartesian,
-            angle_unit: None,
-            extra_columns: vec![ExportExtraColumn::new("extra<&\"'>", vec![None, Some(7.5)])],
-        };
+        let payload = ExportPayload::try_new(
+            vec![XYPoint { x: 1.0, y: 2.0 }, XYPoint { x: 3.0, y: 4.0 }],
+            ExportCoordinates::Cartesian {
+                x_unit: AxisUnit::Float,
+                y_unit: AxisUnit::Float,
+            },
+            ["x<&\"'>".to_string(), "y".to_string()],
+            vec![ExportExtraColumn::new("extra<&\"'>", vec![None, Some(7.5)])],
+        )
+        .expect("valid export payload");
 
         let path = temp_export_path("html_export_test", "html");
         export_to_html(&path, &payload).expect("HTML export failed");
@@ -981,16 +957,16 @@ mod tests {
 
     #[test]
     fn export_xml_contains_metadata_points_and_escaping() {
-        let payload = ExportPayload {
-            points: vec![XYPoint { x: 1.0, y: 2.0 }],
-            x_unit: AxisUnit::Float,
-            y_unit: AxisUnit::Float,
-            x_label: "x\"line\nnext".to_string(),
-            y_label: "y".to_string(),
-            coord_system: CoordSystem::Cartesian,
-            angle_unit: None,
-            extra_columns: vec![ExportExtraColumn::new("<extra&name>", vec![None])],
-        };
+        let payload = ExportPayload::try_new(
+            vec![XYPoint { x: 1.0, y: 2.0 }],
+            ExportCoordinates::Cartesian {
+                x_unit: AxisUnit::Float,
+                y_unit: AxisUnit::Float,
+            },
+            ["x\"line\nnext".to_string(), "y".to_string()],
+            vec![ExportExtraColumn::new("<extra&name>", vec![None])],
+        )
+        .expect("valid export payload");
 
         let path = temp_export_path("xml_export_test", "xml");
         export_to_xml(&path, &payload).expect("XML export failed");
@@ -1011,16 +987,16 @@ mod tests {
 
     #[test]
     fn export_markdown_writes_table_and_escapes_special_symbols() {
-        let payload = ExportPayload {
-            points: vec![XYPoint { x: 1.0, y: 2.0 }, XYPoint { x: 3.0, y: 4.0 }],
-            x_unit: AxisUnit::Float,
-            y_unit: AxisUnit::Float,
-            x_label: "x|\nhead".to_string(),
-            y_label: "y\\head".to_string(),
-            coord_system: CoordSystem::Cartesian,
-            angle_unit: None,
-            extra_columns: vec![ExportExtraColumn::new("c|d", vec![None, Some(5.1)])],
-        };
+        let payload = ExportPayload::try_new(
+            vec![XYPoint { x: 1.0, y: 2.0 }, XYPoint { x: 3.0, y: 4.0 }],
+            ExportCoordinates::Cartesian {
+                x_unit: AxisUnit::Float,
+                y_unit: AxisUnit::Float,
+            },
+            ["x|\nhead".to_string(), "y\\head".to_string()],
+            vec![ExportExtraColumn::new("c|d", vec![None, Some(5.1)])],
+        )
+        .expect("valid export payload");
 
         let path = temp_export_path("markdown_export_test", "md");
         export_to_markdown(&path, &payload).expect("Markdown export failed");

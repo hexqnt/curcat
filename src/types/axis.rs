@@ -44,7 +44,7 @@ pub enum AxisUnit {
 }
 
 /// Axis value (floating-point number or timestamp).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AxisValue {
     /// Numeric axis value (unitless or caller-defined).
     Float(f64),
@@ -53,12 +53,18 @@ pub enum AxisValue {
 }
 
 impl AxisValue {
-    /// Convert to scalar seconds for interpolation and sorting.
-    ///
-    /// Date-time values are converted to UTC seconds with fractional nanoseconds.
-    pub fn to_scalar_seconds(&self) -> f64 {
+    /// The value variant determines its unit without separate state.
+    pub const fn unit(self) -> AxisUnit {
         match self {
-            Self::Float(v) => *v,
+            Self::Float(_) => AxisUnit::Float,
+            Self::DateTime(_) => AxisUnit::DateTime,
+        }
+    }
+
+    /// Scalar for interpolation and sorting: numeric values remain unchanged, dates become UTC seconds with a fractional part.
+    pub fn to_scalar(self) -> f64 {
+        match self {
+            Self::Float(v) => v,
             Self::DateTime(dt) => {
                 let utc = dt.and_utc();
                 int_to_f64(utc.timestamp())
@@ -67,20 +73,19 @@ impl AxisValue {
         }
     }
 
-    /// Recreate an `AxisValue` from scalar seconds using the requested unit.
-    ///
-    /// Returns `None` for non-finite values or timestamps outside chrono's range.
-    pub fn from_scalar_seconds(unit: AxisUnit, s: f64) -> Option<Self> {
-        if !s.is_finite() {
+    /// Reconstruct a number or date; non-finite scalars and dates outside chrono's range return `None`.
+    pub fn from_scalar(unit: AxisUnit, scalar: f64) -> Option<Self> {
+        if !scalar.is_finite() {
             return None;
         }
 
         match unit {
-            AxisUnit::Float => Some(Self::Float(s)),
+            AxisUnit::Float => Some(Self::Float(scalar)),
             AxisUnit::DateTime => {
-                let secs_floor = s.floor();
+                let secs_floor = scalar.floor();
                 let mut secs = f64_to_i64_checked(secs_floor)?;
-                let mut nanos = f64_to_i64_checked(((s - secs_floor) * NANOS_PER_SEC).round())?;
+                let mut nanos =
+                    f64_to_i64_checked(((scalar - secs_floor) * NANOS_PER_SEC).round())?;
                 // Rounding can carry into the next/previous second; normalize to [0, 1e9).
                 if nanos >= NANOS_I64 {
                     nanos -= NANOS_I64;
@@ -170,13 +175,15 @@ fn format_datetime(dt: &NaiveDateTime) -> String {
     }
 }
 
-/// Parse a string into an axis value using the given unit.
-///
-/// For `DateTime`, multiple common formats are accepted (RFC3339, with/without
-/// timezone offsets, or date-only). Timezone inputs are converted to UTC.
+/// Parse a finite number or a date in common formats; timezone offsets are converted to UTC.
 pub fn parse_axis_value(input: &str, unit: AxisUnit) -> Option<AxisValue> {
     match unit {
-        AxisUnit::Float => input.trim().parse::<f64>().ok().map(AxisValue::Float),
+        AxisUnit::Float => input
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .map(AxisValue::Float),
         AxisUnit::DateTime => parse_datetime(input).map(AxisValue::DateTime),
     }
 }

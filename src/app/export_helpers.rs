@@ -1,10 +1,45 @@
-//! Подготовка данных и дополнительных столбцов для экспорта.
+//! Prepare export data and computed columns.
 
-use super::CurcatApp;
-use crate::export::{ExportExtraColumn, ExportPayload, sequential_distances, turning_angles};
+use super::{CalibrationMapping, CurcatApp};
+use crate::export::{
+    ExportCoordinates, ExportExtraColumn, ExportPayload, ExtraColumnLengthMismatch,
+    sequential_distances, turning_angles,
+};
 use crate::i18n::UiLanguage;
 use crate::interp::{XYPoint, auto_sample_count, interpolate_sorted};
-use crate::types::{AngleUnit, AxisUnit, CoordSystem};
+use crate::types::{AngleUnit, CoordSystem};
+use std::fmt;
+
+#[derive(Debug)]
+pub(super) enum ExportPreparationError {
+    IncompleteCalibration(CoordSystem),
+    NoPoints,
+    InvalidColumns(ExtraColumnLengthMismatch),
+}
+
+impl fmt::Display for ExportPreparationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IncompleteCalibration(CoordSystem::Cartesian) => {
+                formatter.write_str("Complete both axis calibrations before export.")
+            }
+            Self::IncompleteCalibration(CoordSystem::Polar) => {
+                formatter.write_str("Complete origin, radius, and angle calibration before export.")
+            }
+            Self::NoPoints => formatter.write_str("Nothing to export. Add data points first."),
+            Self::InvalidColumns(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ExportPreparationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidColumns(error) => Some(error),
+            Self::IncompleteCalibration(_) | Self::NoPoints => None,
+        }
+    }
+}
 
 impl CurcatApp {
     pub(crate) fn collect_numeric_points_in_order(&self) -> Vec<XYPoint> {
@@ -29,7 +64,8 @@ impl CurcatApp {
     }
 
     pub(crate) fn auto_tune_sample_count(&mut self) {
-        if !self.calibration_ready() {
+        let mapping = self.calibration_mapping();
+        if !mapping.is_ready() {
             self.set_status_warn(match self.calibration.coord_system {
                 CoordSystem::Cartesian => match self.ui.language {
                     UiLanguage::En => "Complete both axis calibrations before auto-tuning samples.",
@@ -47,21 +83,13 @@ impl CurcatApp {
             return;
         }
 
-        let (x_mapping, y_mapping) = self.cartesian_mappings();
-        let polar_mapping = self.polar_mapping();
-
         let algo = self.export.interp_algorithm;
         let min_samples = super::SAMPLE_COUNT_MIN;
         let max_samples = self.config.export.samples_max_sanitized();
         let rel_tol = self.config.export.auto_rel_tolerance_sanitized();
         let ref_samples = self.config.export.auto_ref_samples_sanitized();
 
-        self.ensure_point_numeric_cache(
-            self.calibration.coord_system,
-            x_mapping.as_ref(),
-            y_mapping.as_ref(),
-            polar_mapping.as_ref(),
-        );
+        self.ensure_point_numeric_cache(mapping);
         let nums = self.sorted_numeric_points_cache();
         if nums.len() < 2 {
             self.set_status_warn(match self.ui.language {
@@ -77,76 +105,59 @@ impl CurcatApp {
         self.set_status(self.i18n().format_sample_count_tuned(suggested));
     }
 
-    pub(crate) fn build_export_payload(&mut self) -> Result<ExportPayload, &'static str> {
-        if !self.calibration_ready() {
-            return Err(match self.calibration.coord_system {
-                CoordSystem::Cartesian => "Complete both axis calibrations before export.",
-                CoordSystem::Polar => {
-                    "Complete origin, radius, and angle calibration before export."
-                }
-            });
-        }
-
-        let (x_mapping, y_mapping) = self.cartesian_mappings();
-        let polar_mapping = self.polar_mapping();
+    pub(super) fn build_export_payload(&mut self) -> Result<ExportPayload, ExportPreparationError> {
+        let mapping = self.calibration_mapping();
         let (x_label, y_label) = self.axis_labels();
 
-        let (x_unit, y_unit, angle_unit) = match self.calibration.coord_system {
-            CoordSystem::Cartesian => {
-                let x_unit = x_mapping
-                    .as_ref()
-                    .map(crate::types::AxisMapping::unit)
-                    .ok_or("Complete both axis calibrations before export.")?;
-                let y_unit = y_mapping
-                    .as_ref()
-                    .map(crate::types::AxisMapping::unit)
-                    .ok_or("Complete both axis calibrations before export.")?;
-                (x_unit, y_unit, None)
+        let coordinates = match mapping {
+            CalibrationMapping::Cartesian {
+                x: Some(x),
+                y: Some(y),
+            } => ExportCoordinates::Cartesian {
+                x_unit: x.unit(),
+                y_unit: y.unit(),
+            },
+            CalibrationMapping::Polar(Some(polar)) => ExportCoordinates::Polar {
+                angle_unit: polar.angle_unit(),
+            },
+            CalibrationMapping::Cartesian { .. } => {
+                return Err(ExportPreparationError::IncompleteCalibration(
+                    CoordSystem::Cartesian,
+                ));
             }
-            CoordSystem::Polar => (
-                AxisUnit::Float,
-                AxisUnit::Float,
-                polar_mapping
-                    .as_ref()
-                    .map(super::super::types::PolarMapping::angle_unit),
-            ),
+            CalibrationMapping::Polar(None) => {
+                return Err(ExportPreparationError::IncompleteCalibration(
+                    CoordSystem::Polar,
+                ));
+            }
         };
 
-        self.ensure_point_numeric_cache(
-            self.calibration.coord_system,
-            x_mapping.as_ref(),
-            y_mapping.as_ref(),
-            polar_mapping.as_ref(),
-        );
+        self.ensure_point_numeric_cache(mapping);
 
         let data = match self.export.export_kind {
             super::ExportKind::Interpolated => self.build_interpolated_samples(),
             super::ExportKind::RawPoints => self.collect_numeric_points_in_order(),
         };
         if data.is_empty() {
-            return Err("Nothing to export. Add data points first.");
+            return Err(ExportPreparationError::NoPoints);
         }
 
         let mut extra_columns = match self.export.export_kind {
             super::ExportKind::Interpolated => Vec::new(),
             super::ExportKind::RawPoints => self.build_raw_extra_columns(&data),
         };
-        if self.calibration.coord_system == CoordSystem::Polar
-            && self.export.polar_export_include_cartesian
-            && let Some(unit) = angle_unit
+        if self.export.polar_export_include_cartesian
+            && let Some(unit) = coordinates.angle_unit()
         {
             extra_columns.extend(Self::polar_cartesian_columns(&data, unit));
         }
-        Ok(ExportPayload {
-            points: data,
-            x_unit,
-            y_unit,
-            x_label: x_label.to_string(),
-            y_label: y_label.to_string(),
-            coord_system: self.calibration.coord_system,
-            angle_unit,
+        ExportPayload::try_new(
+            data,
+            coordinates,
+            [x_label.to_string(), y_label.to_string()],
             extra_columns,
-        })
+        )
+        .map_err(ExportPreparationError::InvalidColumns)
     }
 
     fn build_raw_extra_columns(&self, raw_points: &[XYPoint]) -> Vec<ExportExtraColumn> {

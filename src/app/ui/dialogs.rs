@@ -91,7 +91,7 @@ impl CurcatApp {
                     format,
                 });
             }
-            Err(msg) => self.set_status_warn(msg),
+            Err(error) => self.set_status_warn(error.to_string()),
         }
     }
 
