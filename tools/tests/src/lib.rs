@@ -1,0 +1,1 @@
+//! Curcat UI interaction tests.

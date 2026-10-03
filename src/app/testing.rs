@@ -1,0 +1,83 @@
+//! Narrow UI test and profiling interface, available only with the `testing` feature.
+
+use super::{CurcatApp, PickedPoint};
+use crate::{
+    config::{AppConfig, UiConfig},
+    image::LoadedImage,
+};
+use egui::{ColorImage, Pos2, Rect, pos2};
+
+pub use crate::i18n::UiLanguage;
+
+pub struct AppState<'a> {
+    pub image_rect: Option<Rect>,
+    pub zoom: f32,
+    pub points: usize,
+    pub x1: Option<Pos2>,
+    pub x1_text: &'a str,
+    pub holding: bool,
+    pub auto_placing: bool,
+    pub picking: bool,
+    pub guides: usize,
+}
+
+/// Build a calibrated in-memory fixture without reading user configuration or files.
+#[must_use]
+pub fn from_image(
+    ctx: &egui::Context,
+    image: ColorImage,
+    points: impl IntoIterator<Item = Pos2>,
+    language: UiLanguage,
+) -> CurcatApp {
+    egui_extras::install_image_loaders(ctx);
+    let config = AppConfig {
+        smooth_zoom: false,
+        ui: UiConfig {
+            language: Some(language),
+        },
+        ..AppConfig::default()
+    };
+    let mut app = CurcatApp::from_config(config);
+    let size = image.size;
+    let image = LoadedImage::from_color_image(ctx, image);
+    app.image.base_pixels = Some(std::sync::Arc::clone(&image.pixels));
+    app.image.image = Some(image);
+    let width = super::safe_usize_to_f32(size[0]);
+    let height = super::safe_usize_to_f32(size[1]);
+    app.calibration.cal_x.p1 = Some(pos2(width * 0.1, height * 0.9));
+    app.calibration.cal_x.p2 = Some(pos2(width * 0.9, height * 0.9));
+    app.calibration.cal_y.p1 = app.calibration.cal_x.p1;
+    app.calibration.cal_y.p2 = Some(pos2(width * 0.1, height * 0.1));
+    for axis in [&mut app.calibration.cal_x, &mut app.calibration.cal_y] {
+        axis.v1_text = "0".into();
+        axis.v2_text = "1".into();
+    }
+    app.points.points = points.into_iter().map(PickedPoint::new).collect();
+    app
+}
+
+pub fn render(app: &mut CurcatApp, ui: &mut egui::Ui) {
+    app.render(ui);
+}
+
+impl CurcatApp {
+    #[must_use]
+    pub fn inspect(&self) -> AppState<'_> {
+        AppState {
+            image_rect: self.image_rect,
+            zoom: self.image.zoom,
+            points: self.points.points.len(),
+            x1: self.calibration.cal_x.p1,
+            x1_text: &self.calibration.cal_x.v1_text,
+            holding: self.interaction.auto_place_state.hold_started_at.is_some(),
+            auto_placing: self.interaction.auto_place_state.active,
+            picking: !matches!(self.calibration.pick_mode, super::PickMode::None),
+            guides: self.calibration.snap_guides.iter().flatten().count(),
+        }
+    }
+
+    #[must_use]
+    pub fn point_pixel(&self, index: usize) -> Option<Pos2> {
+        self.points.points.get(index).map(|point| point.pixel)
+    }
+}

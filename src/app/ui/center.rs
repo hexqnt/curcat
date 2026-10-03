@@ -2106,6 +2106,10 @@ impl CurcatApp {
 
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_central_image(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        #[cfg(feature = "testing")]
+        {
+            self.image_rect = None;
+        }
         self.image.last_pixels_per_point = ctx.pixels_per_point().max(1.0);
         self.image.last_viewport_size = Some(ui.available_size());
         self.apply_pending_fit_on_load();
@@ -2138,6 +2142,10 @@ impl CurcatApp {
                 let image = egui::Image::new((tex_id, display_size));
                 let response = self.add_centered_image(ui, image, display_size);
                 let rect = response.rect;
+                #[cfg(feature = "testing")]
+                {
+                    self.image_rect = Some(rect);
+                }
                 image_screen_rect = Some(rect);
                 image_base_size = Some(base_size);
                 let painter = ui.painter_at(rect);
@@ -2700,12 +2708,11 @@ impl CurcatApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        CalTarget, CalibrationSnapKind, CartesianEndpointId, CurcatApp, PrimaryImageGesture,
-        PrimaryPressInfo, clamp_line_drag_delta, is_soft_primary_click, line_drag_hit_distance,
+        CalTarget, CalibrationSnapKind, CartesianEndpointId, CurcatApp, clamp_line_drag_delta,
+        line_drag_hit_distance,
     };
     use crate::types::CoordSystem;
     use egui::{Pos2, Rect, Vec2, pos2, vec2};
-    use std::time::{Duration, Instant};
 
     fn assert_vec2_close(actual: Vec2, expected: Vec2) {
         assert!((actual.x - expected.x).abs() <= f32::EPSILON);
@@ -2734,100 +2741,6 @@ mod tests {
         let rect = Rect::from_min_max(pos2(10.0, 20.0), pos2(30.0, 40.0));
         let pos = CurcatApp::pos_in_rect(Some(pos2(35.0, 25.0)), rect);
         assert!(pos.is_none());
-    }
-
-    #[test]
-    fn soft_primary_click_requires_hovered_response() {
-        let rect = Rect::from_min_max(pos2(10.0, 10.0), pos2(50.0, 50.0));
-        let now = Instant::now();
-        let press = PrimaryPressInfo {
-            pos: pos2(20.0, 20.0),
-            time: now.checked_sub(Duration::from_millis(20)).unwrap_or(now),
-            in_rect: true,
-            shift_down: false,
-        };
-        let clicked = is_soft_primary_click(&press, Some(pos2(21.0, 20.5)), rect, false);
-        assert!(!clicked);
-    }
-
-    #[test]
-    fn soft_primary_click_accepts_short_release_inside_hovered_image() {
-        let rect = Rect::from_min_max(pos2(10.0, 10.0), pos2(50.0, 50.0));
-        let now = Instant::now();
-        let press = PrimaryPressInfo {
-            pos: pos2(20.0, 20.0),
-            time: now.checked_sub(Duration::from_millis(20)).unwrap_or(now),
-            in_rect: true,
-            shift_down: false,
-        };
-        let clicked = is_soft_primary_click(&press, Some(pos2(22.0, 21.0)), rect, true);
-        assert!(clicked);
-    }
-
-    fn primary_gesture_for_test(
-        down: bool,
-        pressed: bool,
-        started_in_image: bool,
-    ) -> PrimaryImageGesture {
-        PrimaryImageGesture {
-            down,
-            pressed,
-            started_in_image,
-            pointer_over_image: started_in_image,
-            clicked: false,
-            click_pos: None,
-        }
-    }
-
-    #[test]
-    fn auto_place_tick_ignores_presses_started_outside_image() {
-        let mut app = CurcatApp::default();
-        let suppressed = app.auto_place_tick(
-            Some(pos2(100.0, 100.0)),
-            primary_gesture_for_test(true, true, false),
-            false,
-            false,
-            true,
-        );
-        assert!(!suppressed);
-        assert!(!app.interaction.auto_place_state.active);
-        assert!(app.interaction.auto_place_state.hold_started_at.is_none());
-    }
-
-    #[test]
-    fn auto_place_tick_starts_hold_only_for_image_origin_press() {
-        let mut app = CurcatApp::default();
-        let _ = app.auto_place_tick(
-            Some(pos2(100.0, 100.0)),
-            primary_gesture_for_test(true, true, true),
-            false,
-            false,
-            true,
-        );
-        assert!(app.interaction.auto_place_state.hold_started_at.is_some());
-    }
-
-    #[test]
-    fn auto_place_tick_resets_hold_when_pointer_leaves_image() {
-        let mut app = CurcatApp::default();
-        let _ = app.auto_place_tick(
-            Some(pos2(100.0, 100.0)),
-            primary_gesture_for_test(true, true, true),
-            false,
-            false,
-            true,
-        );
-        assert!(app.interaction.auto_place_state.hold_started_at.is_some());
-
-        let _ = app.auto_place_tick(
-            None,
-            primary_gesture_for_test(true, false, true),
-            false,
-            false,
-            true,
-        );
-        assert!(app.interaction.auto_place_state.hold_started_at.is_none());
-        assert!(!app.interaction.auto_place_state.active);
     }
 
     fn cartesian_app(x1: Pos2, x2: Pos2, y1: Pos2, y2: Pos2) -> CurcatApp {

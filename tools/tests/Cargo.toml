@@ -1,0 +1,20 @@
+[package]
+name = "curcat-ui-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0 OR MIT"
+description = "Curcat UI interaction tests"
+repository = "https://github.com/hexqnt/curcat"
+readme = "../../README.md"
+keywords = ["testing", "profiling"]
+categories = ["development-tools::testing"]
+
+[dev-dependencies]
+curcat = { path = "../..", features = ["testing"] }
+egui = "0.36"
+egui_kittest = "0.36.2"
+curcat-test-support = { path = "../test-support" }
+
+[lints]
+workspace = true

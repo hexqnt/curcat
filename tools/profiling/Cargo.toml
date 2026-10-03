@@ -1,0 +1,19 @@
+[package]
+name = "curcat-profiling"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0 OR MIT"
+description = "Reproducible Curcat UI profiling workloads"
+repository = "https://github.com/hexqnt/curcat"
+readme = "../../README.md"
+keywords = ["testing", "profiling"]
+categories = ["development-tools::testing"]
+
+[dev-dependencies]
+curcat = { path = "../..", features = ["testing"] }
+curcat-test-support = { path = "../test-support" }
+serde_json = "1.0"
+
+[lints]
+workspace = true

@@ -1,18 +1,4 @@
-#![feature(portable_simd)]
-
-mod app;
-mod config;
-mod export;
-mod i18n;
-mod image;
-mod interp;
-mod pixel_simd;
-mod project;
-mod snap;
-mod types;
-mod util;
-
-use app::CurcatApp;
+use curcat::CurcatApp;
 use std::path::PathBuf;
 
 fn main() -> eframe::Result<()> {

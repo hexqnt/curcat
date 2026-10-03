@@ -152,12 +152,18 @@ impl CurcatApp {
                 UiLanguage::En => format!("Value of the calibration point ({name})"),
                 UiLanguage::Ru => format!("Значение калибровочной точки ({name})"),
             };
-            ui.add_sized([label_width, row_height], egui::Label::new(value_label))
+            let value_label = ui
+                .add_sized([label_width, row_height], egui::Label::new(value_label))
                 .on_hover_text(value_hover);
             let value_resp = {
                 let mut buffer = AxisFilteredText::new(value_text, unit);
                 ui.add_sized([value_width, row_height], TextEdit::singleline(&mut buffer))
             };
+            // Link labels only for querying fields in UI tests.
+            #[cfg(feature = "testing")]
+            let value_resp = value_resp.labelled_by(value_label.id);
+            #[cfg(not(feature = "testing"))]
+            let _ = value_label;
             let value_resp = value_resp.on_hover_text(match unit {
                 AxisUnit::Float => match language {
                     UiLanguage::En => "Enter a number (e.g., 1.23)",

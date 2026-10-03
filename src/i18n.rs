@@ -12,6 +12,7 @@ pub enum UiLanguage {
 impl UiLanguage {
     pub const ALL: [Self; 2] = [Self::En, Self::Ru];
 
+    #[must_use]
     pub fn detect_system() -> Self {
         for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
             if let Ok(value) = std::env::var(var)
@@ -23,6 +24,7 @@ impl UiLanguage {
         Self::En
     }
 
+    #[must_use]
     pub fn from_locale_tag(tag: &str) -> Option<Self> {
         let normalized = tag
             .split('.')

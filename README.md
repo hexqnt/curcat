@@ -113,3 +113,18 @@ Export shortcuts are shown next to their commands in the application.
 ## Configuration
 
 Curcat works without a configuration file. To customize colors, interaction settings, export limits, or the interface language, copy and edit the provided [`curcat.toml`](./example_config/curcat.toml). Place it next to the executable or in your platform's Curcat configuration directory.
+
+## Tests and profiling
+
+```bash
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+```
+
+```bash
+./profiling.sh ui
+CURCAT_PROFILE_POINTS=5000 CURCAT_PROFILE_FRAMES=4800 ./profiling.sh ui
+./profiling.sh ui-record
+./profiling.sh ui-stat
+```

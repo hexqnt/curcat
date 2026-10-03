@@ -38,6 +38,9 @@ mod snap_state;
 mod ui;
 mod ui_state;
 
+#[cfg(feature = "testing")]
+pub mod testing;
+
 use calibration::CalibrationMapping;
 
 pub use crate::util::safe_usize_to_f32;
@@ -69,6 +72,8 @@ pub struct CurcatApp {
     export: ExportState,
     interaction: InteractionState,
     ui: UiState,
+    #[cfg(feature = "testing")]
+    image_rect: Option<egui::Rect>,
 }
 
 enum DialogPoll {
@@ -79,9 +84,14 @@ enum DialogPoll {
 }
 
 impl Default for CurcatApp {
-    #[allow(clippy::too_many_lines)]
     fn default() -> Self {
-        let config = AppConfig::load();
+        Self::from_config(AppConfig::load())
+    }
+}
+
+impl CurcatApp {
+    #[allow(clippy::too_many_lines)]
+    fn from_config(config: AppConfig) -> Self {
         let language = config
             .ui_language()
             .unwrap_or_else(UiLanguage::detect_system);
@@ -92,6 +102,8 @@ impl Default for CurcatApp {
             .copied()
             .unwrap_or(Color32::from_rgb(236, 214, 96));
         Self {
+            #[cfg(feature = "testing")]
+            image_rect: None,
             config,
             image: ImageState {
                 image: None,
@@ -206,6 +218,7 @@ impl Default for CurcatApp {
 
 impl CurcatApp {
     /// Create a new app and optionally queue an initial image load.
+    #[must_use]
     pub fn new_with_initial_path(ctx: &Context, initial_path: Option<&Path>) -> Self {
         egui_extras::install_image_loaders(ctx);
         let mut app = Self::default();
@@ -801,8 +814,14 @@ impl CurcatApp {
 }
 
 impl eframe::App for CurcatApp {
-    #[allow(clippy::too_many_lines)]
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.render(root_ui);
+    }
+}
+
+impl CurcatApp {
+    #[allow(clippy::too_many_lines)]
+    fn render(&mut self, root_ui: &mut egui::Ui) {
         let ctx = root_ui.ctx().clone();
         let title = match self.ui.language {
             UiLanguage::En => "Curcat — Graph Digitizer",

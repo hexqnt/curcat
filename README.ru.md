@@ -113,3 +113,18 @@ Curcat распознаёт даты в форматах `YYYY-MM-DD`, `YYYY-MM-
 ## Конфигурация
 
 Curcat работает без файла конфигурации. Чтобы настроить цвета, управление, ограничения экспорта или язык интерфейса, скопируйте и отредактируйте готовый пример [`curcat.toml`](./example_config/curcat.toml). Поместите файл рядом с исполняемым файлом либо в каталог настроек Curcat вашей системы.
+
+## Тесты и профилирование
+
+```bash
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+```
+
+```bash
+./profiling.sh ui
+CURCAT_PROFILE_POINTS=5000 CURCAT_PROFILE_FRAMES=4800 ./profiling.sh ui
+./profiling.sh ui-record
+./profiling.sh ui-stat
+```

@@ -9,6 +9,15 @@ readme = "README.md"
 keywords = ["digitizer", "chart", "graph", "egui", "calibration"]
 categories = ["graphics", "visualization", "gui"]
 
+[workspace]
+members = ["tools/test-support", "tools/tests", "tools/profiling"]
+default-members = [".", "tools/tests", "tools/profiling"]
+resolver = "3"
+
+[features]
+default = []
+testing = []
+
 [dependencies]
 arboard = "3.6"
 egui = "0.36"
@@ -70,7 +79,10 @@ strip = false
 name = "pixel_pipeline"
 harness = false
 
-[lints.clippy]
+[lints]
+workspace = true
+
+[workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
