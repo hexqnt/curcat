@@ -2610,28 +2610,24 @@ impl CurcatApp {
         };
 
         let now = Instant::now();
-        let cfg = self.interaction.auto_place_cfg;
+        let parameters = self.interaction.auto_place_parameters;
 
-        if self.interaction.auto_place_state.hold_started_at.is_none() {
-            self.interaction.auto_place_state.hold_started_at = Some(now);
-            self.interaction.auto_place_state.last_pointer = Some((pixel, now));
-            self.interaction.auto_place_state.pause_started_at = None;
-            self.interaction.auto_place_state.speed_ewma = 0.0;
-        }
+        let state = &mut self.interaction.auto_place_state;
+        let hold_started_at = if let Some(started_at) = state.hold_started_at {
+            started_at
+        } else {
+            state.hold_started_at = Some(now);
+            state.last_pointer = Some((pixel, now));
+            state.pause_started_at = None;
+            state.speed_ewma = 0.0;
+            now
+        };
 
-        if !self.interaction.auto_place_state.active {
-            let hold_started_at =
-                if let Some(started_at) = self.interaction.auto_place_state.hold_started_at {
-                    started_at
-                } else {
-                    eprintln!("auto-place: missing hold start; resetting timer");
-                    self.interaction.auto_place_state.hold_started_at = Some(now);
-                    now
-                };
+        if !state.active {
             let hold_elapsed = now.saturating_duration_since(hold_started_at).as_secs_f32();
-            if hold_elapsed >= cfg.hold_activation_secs {
-                self.interaction.auto_place_state.active = true;
-                self.interaction.auto_place_state.suppress_click = true;
+            if hold_elapsed >= parameters.hold_activation_secs() {
+                state.active = true;
+                state.suppress_click = true;
                 suppress_click = true;
                 self.update_auto_place_speed(pixel, now);
                 self.try_auto_place_point(pixel, now);
@@ -2653,11 +2649,7 @@ impl CurcatApp {
                 .max(f32::EPSILON);
             let dist = (pixel - prev).length();
             let inst_speed = dist / dt;
-            let alpha = self
-                .interaction
-                .auto_place_cfg
-                .speed_smoothing
-                .clamp(0.0, 1.0);
+            let alpha = self.interaction.auto_place_parameters.speed_smoothing();
             let prev_speed = self.interaction.auto_place_state.speed_ewma;
             self.interaction.auto_place_state.speed_ewma =
                 if alpha <= f32::EPSILON || !prev_speed.is_finite() || prev_speed <= f32::EPSILON {
@@ -2672,23 +2664,15 @@ impl CurcatApp {
     }
 
     fn try_auto_place_point(&mut self, pointer_pixel: Pos2, now: Instant) -> bool {
-        let cfg = self.interaction.auto_place_cfg;
+        let parameters = self.interaction.auto_place_parameters;
         let speed = self.interaction.auto_place_state.speed_ewma.max(0.0);
-        let distance_threshold =
-            (speed * cfg.distance_per_speed).clamp(cfg.distance_min, cfg.distance_max);
-        let time_threshold = if speed <= f32::EPSILON {
-            cfg.time_max_secs
-        } else {
-            (cfg.time_per_speed / speed).clamp(cfg.time_min_secs, cfg.time_max_secs)
-        };
-
-        let paused = if speed < cfg.pause_speed_threshold {
+        let paused = if parameters.is_pause_speed(speed) {
             let start = self
                 .interaction
                 .auto_place_state
                 .pause_started_at
                 .get_or_insert(now);
-            now.saturating_duration_since(*start).as_millis() >= u128::from(cfg.pause_timeout_ms)
+            now.saturating_duration_since(*start) >= parameters.pause_timeout()
         } else {
             self.interaction.auto_place_state.pause_started_at = None;
             false
@@ -2701,11 +2685,8 @@ impl CurcatApp {
 
         if let Some((last_pos, last_time)) = self.interaction.auto_place_state.last_snapped_point {
             let dist = (snapped - last_pos).length();
-            if dist < cfg.dedup_radius {
-                return false;
-            }
-            let elapsed = now.saturating_duration_since(last_time).as_secs_f32();
-            if dist < distance_threshold || elapsed < time_threshold {
+            if !parameters.accepts_next_point(dist, now.saturating_duration_since(last_time), speed)
+            {
                 return false;
             }
         }

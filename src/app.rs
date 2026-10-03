@@ -85,7 +85,7 @@ impl Default for CurcatApp {
         let language = config
             .ui_language()
             .unwrap_or_else(UiLanguage::detect_system);
-        let auto_place_cfg = config.auto_place();
+        let auto_place_parameters = config.auto_place();
         let default_overlay_choices = Self::default_snap_overlay_choices();
         let default_overlay_color = default_overlay_choices
             .first()
@@ -183,7 +183,7 @@ impl Default for CurcatApp {
                 polar_export_include_cartesian: false,
             },
             interaction: InteractionState {
-                auto_place_cfg,
+                auto_place_parameters,
                 auto_place_state: AutoPlaceState::default(),
                 auto_trace_cfg: AutoTraceConfig::default(),
                 primary_press: None,
@@ -771,9 +771,8 @@ impl CurcatApp {
         let origin_missing = self.calibration.polar_cal.origin.is_none();
         let radius = &self.calibration.polar_cal.radius;
         let (r1_invalid, r2_invalid) = radius.value_invalid_flags();
-        let mut angle = self.calibration.polar_cal.angle.clone();
-        angle.scale = ScaleKind::Linear;
-        let (a1_invalid, a2_invalid) = angle.value_invalid_flags();
+        let angle = &self.calibration.polar_cal.angle;
+        let (a1_invalid, a2_invalid) = angle.value_invalid_flags_for_scale(ScaleKind::Linear);
         origin_missing
             || radius.p1.is_none()
             || radius.p2.is_none()

@@ -1,3 +1,9 @@
+/// Clamp editable floats to finite bounds, replacing NaN with a caller-provided default.
+pub const fn clamp_f32_or_default(value: f32, min: f32, max: f32, default: f32) -> f32 {
+    let value = if value.is_nan() { default } else { value };
+    value.clamp(min, max)
+}
+
 pub fn safe_usize_to_f32(value: usize) -> f32 {
     u32_to_f32(u32::try_from(value).unwrap_or(u32::MAX))
 }

@@ -1,6 +1,7 @@
 //! Editable trace settings and bounded parameters for the tracing algorithm.
 
 use super::AutoTraceDirection;
+use crate::util::clamp_f32_or_default;
 
 /// Editable UI settings; the algorithm receives only normalized `TraceParameters`.
 #[derive(Debug, Clone, Copy)]
@@ -43,11 +44,11 @@ pub(super) struct TraceParameters {
 impl From<AutoTraceConfig> for TraceParameters {
     fn from(config: AutoTraceConfig) -> Self {
         let defaults = AutoTraceConfig::default();
-        let step_px = clamp_or_default(config.step_px, 1.0, 80.0, defaults.step_px);
+        let step_px = clamp_f32_or_default(config.step_px, 1.0, 80.0, defaults.step_px);
         Self {
             direction: config.direction,
             step_px,
-            search_radius_px: clamp_or_default(
+            search_radius_px: clamp_f32_or_default(
                 config.search_radius,
                 2.0,
                 120.0,
@@ -55,13 +56,18 @@ impl From<AutoTraceConfig> for TraceParameters {
             ),
             max_steps_per_direction: config.max_points.clamp(2, 20_000),
             max_consecutive_misses: config.max_misses.min(1_000),
-            min_advance_px: clamp_or_default(
+            min_advance_px: clamp_f32_or_default(
                 config.min_advance,
                 0.1,
                 step_px,
                 defaults.min_advance,
             ),
-            min_spacing_px: clamp_or_default(config.dedup_radius, 0.0, 50.0, defaults.dedup_radius),
+            min_spacing_px: clamp_f32_or_default(
+                config.dedup_radius,
+                0.0,
+                50.0,
+                defaults.dedup_radius,
+            ),
         }
     }
 }
@@ -95,11 +101,6 @@ impl TraceParameters {
     pub(super) const fn min_spacing_px(&self) -> f32 {
         self.min_spacing_px
     }
-}
-
-const fn clamp_or_default(value: f32, min: f32, max: f32, default: f32) -> f32 {
-    let value = if value.is_nan() { default } else { value };
-    value.clamp(min, max)
 }
 
 #[cfg(test)]

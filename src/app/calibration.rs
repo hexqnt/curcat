@@ -177,9 +177,13 @@ impl AxisCalUi {
     }
 
     pub(super) fn value_invalid_flags(&self) -> (bool, bool) {
+        self.value_invalid_flags_for_scale(self.scale)
+    }
+
+    pub(super) fn value_invalid_flags_for_scale(&self, scale: ScaleKind) -> (bool, bool) {
         let (v1, v2) = self.parsed_values();
         let invalid_pair = if let (Some(a), Some(b)) = (&v1, &v2) {
-            AxisCalibrationValues::try_new(*a, *b, self.scale).is_err()
+            AxisCalibrationValues::try_new(*a, *b, scale).is_err()
         } else {
             false
         };

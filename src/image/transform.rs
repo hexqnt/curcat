@@ -1,6 +1,6 @@
 use egui::{Color32, ColorImage, Context, TextureHandle, TextureOptions};
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::sync::Arc;
 
 /// Minimum pixel count before parallelizing per-pixel transforms.
@@ -27,11 +27,16 @@ pub enum ImageTransformOp {
     FlipVertical,
 }
 
-/// Accumulated rotation/flip state for the loaded image.
+/// Accumulated transform with a quarter-turn count in 0..4; deserialization normalizes legacy counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageTransformRecord {
-    pub rotation_quarters: u8,
-    pub reflected: bool,
+    #[serde(deserialize_with = "deserialize_quarter_turns")]
+    rotation_quarters: u8,
+    reflected: bool,
+}
+
+fn deserialize_quarter_turns<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    u8::deserialize(deserializer).map(|turns| turns % 4)
 }
 
 impl ImageTransformRecord {
@@ -53,23 +58,25 @@ impl ImageTransformRecord {
                 self.rotation_quarters = (self.rotation_quarters + 3) % 4;
             }
             ImageTransformOp::FlipHorizontal => {
-                self.rotation_quarters = (4 - self.rotation_quarters % 4) % 4;
+                self.rotation_quarters = (4 - self.rotation_quarters) % 4;
                 self.reflected = !self.reflected;
             }
             ImageTransformOp::FlipVertical => {
-                self.rotation_quarters = (2 + 4 - self.rotation_quarters % 4) % 4;
+                self.rotation_quarters = (6 - self.rotation_quarters) % 4;
                 self.reflected = !self.reflected;
             }
         }
     }
 
-    /// Восстанавливает последовательность операций без промежуточного массива.
+    /// Replay reflection before rotation, matching the composition order used by `apply`.
     pub fn replay_operations(self) -> impl Iterator<Item = ImageTransformOp> {
-        std::iter::repeat_n(
-            ImageTransformOp::RotateCw,
-            usize::from(self.rotation_quarters % 4),
-        )
-        .chain(self.reflected.then_some(ImageTransformOp::FlipHorizontal))
+        self.reflected
+            .then_some(ImageTransformOp::FlipHorizontal)
+            .into_iter()
+            .chain(std::iter::repeat_n(
+                ImageTransformOp::RotateCw,
+                usize::from(self.rotation_quarters),
+            ))
     }
 }
 
@@ -217,6 +224,84 @@ mod tests {
                 color_id(6),
             ],
         )
+    }
+
+    fn apply_operation(image: &mut ColorImage, operation: ImageTransformOp) {
+        match operation {
+            ImageTransformOp::RotateCw => rotate_color_image_cw(image),
+            ImageTransformOp::RotateCcw => rotate_color_image_ccw(image),
+            ImageTransformOp::FlipHorizontal => flip_color_image_horizontal(image),
+            ImageTransformOp::FlipVertical => flip_color_image_vertical(image),
+        }
+    }
+
+    #[test]
+    fn accumulated_transforms_replay_the_same_pixels_for_every_state_and_operation() {
+        for reflected in [false, true] {
+            for rotation in 0..4 {
+                for next in [
+                    ImageTransformOp::RotateCw,
+                    ImageTransformOp::RotateCcw,
+                    ImageTransformOp::FlipHorizontal,
+                    ImageTransformOp::FlipVertical,
+                ] {
+                    let mut record = ImageTransformRecord::identity();
+                    let mut actual = test_image();
+                    let operations = reflected
+                        .then_some(ImageTransformOp::FlipHorizontal)
+                        .into_iter()
+                        .chain(std::iter::repeat_n(ImageTransformOp::RotateCw, rotation))
+                        .chain(std::iter::once(next));
+                    for operation in operations {
+                        apply_operation(&mut actual, operation);
+                        record.apply(operation);
+                    }
+                    let mut replayed = test_image();
+                    for operation in record.replay_operations() {
+                        apply_operation(&mut replayed, operation);
+                    }
+                    assert_eq!(
+                        actual.size, replayed.size,
+                        "{reflected}, {rotation}, {next:?}"
+                    );
+                    assert_eq!(
+                        actual.pixels, replayed.pixels,
+                        "{reflected}, {rotation}, {next:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_transform_counts_normalize_without_changing_the_binary_layout() {
+        let config = bincode::config::standard().with_little_endian();
+        for rotation in 0..=u8::MAX {
+            for reflected in [false, true] {
+                let encoded = bincode::serde::encode_to_vec((rotation, reflected), config).unwrap();
+                let (record, consumed): (ImageTransformRecord, _) =
+                    bincode::serde::decode_from_slice(&encoded, config).unwrap();
+                assert_eq!(consumed, encoded.len());
+                assert_eq!(record.rotation_quarters, rotation % 4);
+                assert_eq!(record.reflected, reflected);
+                let expected =
+                    bincode::serde::encode_to_vec((rotation % 4, reflected), config).unwrap();
+                assert_eq!(
+                    bincode::serde::encode_to_vec(record, config).unwrap(),
+                    expected
+                );
+                for operation in [
+                    ImageTransformOp::RotateCw,
+                    ImageTransformOp::RotateCcw,
+                    ImageTransformOp::FlipHorizontal,
+                    ImageTransformOp::FlipVertical,
+                ] {
+                    let mut transformed = record;
+                    transformed.apply(operation);
+                    assert!(transformed.rotation_quarters < 4);
+                }
+            }
+        }
     }
 
     #[test]

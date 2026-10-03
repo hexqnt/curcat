@@ -1,8 +1,13 @@
+mod auto_place;
+
+pub use auto_place::{AutoPlaceConfig, AutoPlaceParameters};
+
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
 use crate::i18n::UiLanguage;
+use crate::util::clamp_f32_or_default;
 use directories::{BaseDirs, ProjectDirs};
 use egui::{Color32, Stroke};
 use serde::{
@@ -223,8 +228,12 @@ impl ExportConfig {
 
     /// `auto_rel_tolerance` clamped to a safe range.
     pub fn auto_rel_tolerance_sanitized(&self) -> f64 {
-        let t = self.auto_rel_tolerance;
-        let clamped = t.clamp(1.0e-6, 1.0);
+        let clamped = clamp_f32_or_default(
+            self.auto_rel_tolerance,
+            1.0e-6,
+            1.0,
+            Self::default().auto_rel_tolerance,
+        );
         f64::from(clamped)
     }
 
@@ -298,7 +307,7 @@ impl AppConfig {
 
     /// Sanitized multiplier for panning speed.
     pub const fn pan_speed_factor(&self) -> f32 {
-        self.pan_speed.clamp(0.01, 50.0)
+        clamp_f32_or_default(self.pan_speed, 0.01, 50.0, 1.0)
     }
 
     /// Apply safety bounds to image limits.
@@ -307,7 +316,7 @@ impl AppConfig {
     }
 
     /// Apply safety bounds to auto-place parameters.
-    pub fn auto_place(&self) -> AutoPlaceConfig {
+    pub fn auto_place(&self) -> AutoPlaceParameters {
         self.auto_place.sanitized()
     }
 
@@ -403,71 +412,6 @@ impl ImageLimits {
             image_dim: dim,
             total_pixels: pixels,
             alloc_bytes: alloc,
-        }
-    }
-}
-
-/// Parameters that govern auto-placement of points.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(default)]
-pub struct AutoPlaceConfig {
-    pub hold_activation_secs: f32,
-    pub distance_min: f32,
-    pub distance_max: f32,
-    pub distance_per_speed: f32,
-    pub time_min_secs: f32,
-    pub time_max_secs: f32,
-    pub time_per_speed: f32,
-    pub pause_speed_threshold: f32,
-    pub pause_timeout_ms: u32,
-    pub dedup_radius: f32,
-    pub speed_smoothing: f32,
-}
-
-impl Default for AutoPlaceConfig {
-    fn default() -> Self {
-        Self {
-            hold_activation_secs: 1.25,
-            distance_min: 2.5,
-            distance_max: 24.0,
-            distance_per_speed: 0.01,
-            time_min_secs: 0.05,
-            time_max_secs: 0.28,
-            time_per_speed: 28.0,
-            pause_speed_threshold: 6.0,
-            pause_timeout_ms: 160,
-            dedup_radius: 1.5,
-            speed_smoothing: 0.25,
-        }
-    }
-}
-
-impl AutoPlaceConfig {
-    /// Clamp values to keep auto-placement stable and predictable.
-    pub fn sanitized(&self) -> Self {
-        let hold_activation_secs = self.hold_activation_secs.clamp(0.1, 10.0);
-        let distance_min = self.distance_min.clamp(0.1, 200.0);
-        let distance_max = self.distance_max.clamp(distance_min, 1_000.0);
-        let distance_per_speed = self.distance_per_speed.clamp(0.0, 1.0);
-        let time_min_secs = self.time_min_secs.clamp(0.01, 2.0);
-        let time_max_secs = self.time_max_secs.clamp(time_min_secs, 3.0);
-        let time_per_speed = self.time_per_speed.clamp(0.1, 1_000.0);
-        let pause_speed_threshold = self.pause_speed_threshold.clamp(0.0, 1_000.0);
-        let pause_timeout_ms = self.pause_timeout_ms.clamp(0, 10_000);
-        let dedup_radius = self.dedup_radius.clamp(0.0, 200.0);
-        let speed_smoothing = self.speed_smoothing.clamp(0.0, 1.0);
-        Self {
-            hold_activation_secs,
-            distance_min,
-            distance_max,
-            distance_per_speed,
-            time_min_secs,
-            time_max_secs,
-            time_per_speed,
-            pause_speed_threshold,
-            pause_timeout_ms,
-            dedup_radius,
-            speed_smoothing,
         }
     }
 }

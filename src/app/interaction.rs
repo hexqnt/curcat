@@ -1,5 +1,5 @@
 use super::auto_trace::AutoTraceConfig;
-use crate::config::AutoPlaceConfig;
+use crate::config::AutoPlaceParameters;
 use egui::Pos2;
 use std::time::Instant;
 
@@ -23,7 +23,7 @@ pub struct PrimaryPressInfo {
 }
 
 pub struct InteractionState {
-    pub(super) auto_place_cfg: AutoPlaceConfig,
+    pub(super) auto_place_parameters: AutoPlaceParameters,
     pub(super) auto_place_state: AutoPlaceState,
     pub(super) auto_trace_cfg: AutoTraceConfig,
     pub(super) primary_press: Option<PrimaryPressInfo>,

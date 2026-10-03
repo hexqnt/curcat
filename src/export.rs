@@ -2,6 +2,7 @@
 
 mod data;
 mod escape;
+mod structured;
 
 pub use data::{ExportCoordinates, ExportExtraColumn, ExportPayload, ExtraColumnLengthMismatch};
 
@@ -12,11 +13,8 @@ use crate::types::{AngleUnit, AxisUnit, AxisValue, CoordSystem};
 use chrono::{Datelike, Duration, Timelike};
 use ron::ser::PrettyConfig;
 use rust_xlsxwriter::{ExcelDateTime, Format, Workbook, XlsxError};
-use serde::Serialize;
-use serde::ser::Serializer;
-use serde_json::{Map, Number, Value};
-use std::collections::BTreeMap;
 use std::io::{BufWriter, Write};
+use structured::ExportDocument;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
@@ -407,125 +405,21 @@ pub fn export_to_xlsx(path: &std::path::Path, payload: &ExportPayload) -> Result
 /// The output contains `x_unit`, `y_unit`, and a `points` array. Floats are
 /// rounded to 6 fractional digits; `DateTime` values are emitted as strings.
 pub fn export_to_json(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
-    let mut points = Vec::with_capacity(payload.row_count());
-    for (row_index, p) in payload.points().iter().enumerate() {
-        let mut obj = Map::new();
-        obj.insert(
-            payload.x_label().to_owned(),
-            axis_value_to_json(payload.x_unit(), p.x, payload.x_label())?,
-        );
-        obj.insert(
-            payload.y_label().to_owned(),
-            axis_value_to_json(payload.y_unit(), p.y, payload.y_label())?,
-        );
-        for col in payload.extra_columns() {
-            let cell = col.values[row_index];
-            obj.insert(col.header.clone(), optional_number_json(cell));
-        }
-        points.push(Value::Object(obj));
-    }
-
-    let mut root = Map::new();
-    root.insert(
-        "coord_system".to_string(),
-        Value::String(coord_system_label(payload.coord_system()).to_string()),
-    );
-    root.insert(
-        "x_unit".to_string(),
-        Value::String(axis_unit_label(payload.x_unit()).to_string()),
-    );
-    root.insert(
-        "y_unit".to_string(),
-        Value::String(axis_unit_label(payload.y_unit()).to_string()),
-    );
-    root.insert(
-        "x_label".to_string(),
-        Value::String(payload.x_label().to_owned()),
-    );
-    root.insert(
-        "y_label".to_string(),
-        Value::String(payload.y_label().to_owned()),
-    );
-    if let Some(unit) = payload.angle_unit() {
-        root.insert(
-            "angle_unit".to_string(),
-            Value::String(angle_unit_label(unit).to_string()),
-        );
-    }
-    root.insert("points".to_string(), Value::Array(points));
-
-    let writer = BufWriter::new(std::fs::File::create(path)?);
-    serde_json::to_writer_pretty(writer, &Value::Object(root))?;
+    let document = ExportDocument::try_new(payload)?;
+    let mut writer = BufWriter::new(std::fs::File::create(path)?);
+    serde_json::to_writer_pretty(&mut writer, &document)?;
+    writer.flush()?;
     Ok(())
-}
-
-#[derive(Debug, Serialize)]
-struct RonExport<'a> {
-    coord_system: &'static str,
-    x_unit: &'static str,
-    y_unit: &'static str,
-    x_label: &'a str,
-    y_label: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    angle_unit: Option<&'static str>,
-    points: Vec<BTreeMap<&'a str, RonValue>>,
-}
-
-#[derive(Debug, Clone)]
-enum RonValue {
-    Number(f64),
-    String(String),
-    None,
-}
-
-impl Serialize for RonValue {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Self::Number(value) => serializer.serialize_f64(*value),
-            Self::String(value) => serializer.serialize_str(value),
-            Self::None => serializer.serialize_none(),
-        }
-    }
 }
 
 /// Write the payload to RON at the provided path.
 ///
 /// The output mirrors the JSON structure, using `None` for missing values.
 pub fn export_to_ron(path: &std::path::Path, payload: &ExportPayload) -> anyhow::Result<()> {
-    let mut points = Vec::with_capacity(payload.row_count());
-    for (row_index, p) in payload.points().iter().enumerate() {
-        let mut row = BTreeMap::new();
-        row.insert(
-            payload.x_label(),
-            axis_value_to_ron(payload.x_unit(), p.x, payload.x_label())?,
-        );
-        row.insert(
-            payload.y_label(),
-            axis_value_to_ron(payload.y_unit(), p.y, payload.y_label())?,
-        );
-        for col in payload.extra_columns() {
-            let cell = col.values[row_index];
-            row.insert(col.header.as_str(), optional_number_ron(cell));
-        }
-        points.push(row);
-    }
-
-    let doc = RonExport {
-        coord_system: coord_system_label(payload.coord_system()),
-        x_unit: axis_unit_label(payload.x_unit()),
-        y_unit: axis_unit_label(payload.y_unit()),
-        x_label: payload.x_label(),
-        y_label: payload.y_label(),
-        angle_unit: payload.angle_unit().map(angle_unit_label),
-        points,
-    };
-
-    let ron_string = ron::ser::to_string_pretty(&doc, PrettyConfig::default())?;
+    let document = ExportDocument::try_new(payload)?;
     let mut writer = BufWriter::new(std::fs::File::create(path)?);
-    writer.write_all(ron_string.as_bytes())?;
+    ron::Options::default().to_io_writer_pretty(&mut writer, &document, PrettyConfig::default())?;
+    writer.flush()?;
     Ok(())
 }
 
@@ -550,61 +444,13 @@ const fn angle_unit_label(unit: AngleUnit) -> &'static str {
     }
 }
 
-fn axis_value_to_json(unit: AxisUnit, scalar: f64, axis_label: &str) -> anyhow::Result<Value> {
-    match unit {
-        AxisUnit::Float => {
-            if !scalar.is_finite() {
-                anyhow::bail!("Cannot export non-finite float value {scalar}.");
-            }
-            Ok(rounded_number_json(scalar))
-        }
-        AxisUnit::DateTime => {
-            let value = axis_value_from_scalar_for_export(unit, scalar, axis_label)?;
-            Ok(Value::String(value.format()))
-        }
-    }
-}
-
-fn axis_value_to_ron(unit: AxisUnit, scalar: f64, axis_label: &str) -> anyhow::Result<RonValue> {
-    match unit {
-        AxisUnit::Float => {
-            if !scalar.is_finite() {
-                anyhow::bail!("Cannot export non-finite float value {scalar}.");
-            }
-            Ok(number_to_ron_value(scalar))
-        }
-        AxisUnit::DateTime => {
-            let value = axis_value_from_scalar_for_export(unit, scalar, axis_label)?;
-            Ok(RonValue::String(value.format()))
-        }
-    }
-}
-
-fn optional_number_json(value: Option<f64>) -> Value {
-    value.map_or(Value::Null, rounded_number_json)
-}
-
-fn optional_number_ron(value: Option<f64>) -> RonValue {
-    value.map_or(RonValue::None, number_to_ron_value)
-}
-
-fn number_to_ron_value(value: f64) -> RonValue {
-    let rounded = rounded_f64(value);
-    if rounded.is_finite() {
-        RonValue::Number(rounded)
-    } else {
-        RonValue::String(format!("{rounded}"))
-    }
-}
-
-fn rounded_number_json(value: f64) -> Value {
-    // Keep parity with CSV output: 6 fractional digits, rounded.
-    let rounded = rounded_f64(value);
-    Number::from_f64(rounded).map_or_else(|| Value::String(format!("{rounded}")), Value::Number)
-}
-
 fn rounded_f64(value: f64) -> f64 {
-    (value * 1_000_000.0).round() / 1_000_000.0
+    // Large finite floats already have no fractional digits; scaling them would overflow.
+    if value.abs() >= f64::MAX / 1_000_000.0 {
+        value
+    } else {
+        (value * 1_000_000.0).round() / 1_000_000.0
+    }
 }
 
 fn axis_value_to_excel_datetime(value: &AxisValue) -> Option<ExcelDateTime> {
@@ -655,6 +501,108 @@ mod tests {
     use ron::value::{Map, Value};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn structured_exports_preserve_duplicate_headers_dates_and_nonfinite_extras() {
+        let payload = ExportPayload::try_new(
+            vec![XYPoint { x: 0.0, y: 1.0 }, XYPoint { x: 1.5, y: 2.0 }],
+            ExportCoordinates::Cartesian {
+                x_unit: AxisUnit::DateTime,
+                y_unit: AxisUnit::Float,
+            },
+            ["time\"\nUTC".into(), "value".into()],
+            vec![
+                ExportExtraColumn::new("value", vec![Some(-1.0), Some(-2.0)]),
+                ExportExtraColumn::new("value", vec![None, Some(3.123_456_78)]),
+                ExportExtraColumn::new("special", vec![Some(f64::NAN), Some(f64::INFINITY)]),
+                ExportExtraColumn::new("large", vec![Some(f64::MAX), Some(-f64::MAX)]),
+            ],
+        )
+        .unwrap();
+        let json_path = temp_export_path("streamed_columns", "json");
+        export_to_json(&json_path, &payload).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&json_path).unwrap()).unwrap();
+        std::fs::remove_file(json_path).unwrap();
+        assert_eq!(json["points"][0]["time\"\nUTC"], "1970-01-01 00:00:00");
+        assert_eq!(json["points"][1]["time\"\nUTC"], "1970-01-01 00:00:01.5");
+        assert_eq!(json["points"][0]["value"], serde_json::Value::Null);
+        assert_eq!(json["points"][1]["value"], 3.123_457);
+        assert_eq!(json["points"][0]["special"], "NaN");
+        assert_eq!(json["points"][1]["special"], "inf");
+        assert_eq!(json["points"][0]["large"].as_f64(), Some(f64::MAX));
+        assert_eq!(json["points"][1]["large"].as_f64(), Some(-f64::MAX));
+
+        let ron_path = temp_export_path("streamed_columns", "ron");
+        export_to_ron(&ron_path, &payload).unwrap();
+        let ron: Value = ron::from_str(&std::fs::read_to_string(&ron_path).unwrap()).unwrap();
+        std::fs::remove_file(ron_path).unwrap();
+        let Value::Map(root) = ron else {
+            panic!("expected root map")
+        };
+        let Value::Seq(points) = map_value(&root, "points") else {
+            panic!("expected point sequence")
+        };
+        let Value::Map(first) = &points[0] else {
+            panic!("expected point map")
+        };
+        let Value::Map(second) = &points[1] else {
+            panic!("expected point map")
+        };
+        assert_eq!(string_value(first, "time\"\nUTC"), "1970-01-01 00:00:00");
+        assert_eq!(string_value(second, "time\"\nUTC"), "1970-01-01 00:00:01.5");
+        assert_eq!(map_value(first, "value"), &Value::Option(None));
+        assert_eq!(number_value(second, "value"), 3.123_457);
+        assert_eq!(string_value(first, "special"), "NaN");
+        assert_eq!(string_value(second, "special"), "inf");
+        assert_eq!(number_value(first, "large"), f64::MAX);
+        assert_eq!(number_value(second, "large"), -f64::MAX);
+    }
+
+    #[test]
+    fn invalid_structured_axes_do_not_truncate_the_destination() {
+        for format in [ExportFormat::Json, ExportFormat::Ron] {
+            for (unit, value) in [(AxisUnit::Float, f64::NAN), (AxisUnit::DateTime, f64::MAX)] {
+                let payload = ExportPayload::try_new(
+                    vec![XYPoint { x: value, y: 1.0 }],
+                    ExportCoordinates::Cartesian {
+                        x_unit: unit,
+                        y_unit: AxisUnit::Float,
+                    },
+                    ["x".into(), "y".into()],
+                    Vec::new(),
+                )
+                .unwrap();
+                let path = temp_export_path("invalid_structured_axis", format.extension());
+                std::fs::write(&path, b"existing data").unwrap();
+                assert!(format.export(&path, &payload).is_err());
+                assert_eq!(std::fs::read(&path).unwrap(), b"existing data");
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn structured_exports_report_buffer_flush_failures() {
+        let payload = ExportPayload::try_new(
+            Vec::new(),
+            ExportCoordinates::Cartesian {
+                x_unit: AxisUnit::Float,
+                y_unit: AxisUnit::Float,
+            },
+            ["x".into(), "y".into()],
+            Vec::new(),
+        )
+        .unwrap();
+        for format in [ExportFormat::Json, ExportFormat::Ron] {
+            assert!(
+                format
+                    .export(std::path::Path::new("/dev/full"), &payload)
+                    .is_err()
+            );
+        }
+    }
 
     fn map_value<'a>(map: &'a Map, key: &str) -> &'a Value {
         map.get(&Value::String(key.to_string()))

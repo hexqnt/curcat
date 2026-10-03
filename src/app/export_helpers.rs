@@ -6,7 +6,9 @@ use crate::export::{
     sequential_distances, turning_angles,
 };
 use crate::i18n::UiLanguage;
-use crate::interp::{XYPoint, auto_sample_count, interpolate_sorted};
+use crate::interp::{
+    InvalidInterpolationPoints, SortedPoints, XYPoint, auto_sample_count, interpolate_sorted,
+};
 use crate::types::{AngleUnit, CoordSystem};
 use std::fmt;
 
@@ -15,6 +17,7 @@ pub(super) enum ExportPreparationError {
     IncompleteCalibration(CoordSystem),
     NoPoints,
     InvalidColumns(ExtraColumnLengthMismatch),
+    InvalidPoints(InvalidInterpolationPoints),
 }
 
 impl fmt::Display for ExportPreparationError {
@@ -28,6 +31,7 @@ impl fmt::Display for ExportPreparationError {
             }
             Self::NoPoints => formatter.write_str("Nothing to export. Add data points first."),
             Self::InvalidColumns(error) => error.fmt(formatter),
+            Self::InvalidPoints(error) => error.fmt(formatter),
         }
     }
 }
@@ -36,6 +40,7 @@ impl std::error::Error for ExportPreparationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidColumns(error) => Some(error),
+            Self::InvalidPoints(error) => Some(error),
             Self::IncompleteCalibration(_) | Self::NoPoints => None,
         }
     }
@@ -53,14 +58,15 @@ impl CurcatApp {
             .collect()
     }
 
-    pub(crate) fn build_interpolated_samples(&mut self) -> Vec<XYPoint> {
+    fn build_interpolated_samples(&mut self) -> Result<Vec<XYPoint>, ExportPreparationError> {
         let sample_count = self.export.sample_count;
         let algo = self.export.interp_algorithm;
         let nums = self.sorted_numeric_points_cache();
         if nums.len() < 2 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        interpolate_sorted(nums, sample_count, algo)
+        let points = SortedPoints::try_from(nums).map_err(ExportPreparationError::InvalidPoints)?;
+        Ok(interpolate_sorted(points, sample_count, algo))
     }
 
     pub(crate) fn auto_tune_sample_count(&mut self) {
@@ -99,8 +105,15 @@ impl CurcatApp {
             return;
         }
 
+        let points = match SortedPoints::try_from(nums) {
+            Ok(points) => points,
+            Err(error) => {
+                self.set_status_error(error.to_string());
+                return;
+            }
+        };
         let suggested =
-            auto_sample_count(nums, algo, min_samples, max_samples, rel_tol, ref_samples);
+            auto_sample_count(points, algo, min_samples, max_samples, rel_tol, ref_samples);
         self.export.sample_count = suggested;
         self.set_status(self.i18n().format_sample_count_tuned(suggested));
     }
@@ -135,7 +148,7 @@ impl CurcatApp {
         self.ensure_point_numeric_cache(mapping);
 
         let data = match self.export.export_kind {
-            super::ExportKind::Interpolated => self.build_interpolated_samples(),
+            super::ExportKind::Interpolated => self.build_interpolated_samples()?,
             super::ExportKind::RawPoints => self.collect_numeric_points_in_order(),
         };
         if data.is_empty() {

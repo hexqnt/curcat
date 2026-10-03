@@ -7,6 +7,7 @@ use std::simd::cmp::SimdPartialOrd;
 use std::simd::num::SimdFloat;
 
 use crate::pixel_simd::{F32x8, LANES, U32x8, unpack_rgba_block};
+use crate::util::clamp_f32_or_default;
 
 type U32x4 = Simd<u32, 4>;
 
@@ -46,7 +47,7 @@ impl Default for ImageFilters {
     }
 }
 
-/// Нормализованные настройки с закодированным состоянием threshold.
+/// Finite, bounded settings with threshold activation encoded as an optional value.
 #[derive(Debug, Clone, Copy)]
 struct SanitizedImageFilters {
     brightness: f32,
@@ -60,13 +61,13 @@ struct SanitizedImageFilters {
 impl ImageFilters {
     fn sanitized(self) -> SanitizedImageFilters {
         SanitizedImageFilters {
-            brightness: self.brightness.clamp(-1.0, 1.0),
-            contrast: self.contrast.clamp(-1.0, 1.0),
-            gamma: self.gamma.clamp(0.2, 5.0),
+            brightness: clamp_f32_or_default(self.brightness, -1.0, 1.0, 0.0),
+            contrast: clamp_f32_or_default(self.contrast, -1.0, 1.0, 0.0),
+            gamma: clamp_f32_or_default(self.gamma, 0.2, 5.0, 1.0),
             invert: self.invert,
             threshold: self
                 .threshold_enabled
-                .then(|| self.threshold.clamp(0.0, 1.0)),
+                .then(|| clamp_f32_or_default(self.threshold, 0.0, 1.0, 0.5)),
             blur_radius: self.blur_radius.min(24),
         }
     }
@@ -404,6 +405,29 @@ fn avg_rgba(sum: U32x4, base: U32x4, count: u32) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nan_adjustments_use_identity_defaults_and_a_finite_threshold() {
+        let image = test_image(11, 5);
+        let filters = ImageFilters {
+            brightness: f32::NAN,
+            contrast: f32::NAN,
+            gamma: f32::NAN,
+            threshold: f32::NAN,
+            ..ImageFilters::default()
+        };
+        assert!(filters.is_identity());
+        assert_eq!(apply_image_filters(&image, filters).pixels, image.pixels);
+        assert_eq!(
+            ImageFilters {
+                threshold_enabled: true,
+                ..filters
+            }
+            .sanitized()
+            .threshold,
+            Some(0.5)
+        );
+    }
 
     fn mod_u8(value: usize) -> u8 {
         u8::try_from(value % 256).unwrap_or(0)

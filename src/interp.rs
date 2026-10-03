@@ -1,5 +1,16 @@
 //! Interpolation utilities for resampling picked points.
 
+mod cubic;
+mod piecewise;
+mod points;
+
+pub use points::{InvalidInterpolationPoints, SortedPoints};
+
+use cubic::NaturalCubic;
+use piecewise::{PiecewiseCursor, PiecewiseKind};
+use points::unique_by_x;
+use std::borrow::Cow;
+
 /// A 2D point in numeric axis space.
 #[derive(Debug, Clone, Copy)]
 pub struct XYPoint {
@@ -25,40 +36,28 @@ impl InterpAlgorithm {
 
 /// Resample already-sorted points into `samples` using the chosen algorithm.
 ///
-/// The input is expected to be sorted by `x`. When there is fewer than two
-/// points or `samples <= 1`, the original points are returned.
+/// Input order and finite coordinates are guaranteed by `SortedPoints`. When there are fewer than two points or `samples <= 1`, the original points are returned.
 pub fn interpolate_sorted(
-    points: &[XYPoint],
+    points: SortedPoints<'_>,
     samples: usize,
     algo: InterpAlgorithm,
 ) -> Vec<XYPoint> {
-    if points.is_empty() {
-        return vec![];
+    if points.as_slice().len() < 2 || samples <= 1 {
+        return points.as_slice().to_vec();
     }
-    if points.len() == 1 || samples <= 1 {
-        return points.to_vec();
-    }
-
-    let sample_xs = sample_positions(points, samples);
-    match algo {
-        InterpAlgorithm::Linear => interpolate_linear(points, sample_xs),
-        InterpAlgorithm::StepHold => interpolate_step(points, sample_xs),
-        InterpAlgorithm::NaturalCubic => interpolate_cubic(points, sample_xs),
-    }
+    PreparedInterpolation::new(points, algo).resample(samples)
 }
 
-/// Heuristic auto-selection of sample count for exporting an interpolated curve.
+/// Select an export sample count by progressively refining a uniform grid.
 ///
-/// The goal is to find the smallest `samples` such that a polyline through the
-/// exported samples approximates the underlying interpolated curve within a
-/// relative tolerance on Y.
+/// Increase the grid size until reconstruction approximates the interpolated curve within the relative Y tolerance or reaches the sample limit.
 ///
-/// - `points` are expected to be sorted by `x`.
+/// - `points` guarantees finite coordinates sorted by `x`.
 /// - `min_samples`/`max_samples` bound the search (inclusive).
 /// - `rel_tolerance` is the allowed fraction of the Y-range (0–1).
 /// - `ref_target_samples` controls the resolution of the internal reference curve.
 pub fn auto_sample_count(
-    points: &[XYPoint],
+    points: SortedPoints<'_>,
     algo: InterpAlgorithm,
     min_samples: usize,
     max_samples: usize,
@@ -68,7 +67,7 @@ pub fn auto_sample_count(
     let min_samples = min_samples.max(2);
     let max_samples = max_samples.max(min_samples);
 
-    if points.len() < 2 {
+    if points.as_slice().len() < 2 {
         return min_samples;
     }
 
@@ -80,7 +79,8 @@ pub fn auto_sample_count(
         .max(MIN_REF_SAMPLES)
         .min(max_samples.max(MIN_REF_SAMPLES));
 
-    let ref_curve = interpolate_sorted(points, ref_samples, algo);
+    let interpolation = PreparedInterpolation::new(points, algo);
+    let ref_curve = interpolation.resample(ref_samples);
 
     // Compute Y-range on the reference curve to derive an absolute tolerance.
     let Some((first_ref, rest_ref)) = ref_curve.split_first() else {
@@ -96,10 +96,7 @@ pub fn auto_sample_count(
             y_max = p.y;
         }
     }
-    let mut y_range = y_max - y_min;
-    if y_range < 0.0 {
-        y_range = -y_range;
-    }
+    let y_range = y_max - y_min;
 
     // If the curve is almost flat, any reasonable sample count is fine.
     if y_range <= f64::EPSILON {
@@ -109,51 +106,38 @@ pub fn auto_sample_count(
     let abs_tolerance = (y_range * clamped_rel_tolerance).max(MIN_ABS_TOLERANCE);
 
     let mut current = min_samples;
+    let mut coarse = Vec::new();
+    // Preserve jumps when reconstructing steps; compare other curves with a polyline.
+    let reconstruction = match algo {
+        InterpAlgorithm::StepHold => PiecewiseKind::Step,
+        InterpAlgorithm::Linear | InterpAlgorithm::NaturalCubic => PiecewiseKind::Linear,
+    };
 
     loop {
         if current >= max_samples {
             return max_samples;
         }
 
-        let coarse = interpolate_sorted(points, current, algo);
+        interpolation.resample_into(current, &mut coarse);
         if coarse.len() < 2 {
             return current;
         }
 
-        // Ступенчатая реконструкция сохраняет скачки; остальные кривые сравниваются с ломаной.
-        let kind = match algo {
-            InterpAlgorithm::StepHold => PiecewiseKind::Step,
-            _ => PiecewiseKind::Linear,
-        };
-        let Some(mut approx) = PiecewiseSampler::new(&coarse, kind) else {
+        let Some(mut approx) = PiecewiseCursor::new(&coarse, reconstruction) else {
             return current;
         };
-        let mut max_err = 0.0;
-        for ref_pt in &ref_curve {
-            let err = (ref_pt.y - approx.sample(ref_pt.x)).abs();
-            if err > max_err {
-                max_err = err;
-                if max_err > abs_tolerance {
-                    break;
-                }
-            }
-        }
-
-        if max_err <= abs_tolerance {
+        if ref_curve.iter().all(|reference| {
+            let error = (reference.y - approx.sample(reference.x)).abs();
+            error.is_finite() && error <= abs_tolerance
+        }) {
             return current;
         }
 
-        let next = current.saturating_mul(2).saturating_sub(1);
-        if next <= current {
-            break;
-        }
-        current = next.min(max_samples);
+        current = current.saturating_add(current - 1).min(max_samples);
     }
-
-    max_samples
 }
 
-/// Равномерная сетка без выделения памяти; последняя точка точно совпадает с правой границей.
+/// An allocation-free uniform grid whose last point is exactly the right endpoint.
 fn sample_positions(points: &[XYPoint], samples: usize) -> impl ExactSizeIterator<Item = f64> {
     let (samples, x_min, x_max) = match (points.first(), points.last()) {
         (Some(first), Some(last)) => (samples, first.x, last.x),
@@ -177,205 +161,82 @@ fn sample_positions(points: &[XYPoint], samples: usize) -> impl ExactSizeIterato
     })
 }
 
-#[derive(Clone, Copy)]
-enum PiecewiseKind {
-    Linear,
-    Step,
+/// Coefficients are prepared once and reused for each candidate sample count.
+struct PreparedInterpolation<'a> {
+    points: &'a [XYPoint],
+    method: PreparedMethod<'a>,
 }
 
-/// Курсор по непустой кривой для последовательных запросов с неубывающим x.
-struct PiecewiseSampler<'a> {
-    current: XYPoint,
-    rest: &'a [XYPoint],
-    kind: PiecewiseKind,
+enum PreparedMethod<'a> {
+    Piecewise {
+        points: Cow<'a, [XYPoint]>,
+        kind: PiecewiseKind,
+    },
+    Cubic(NaturalCubic),
 }
 
-impl<'a> PiecewiseSampler<'a> {
-    fn new(points: &'a [XYPoint], kind: PiecewiseKind) -> Option<Self> {
-        let (&current, rest) = points.split_first()?;
-        Some(Self {
-            current,
-            rest,
-            kind,
-        })
-    }
-
-    fn sample(&mut self, x: f64) -> f64 {
-        while let Some((&next, rest)) = self.rest.split_first() {
-            let advance = match self.kind {
-                PiecewiseKind::Linear => next.x < x,
-                PiecewiseKind::Step => next.x <= x,
-            };
-            if !advance {
-                break;
-            }
-            self.current = next;
-            self.rest = rest;
-        }
-        let left = self.current;
-        match self.kind {
-            PiecewiseKind::Step => left.y,
-            PiecewiseKind::Linear => {
-                let right = self.rest.first().copied().unwrap_or(left);
-                if (right.x - left.x).abs() <= f64::EPSILON {
-                    left.y
-                } else {
-                    let t = (x - left.x) / (right.x - left.x);
-                    (right.y - left.y).mul_add(t, left.y)
+impl<'a> PreparedInterpolation<'a> {
+    fn new(points: SortedPoints<'a>, algo: InterpAlgorithm) -> Self {
+        let points = points.as_slice();
+        let kind = match algo {
+            InterpAlgorithm::StepHold => PiecewiseKind::Step,
+            InterpAlgorithm::Linear | InterpAlgorithm::NaturalCubic => PiecewiseKind::Linear,
+        };
+        let method = if algo == InterpAlgorithm::NaturalCubic && points.len() >= 2 {
+            let unique = unique_by_x(points);
+            if unique.len() < 2 {
+                PreparedMethod::Piecewise {
+                    points: Cow::Borrowed(points),
+                    kind,
+                }
+            } else if let Some(segments) = NaturalCubic::try_new(&unique) {
+                PreparedMethod::Cubic(segments)
+            } else {
+                PreparedMethod::Piecewise {
+                    points: unique,
+                    kind,
                 }
             }
+        } else {
+            PreparedMethod::Piecewise {
+                points: Cow::Borrowed(points),
+                kind,
+            }
+        };
+        Self { points, method }
+    }
+
+    fn resample(&self, samples: usize) -> Vec<XYPoint> {
+        let mut out = Vec::new();
+        self.resample_into(samples, &mut out);
+        out
+    }
+
+    fn resample_into(&self, samples: usize, out: &mut Vec<XYPoint>) {
+        out.clear();
+        if self.points.len() < 2 || samples <= 1 {
+            out.extend_from_slice(self.points);
+            return;
+        }
+        let sample_xs = sample_positions(self.points, samples);
+        match &self.method {
+            PreparedMethod::Piecewise { points, kind } => {
+                if let Some(mut cursor) = PiecewiseCursor::new(points, *kind) {
+                    out.extend(sample_xs.map(|x| XYPoint {
+                        x,
+                        y: cursor.sample(x),
+                    }));
+                }
+            }
+            PreparedMethod::Cubic(spline) => {
+                let mut cursor = spline.cursor();
+                out.extend(sample_xs.map(|x| XYPoint {
+                    x,
+                    y: cursor.sample(x),
+                }));
+            }
         }
     }
-}
-
-fn interpolate_piecewise(
-    points: &[XYPoint],
-    sample_xs: impl ExactSizeIterator<Item = f64>,
-    kind: PiecewiseKind,
-) -> Vec<XYPoint> {
-    let Some(mut sampler) = PiecewiseSampler::new(points, kind) else {
-        return Vec::new();
-    };
-    sample_xs
-        .map(|x| XYPoint {
-            x,
-            y: sampler.sample(x),
-        })
-        .collect()
-}
-
-fn interpolate_linear(
-    points: &[XYPoint],
-    sample_xs: impl ExactSizeIterator<Item = f64>,
-) -> Vec<XYPoint> {
-    interpolate_piecewise(points, sample_xs, PiecewiseKind::Linear)
-}
-
-fn interpolate_step(
-    points: &[XYPoint],
-    sample_xs: impl ExactSizeIterator<Item = f64>,
-) -> Vec<XYPoint> {
-    interpolate_piecewise(points, sample_xs, PiecewiseKind::Step)
-}
-
-#[allow(clippy::suboptimal_flops)]
-fn interpolate_cubic(
-    points: &[XYPoint],
-    sample_xs: impl ExactSizeIterator<Item = f64>,
-) -> Vec<XYPoint> {
-    let unique = unique_by_x(points);
-    if unique.len() < 2 {
-        return interpolate_linear(points, sample_xs);
-    }
-    let Some(segments) = build_natural_cubic_segments(&unique) else {
-        return interpolate_linear(&unique, sample_xs);
-    };
-
-    let mut out = Vec::with_capacity(sample_xs.len());
-    let Some(last) = unique.last() else {
-        return interpolate_linear(points, sample_xs);
-    };
-    let Some(mut seg) = segments.first() else {
-        return interpolate_linear(points, sample_xs);
-    };
-    let Some(last_segment) = segments.last() else {
-        return interpolate_linear(points, sample_xs);
-    };
-    let mut rest = segments.iter().skip(1).peekable();
-    let last_x = last.x;
-    for sx in sample_xs {
-        while let Some(next) = rest.next_if(|next| sx >= next.x) {
-            seg = next;
-        }
-        if sx > last_x {
-            seg = last_segment;
-        }
-        let dx = sx - seg.x;
-        let y = seg.a + seg.b * dx + seg.c * dx * dx + seg.d * dx * dx * dx;
-        out.push(XYPoint { x: sx, y });
-    }
-    out
-}
-
-fn unique_by_x(points: &[XYPoint]) -> Vec<XYPoint> {
-    let mut unique: Vec<XYPoint> = Vec::with_capacity(points.len());
-    for p in points {
-        if let Some(last) = unique.last_mut()
-            && (last.x - p.x).abs() <= f64::EPSILON
-        {
-            *last = *p;
-            continue;
-        }
-        unique.push(*p);
-    }
-    unique
-}
-
-#[derive(Debug, Clone)]
-struct CubicSegment {
-    x: f64,
-    a: f64,
-    b: f64,
-    c: f64,
-    d: f64,
-}
-
-#[allow(clippy::suboptimal_flops)]
-fn build_natural_cubic_segments(points: &[XYPoint]) -> Option<Vec<CubicSegment>> {
-    if points.len() < 2 {
-        return None;
-    }
-    let point_count = points.len();
-    let mut interval_widths = vec![0.0; point_count - 1];
-    for (slot, [left, right]) in interval_widths.iter_mut().zip(points.array_windows::<2>()) {
-        let delta = right.x - left.x;
-        if delta.abs() <= f64::EPSILON {
-            return None;
-        }
-        *slot = delta;
-    }
-
-    let mut upper_ratio = vec![0.0; point_count];
-    let mut rhs = vec![0.0; point_count];
-
-    for (i, ([prev, curr, next], &[prev_width, width])) in points
-        .array_windows::<3>()
-        .zip(interval_widths.array_windows::<2>())
-        .enumerate()
-    {
-        let slope_diff = (3.0 / width) * (next.y - curr.y) - (3.0 / prev_width) * (curr.y - prev.y);
-        let diagonal = 2.0 * (next.x - prev.x) - prev_width * upper_ratio[i];
-        if diagonal.abs() <= f64::EPSILON {
-            return None;
-        }
-        upper_ratio[i + 1] = width / diagonal;
-        rhs[i + 1] = (slope_diff - prev_width * rhs[i]) / diagonal;
-    }
-
-    // Обратному ходу нужен только следующий коэффициент c; сегменты собираются сразу.
-    let mut segments = Vec::with_capacity(point_count - 1);
-    let mut next_c = 0.0;
-    for ((([left, right], &width), &ratio), &rhs) in points
-        .array_windows::<2>()
-        .zip(&interval_widths)
-        .zip(&upper_ratio)
-        .zip(&rhs)
-        .rev()
-    {
-        let c = rhs - ratio * next_c;
-        let b = (right.y - left.y) / width - width * (next_c + 2.0 * c) / 3.0;
-        let d = (next_c - c) / (3.0 * width);
-        segments.push(CubicSegment {
-            x: left.x,
-            a: left.y,
-            b,
-            c,
-            d,
-        });
-        next_c = c;
-    }
-    segments.reverse();
-    Some(segments)
 }
 
 const fn usize_to_f64(value: usize) -> f64 {
@@ -389,6 +250,10 @@ const fn usize_to_f64(value: usize) -> f64 {
 mod tests {
     use super::*;
 
+    fn resample(points: &[XYPoint], samples: usize, algo: InterpAlgorithm) -> Vec<XYPoint> {
+        super::interpolate_sorted(SortedPoints::try_from(points).unwrap(), samples, algo)
+    }
+
     fn approx_eq(a: f64, b: f64, eps: f64) -> bool {
         (a - b).abs() <= eps
     }
@@ -396,7 +261,7 @@ mod tests {
     #[test]
     fn interpolate_linear_basic() {
         let points = vec![XYPoint { x: 0.0, y: 0.0 }, XYPoint { x: 10.0, y: 10.0 }];
-        let out = interpolate_sorted(&points, 3, InterpAlgorithm::Linear);
+        let out = resample(&points, 3, InterpAlgorithm::Linear);
         assert_eq!(out.len(), 3);
         assert!(approx_eq(out[0].x, 0.0, 1.0e-9));
         assert!(approx_eq(out[1].x, 5.0, 1.0e-9));
@@ -409,7 +274,7 @@ mod tests {
     #[test]
     fn interpolate_step_basic() {
         let points = vec![XYPoint { x: 0.0, y: 0.0 }, XYPoint { x: 10.0, y: 10.0 }];
-        let out = interpolate_sorted(&points, 3, InterpAlgorithm::StepHold);
+        let out = resample(&points, 3, InterpAlgorithm::StepHold);
         assert_eq!(out.len(), 3);
         assert!(approx_eq(out[0].x, 0.0, 1.0e-9));
         assert!(approx_eq(out[1].x, 5.0, 1.0e-9));
@@ -417,29 +282,6 @@ mod tests {
         assert!(approx_eq(out[0].y, 0.0, 1.0e-9));
         assert!(approx_eq(out[1].y, 0.0, 1.0e-9));
         assert!(approx_eq(out[2].y, 10.0, 1.0e-9));
-    }
-
-    #[test]
-    fn piecewise_interpolation_preserves_duplicate_knot_boundaries() {
-        let points = [
-            XYPoint { x: 0.0, y: 1.0 },
-            XYPoint { x: 1.0, y: 2.0 },
-            XYPoint { x: 1.0, y: 5.0 },
-            XYPoint { x: 2.0, y: 9.0 },
-        ];
-        let xs = [-1.0, 0.0, 0.5, 1.0, 1.5, 2.0, 3.0];
-        let linear = interpolate_linear(&points, xs.into_iter());
-        let step = interpolate_step(&points, xs.into_iter());
-        for (curve, expected) in [
-            (linear, [0.0, 1.0, 1.5, 2.0, 7.0, 9.0, 9.0]),
-            (step, [1.0, 1.0, 1.0, 5.0, 5.0, 9.0, 9.0]),
-        ] {
-            assert_eq!(curve.len(), xs.len());
-            for ((point, x), y) in curve.iter().zip(xs).zip(expected) {
-                assert!(approx_eq(point.x, x, 1.0e-12));
-                assert!(approx_eq(point.y, y, 1.0e-12));
-            }
-        }
     }
 
     #[test]
@@ -476,7 +318,7 @@ mod tests {
         ];
         let duplicates = [points[0], XYPoint { x: 1.0, y: -8.0 }, points[1], points[2]];
         for input in [&points[..], &duplicates[..]] {
-            let out = interpolate_sorted(input, 5, InterpAlgorithm::NaturalCubic);
+            let out = resample(input, 5, InterpAlgorithm::NaturalCubic);
             let expected = [
                 (0.0, 0.0),
                 (0.5, 0.6875),
@@ -493,41 +335,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::suboptimal_flops)]
-    fn natural_cubic_is_smooth_on_nonuniform_intervals() {
-        let points = [
-            XYPoint { x: -3.0, y: 4.0 },
-            XYPoint { x: -0.5, y: -2.0 },
-            XYPoint { x: 0.0, y: 3.0 },
-            XYPoint { x: 7.0, y: 1.0 },
-            XYPoint { x: 8.0, y: 5.0 },
-        ];
-        let segments = build_natural_cubic_segments(&points).unwrap();
-        assert_eq!(segments.len(), points.len() - 1);
-        for (segment, [left, right]) in segments.iter().zip(points.array_windows::<2>()) {
-            let dx = right.x - left.x;
-            let y = segment.a + segment.b * dx + segment.c * dx * dx + segment.d * dx * dx * dx;
-            assert!(approx_eq(segment.a, left.y, 1.0e-9));
-            assert!(approx_eq(y, right.y, 1.0e-9));
-        }
-        for [left, right] in segments.array_windows::<2>() {
-            let dx = right.x - left.x;
-            let first_derivative = left.b + 2.0 * left.c * dx + 3.0 * left.d * dx * dx;
-            let second_derivative = 2.0 * left.c + 6.0 * left.d * dx;
-            assert!(approx_eq(first_derivative, right.b, 1.0e-9));
-            assert!(approx_eq(second_derivative, 2.0 * right.c, 1.0e-9));
-        }
-        assert!(approx_eq(segments[0].c, 0.0, 1.0e-9));
-        let last = segments.last().unwrap();
-        let dx = points.last().unwrap().x - last.x;
-        assert!(approx_eq(2.0 * last.c + 6.0 * last.d * dx, 0.0, 1.0e-9));
-    }
-
-    #[test]
     fn natural_cubic_two_points_matches_linear() {
         let points = [XYPoint { x: -2.0, y: 5.0 }, XYPoint { x: 6.0, y: -3.0 }];
-        let cubic = interpolate_sorted(&points, 17, InterpAlgorithm::NaturalCubic);
-        let linear = interpolate_sorted(&points, 17, InterpAlgorithm::Linear);
+        let cubic = resample(&points, 17, InterpAlgorithm::NaturalCubic);
+        let linear = resample(&points, 17, InterpAlgorithm::Linear);
         for (cubic, linear) in cubic.iter().zip(linear) {
             assert!(approx_eq(cubic.x, linear.x, 1.0e-9));
             assert!(approx_eq(cubic.y, linear.y, 1.0e-9));
@@ -542,7 +353,7 @@ mod tests {
         let rel_tol = 1.0e-3;
         let ref_samples = 128;
         let out = auto_sample_count(
-            &points,
+            SortedPoints::try_from(points.as_slice()).unwrap(),
             InterpAlgorithm::Linear,
             min_samples,
             max_samples,
@@ -550,5 +361,78 @@ mod tests {
             ref_samples,
         );
         assert_eq!(out, min_samples);
+    }
+
+    #[test]
+    fn auto_sample_count_does_not_accept_nonfinite_interpolation_errors() {
+        let points = [
+            XYPoint {
+                x: 0.0,
+                y: -f64::MAX,
+            },
+            XYPoint {
+                x: 1.0,
+                y: f64::MAX,
+            },
+        ];
+        let sorted = SortedPoints::try_from(points.as_slice()).unwrap();
+        assert_eq!(
+            auto_sample_count(sorted, InterpAlgorithm::Linear, 10, 100, 1.0e-3, 16),
+            100
+        );
+        let step = [
+            XYPoint {
+                x: 0.0,
+                y: -f64::MAX,
+            },
+            XYPoint {
+                x: 0.2,
+                y: f64::MAX,
+            },
+            XYPoint { x: 1.0, y: 0.0 },
+        ];
+        assert_eq!(
+            auto_sample_count(
+                SortedPoints::try_from(step.as_slice()).unwrap(),
+                InterpAlgorithm::StepHold,
+                10,
+                100,
+                1.0e-3,
+                16
+            ),
+            100
+        );
+    }
+
+    #[test]
+    fn cubic_auto_sampling_meets_tolerance_on_an_analytic_arch() {
+        let points = [
+            XYPoint { x: 0.0, y: 0.0 },
+            XYPoint { x: 1.0, y: 1.0 },
+            XYPoint { x: 2.0, y: 0.0 },
+        ];
+        let sorted = SortedPoints::try_from(points.as_slice()).unwrap();
+        let count = auto_sample_count(sorted, InterpAlgorithm::NaturalCubic, 10, 1000, 1.0e-3, 512);
+        assert!((10..=1000).contains(&count));
+        let curve = super::interpolate_sorted(sorted, count, InterpAlgorithm::NaturalCubic);
+        let mut sampler = PiecewiseCursor::new(&curve, PiecewiseKind::Linear).unwrap();
+        for x in sample_positions(&points, 512) {
+            let distance = if x <= 1.0 { x } else { 2.0 - x };
+            let expected = 0.5f64.mul_add(-distance.powi(3), 1.5 * distance);
+            assert!((sampler.sample(x) - expected).abs() <= 1.0e-3);
+        }
+    }
+
+    #[test]
+    fn cubic_keeps_original_duplicate_points_when_resampling_is_disabled() {
+        let points = [XYPoint { x: 1.0, y: 2.0 }, XYPoint { x: 1.0, y: 3.0 }];
+        for count in [0, 1] {
+            let out = resample(&points, count, InterpAlgorithm::NaturalCubic);
+            assert_eq!(out.len(), points.len());
+            for (actual, expected) in out.iter().zip(points) {
+                assert_eq!(actual.x, expected.x);
+                assert_eq!(actual.y, expected.y);
+            }
+        }
     }
 }
