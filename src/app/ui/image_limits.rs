@@ -1,4 +1,5 @@
 use super::super::CurcatApp;
+use super::{common, style};
 use crate::config::ImageLimits;
 use crate::i18n::{TextKey, UiLanguage};
 use crate::image::{ImageLimitInfo, ImageLoadPolicy, human_readable_bytes};
@@ -21,18 +22,16 @@ impl CurcatApp {
         let mut selected_policy: Option<ImageLoadPolicy> = None;
         let mut open = true;
 
-        egui::Window::new(self.t(TextKey::ImageLimitsWindow))
+        common::tool_window(self.t(TextKey::ImageLimitsWindow))
             .open(&mut open)
-            .resizable(false)
-            .collapsible(false)
             .show(ctx, |ui| {
                 ui.label(self.t(TextKey::ImageLimitsIntro));
-                ui.add_space(6.0);
+                ui.add_space(style::SPACE_ROW);
                 ui.label(source_line);
                 ui.label(config_line);
                 ui.label(hard_line);
                 ui.label(autoscale_line);
-                ui.add_space(8.0);
+                ui.add_space(style::SPACE_GROUP);
                 ui.horizontal(|ui| {
                     if ui.button(self.t(TextKey::RejectLoad)).clicked() {
                         reject = true;
@@ -57,7 +56,7 @@ impl CurcatApp {
                     }
                 });
                 if !info.can_autoscale || !info.can_ignore_limits {
-                    ui.add_space(4.0);
+                    ui.add_space(style::SPACE_SMALL);
                     ui.weak(self.t(TextKey::ActionUnavailable));
                 }
             });

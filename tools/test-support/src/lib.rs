@@ -21,27 +21,39 @@ pub type AppHarness = Harness<'static, Option<CurcatApp>>;
 
 #[must_use]
 pub fn harness(points: u32, language: UiLanguage) -> AppHarness {
-    let mut image = Some(ColorImage::filled(IMAGE_SIZE, Color32::WHITE));
+    harness_with(move |ctx| {
+        let pixels = (0..points).map(|index| {
+            let fraction = f64::from(index) / f64::from(points);
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "Fixture coordinates fit in f32."
+            )]
+            egui::pos2(
+                fraction.mul_add(480.0, 80.0) as f32,
+                (fraction * 20.0).sin().mul_add(100.0, 240.0) as f32,
+            )
+        });
+        testing::from_image(
+            ctx,
+            ColorImage::filled(IMAGE_SIZE, Color32::WHITE),
+            pixels,
+            language,
+        )
+    })
+}
+
+/// Reuse the deterministic harness for fixtures with different initial app state.
+#[must_use]
+pub fn harness_with(
+    mut create_app: impl FnMut(&egui::Context) -> CurcatApp + 'static,
+) -> AppHarness {
     Harness::builder()
         .with_size(VIEWPORT_SIZE.map(f32::from))
         .with_step_dt(STEP_DT)
         .with_max_steps(60)
         .build_ui_state(
             move |ui, app: &mut Option<CurcatApp>| {
-                let app = app.get_or_insert_with(|| {
-                    let pixels = (0..points).map(|index| {
-                        let fraction = f64::from(index) / f64::from(points);
-                        #[expect(
-                            clippy::cast_possible_truncation,
-                            reason = "Fixture coordinates fit in f32."
-                        )]
-                        egui::pos2(
-                            fraction.mul_add(480.0, 80.0) as f32,
-                            (fraction * 20.0).sin().mul_add(100.0, 240.0) as f32,
-                        )
-                    });
-                    testing::from_image(ui.ctx(), image.take().unwrap(), pixels, language)
-                });
+                let app = app.get_or_insert_with(|| create_app(ui.ctx()));
                 testing::render(app, ui);
             },
             None,

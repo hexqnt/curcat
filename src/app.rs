@@ -928,7 +928,11 @@ impl CurcatApp {
             ctx.request_repaint_after(Duration::from_millis(ATTENTION_REPAINT_INTERVAL_MS));
         }
 
-        egui::Panel::top("top").show(root_ui, |ui| self.ui_top(ui));
+        egui::Panel::top("top").show(root_ui, |ui| {
+            egui::ScrollArea::horizontal()
+                .id_salt("top_controls")
+                .show(ui, |ui| self.ui_top(ui));
+        });
         egui::Panel::bottom("status").show(root_ui, |ui| self.ui_status_bar(ui));
         let side_panel = match self.ui.side_position {
             SidePanelPosition::Left => egui::Panel::left("side"),
@@ -939,7 +943,10 @@ impl CurcatApp {
             .resizable(true)
             .default_size(280.0)
             .show_collapsible(root_ui, &mut side_open, |ui| {
-                self.ui_side_calibration(ui);
+                egui::ScrollArea::vertical()
+                    .id_salt("side_controls")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.ui_side_calibration(ui));
             });
         self.ui.side_open = side_open;
         egui::CentralPanel::default().show(root_ui, |ui| self.ui_central_image(&ctx, ui));

@@ -3,7 +3,7 @@ use super::super::{
     CalibrationMapping, CurcatApp, DragTarget, PickMode, PointInputMode, PrimaryPressInfo,
     safe_usize_to_f32,
 };
-use super::icons;
+use super::{icons, style};
 
 use crate::i18n::TextKey;
 use crate::types::{AxisMapping, AxisValue, CoordSystem, PolarMapping};
@@ -2528,18 +2528,22 @@ impl CurcatApp {
     }
 
     const fn calibration_cursor_badge(&self) -> Option<CursorBadge> {
-        match self.calibration.pick_mode {
-            PickMode::X1 => Some(CursorBadge::Text("X1", Color32::from_rgb(190, 225, 255))),
-            PickMode::X2 => Some(CursorBadge::Text("X2", Color32::from_rgb(190, 225, 255))),
-            PickMode::Y1 => Some(CursorBadge::Text("Y1", Color32::from_rgb(200, 255, 200))),
-            PickMode::Y2 => Some(CursorBadge::Text("Y2", Color32::from_rgb(200, 255, 200))),
-            PickMode::Origin => Some(CursorBadge::Text("O", Color32::from_rgb(255, 230, 180))),
-            PickMode::R1 => Some(CursorBadge::Text("R1", Color32::from_rgb(255, 210, 160))),
-            PickMode::R2 => Some(CursorBadge::Text("R2", Color32::from_rgb(255, 210, 160))),
-            PickMode::A1 => Some(CursorBadge::Text("A1", Color32::from_rgb(200, 210, 255))),
-            PickMode::A2 => Some(CursorBadge::Text("A2", Color32::from_rgb(200, 210, 255))),
-            _ => None,
-        }
+        let label = match self.calibration.pick_mode {
+            PickMode::X1 => "X1",
+            PickMode::X2 => "X2",
+            PickMode::Y1 => "Y1",
+            PickMode::Y2 => "Y2",
+            PickMode::Origin => "O",
+            PickMode::R1 => "R1",
+            PickMode::R2 => "R2",
+            PickMode::A1 => "A1",
+            PickMode::A2 => "A2",
+            _ => return None,
+        };
+        Some(CursorBadge::Text(
+            label,
+            style::pick_mode_color(self.calibration.pick_mode),
+        ))
     }
 
     fn remove_point_near_screen(&mut self, pointer: Pos2, image_origin: Pos2) -> bool {

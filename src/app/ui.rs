@@ -9,4 +9,5 @@ pub mod info;
 pub mod project;
 pub mod side;
 pub mod stats;
+mod style;
 pub mod top;

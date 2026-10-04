@@ -1,11 +1,13 @@
-use super::super::common::{side_section_card_collapsible, toggle_switch};
-use super::super::icons;
-use super::axis_input::sanitize_axis_text;
+use super::super::{
+    common::{self, ToggleSwitch, side_section_card_collapsible},
+    icons, style,
+};
+use super::axis_input::{CalibrationRow, sanitize_axis_text};
 use crate::app::{AxisCalUi, AxisValueField, CurcatApp, PickMode, safe_usize_to_f32};
-use crate::i18n::{TextKey, UiLanguage};
+use crate::i18n::{I18n, TextKey, UiLanguage};
 use crate::types::{AngleDirection, AngleUnit, AxisUnit, AxisValue, CoordSystem, ScaleKind};
 use egui::containers::menu::MenuButton;
-use egui::{Color32, Pos2, Rect, RichText};
+use egui::{Pos2, Rect, RichText};
 
 #[derive(Clone, Copy)]
 enum CalibrationPresetKind {
@@ -105,17 +107,10 @@ impl PolarAxisKind {
         }
     }
 
-    const fn p1_label(self) -> &'static str {
+    const fn axis(self) -> CalibrationAxis {
         match self {
-            Self::Radius => "R1",
-            Self::Angle => "A1",
-        }
-    }
-
-    const fn p2_label(self) -> &'static str {
-        match self {
-            Self::Radius => "R2",
-            Self::Angle => "A2",
+            Self::Radius => CalibrationAxis::Radius,
+            Self::Angle => CalibrationAxis::Angle,
         }
     }
 }
@@ -156,8 +151,51 @@ const fn angle_direction_label(lang: UiLanguage, direction: AngleDirection) -> &
     }
 }
 
+#[derive(Clone, Copy)]
+enum CalibrationAxis {
+    X,
+    Y,
+    Radius,
+    Angle,
+}
+
+impl CalibrationAxis {
+    const fn fields(self) -> [AxisValueField; 2] {
+        match self {
+            Self::X => [AxisValueField::X1, AxisValueField::X2],
+            Self::Y => [AxisValueField::Y1, AxisValueField::Y2],
+            Self::Radius => [AxisValueField::R1, AxisValueField::R2],
+            Self::Angle => [AxisValueField::A1, AxisValueField::A2],
+        }
+    }
+}
+
+enum MappingStatus {
+    Cartesian(bool),
+    PolarAxis(bool),
+}
+
+impl MappingStatus {
+    fn show(self, ui: &mut egui::Ui, i18n: I18n) {
+        let (ready, hover) = match self {
+            Self::Cartesian(true) => (true, TextKey::MappingOkHover),
+            Self::Cartesian(false) => (false, TextKey::MappingIncompleteHover),
+            Self::PolarAxis(true) => (true, TextKey::MappingOkAxisHover),
+            Self::PolarAxis(false) => (false, TextKey::MappingIncompleteAxisHover),
+        };
+        let label = if ready {
+            TextKey::MappingOk
+        } else {
+            TextKey::MappingIncomplete
+        };
+        ui.label(RichText::new(i18n.text(label)).color(style::mapping_color(ready, ui.visuals())))
+            .on_hover_text(i18n.text(hover));
+    }
+}
+
 struct CalibrationUiState {
-    highlight_jobs: Vec<(Rect, bool)>,
+    // Each calibration point has a value field and a pick button.
+    attention_outlines: [(Rect, bool); 4],
     pending_focus: Option<AxisValueField>,
     pending_pick: Option<PickMode>,
 }
@@ -165,10 +203,42 @@ struct CalibrationUiState {
 impl CalibrationUiState {
     const fn new(pending_focus: Option<AxisValueField>) -> Self {
         Self {
-            highlight_jobs: Vec::new(),
+            attention_outlines: [(Rect::NOTHING, false); 4],
             pending_focus,
             pending_pick: None,
         }
+    }
+
+    /// Draw both rows and report whether their values and picked points are ready.
+    fn show_axis_rows(
+        &mut self,
+        ui: &mut egui::Ui,
+        language: UiLanguage,
+        cal: &mut AxisCalUi,
+        axis: CalibrationAxis,
+    ) -> bool {
+        let [p1_field, p2_field] = axis.fields();
+        let p1_row = CalibrationRow::new(p1_field, &mut cal.v1_text, language)
+            .unit(cal.unit)
+            .point(cal.p1)
+            .show(ui, &mut self.pending_focus);
+        ui.add_space(style::SPACE_TIGHT);
+        let p2_row = CalibrationRow::new(p2_field, &mut cal.v2_text, language)
+            .unit(cal.unit)
+            .point(cal.p2)
+            .show(ui, &mut self.pending_focus);
+        if let Some(mode) = p1_row.requested_pick.or(p2_row.requested_pick) {
+            self.pending_pick = Some(mode);
+        }
+
+        let (p1_invalid, p2_invalid) = cal.value_invalid_flags();
+        self.attention_outlines = [
+            (p1_row.value_rect, p1_invalid),
+            (p2_row.value_rect, p2_invalid),
+            (p1_row.pick_rect, cal.p1.is_none()),
+            (p2_row.pick_rect, cal.p2.is_none()),
+        ];
+        !p1_invalid && !p2_invalid && cal.p1.is_some() && cal.p2.is_some()
     }
 }
 
@@ -176,8 +246,8 @@ impl CurcatApp {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_side_calibration(&mut self, ui: &mut egui::Ui) {
         let i18n = self.i18n();
-        ui.spacing_mut().item_spacing.y = 6.0;
-        ui.add_space(2.0);
+        ui.spacing_mut().item_spacing.y = style::SPACE_ROW;
+        ui.add_space(style::SPACE_TIGHT);
         side_section_card_collapsible(
             ui,
             "side_section_point_input",
@@ -186,7 +256,7 @@ impl CurcatApp {
                 self.ui_point_input_section(ui);
             },
         );
-        ui.add_space(10.0);
+        ui.add_space(style::SPACE_SECTION);
 
         side_section_card_collapsible(
             ui,
@@ -238,7 +308,7 @@ impl CurcatApp {
                 ui.horizontal(|ui| {
                     let cartesian = matches!(self.calibration.coord_system, CoordSystem::Cartesian);
                     self.ui_calibration_snap_menu(ui, cartesian);
-                    ui.add_space(8.0);
+                    ui.add_space(style::SPACE_GROUP);
                     let has_image = self.image.image.is_some();
                     if cartesian {
                         self.ui_quadrant_preset_menu(ui, CalibrationPresetKind::Unit, has_image);
@@ -264,15 +334,16 @@ impl CurcatApp {
 
                 ui.separator();
                 ui.horizontal(|ui| {
-                    toggle_switch(ui, &mut self.calibration.show_calibration_segments)
-                        .on_hover_text(i18n.text(TextKey::ShowCalibrationOverlayHover));
-                    ui.add_space(4.0);
-                    ui.label(i18n.text(TextKey::ShowCalibrationOverlay))
-                        .on_hover_text(i18n.text(TextKey::ShowCalibrationOverlayHover));
+                    common::labelled_toggle(
+                        ui,
+                        &mut self.calibration.show_calibration_segments,
+                        i18n.text(TextKey::ShowCalibrationOverlay),
+                        i18n.text(TextKey::ShowCalibrationOverlayHover),
+                    );
                 });
             },
         );
-        ui.add_space(10.0);
+        ui.add_space(style::SPACE_SECTION);
 
         side_section_card_collapsible(
             ui,
@@ -298,7 +369,7 @@ impl CurcatApp {
         let lang = self.ui.language;
         ui.add_enabled_ui(enabled, |ui| {
             let button = egui::Button::image(icons::image(preset.icon(), icons::BUTTON_ICON_SIZE))
-                .min_size(egui::vec2(24.0, 24.0))
+                .min_size(egui::Vec2::splat(style::ICON_BUTTON_SIZE))
                 .image_tint_follows_text_color(true);
             let menu = MenuButton::from_button(button).ui(ui, |ui| {
                 for quadrant in CalibrationQuadrant::ALL {
@@ -316,10 +387,14 @@ impl CurcatApp {
     }
 
     fn ui_calibration_snap_toggle(ui: &mut egui::Ui, enabled: &mut bool, label: &str, hover: &str) {
-        toggle_switch(ui, enabled).on_hover_text(hover);
-        ui.add_space(2.0);
-        ui.label(RichText::new(label).small().monospace())
+        let toggle = ui
+            .add(ToggleSwitch::new(enabled, label))
             .on_hover_text(hover);
+        ui.add_space(style::SPACE_TIGHT);
+        let caption = ui
+            .label(RichText::new(label).small().monospace())
+            .on_hover_text(hover);
+        toggle.labelled_by(caption.id);
     }
 
     fn ui_calibration_snap_group_toggle(
@@ -328,14 +403,12 @@ impl CurcatApp {
         label: &str,
         hover: &str,
     ) {
-        toggle_switch(ui, group_enabled).on_hover_text(hover);
-        ui.add_space(4.0);
-        let label_resp = ui
-            .add(egui::Label::new(RichText::new(label).strong()).sense(egui::Sense::click()))
+        let toggle = ui
+            .add(ToggleSwitch::new(group_enabled, label))
             .on_hover_text(hover);
-        if label_resp.clicked() {
-            *group_enabled = !*group_enabled;
-        }
+        ui.add_space(style::SPACE_SMALL);
+        let caption = common::toggle_label(ui, group_enabled, RichText::new(label).strong(), hover);
+        toggle.labelled_by(caption.id);
     }
 
     #[allow(clippy::too_many_lines)]
@@ -356,14 +429,13 @@ impl CurcatApp {
                 0
             };
         let total = if cartesian { 5 } else { 1 };
-        let button = egui::Button::image_and_text(
-            icons::image(icons::ICON_MENU, icons::BUTTON_ICON_SIZE),
+        let button = common::icon_button(
+            icons::ICON_MENU,
             format!(
                 "{} ({active_count}/{total})",
                 i18n.text(TextKey::CalSnapMenu)
             ),
-        )
-        .image_tint_follows_text_color(true);
+        );
         let menu_cfg = egui::containers::menu::MenuConfig::new()
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
         let (response, _) = MenuButton::from_button(button)
@@ -396,7 +468,7 @@ impl CurcatApp {
                     self.calibration.snap_end = point_group;
                     self.calibration.snap_int = point_group;
                 }
-                ui.add_space(4.0);
+                ui.add_space(style::SPACE_SMALL);
                 ui.horizontal(|ui| {
                     Self::ui_calibration_snap_toggle(
                         ui,
@@ -404,7 +476,7 @@ impl CurcatApp {
                         i18n.text(TextKey::CalSnapEnd),
                         i18n.text(TextKey::CalSnapEndHover),
                     );
-                    ui.add_space(8.0);
+                    ui.add_space(style::SPACE_GROUP);
                     Self::ui_calibration_snap_toggle(
                         ui,
                         &mut self.calibration.snap_int,
@@ -428,7 +500,7 @@ impl CurcatApp {
                     self.calibration.snap_ext = line_group;
                     self.calibration.snap_vh = line_group;
                 }
-                ui.add_space(4.0);
+                ui.add_space(style::SPACE_SMALL);
                 ui.horizontal(|ui| {
                     Self::ui_calibration_snap_toggle(
                         ui,
@@ -436,7 +508,7 @@ impl CurcatApp {
                         i18n.text(TextKey::CalSnapExt),
                         i18n.text(TextKey::CalSnapExtHover),
                     );
-                    ui.add_space(8.0);
+                    ui.add_space(style::SPACE_GROUP);
                     Self::ui_calibration_snap_toggle(
                         ui,
                         &mut self.calibration.snap_vh,
@@ -528,110 +600,30 @@ impl CurcatApp {
         AxisValue::Float(value).format()
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn finish_calibration_panel(
         &mut self,
         ui: &mut egui::Ui,
-        state: CalibrationUiState,
-        mapping_ready: bool,
-        ok_label: &str,
-        ok_hover: &str,
-        warn_label: &str,
-        warn_hover: &str,
+        state: &CalibrationUiState,
+        status: MappingStatus,
     ) {
         if let Some(mode) = state.pending_pick {
             self.begin_pick_mode(mode);
         }
         self.calibration.pending_value_focus = state.pending_focus;
 
-        for (rect, active) in state.highlight_jobs {
+        for &(rect, active) in &state.attention_outlines {
             self.paint_attention_outline_if(ui, rect, active);
         }
 
-        if mapping_ready {
-            ui.label(RichText::new(ok_label).color(Color32::GREEN))
-                .on_hover_text(ok_hover);
-        } else {
-            ui.label(RichText::new(warn_label).color(Color32::GRAY))
-                .on_hover_text(warn_hover);
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn render_axis_rows(
-        ui: &mut egui::Ui,
-        language: UiLanguage,
-        cal: &mut AxisCalUi,
-        p1_label: &str,
-        p2_label: &str,
-        p1_field: AxisValueField,
-        p2_field: AxisValueField,
-        p1_mode: PickMode,
-        p2_mode: PickMode,
-        ui_state: &mut CalibrationUiState,
-    ) -> (bool, bool) {
-        let p1_row = Self::render_calibration_row(
-            ui,
-            p1_label,
-            language,
-            cal.unit,
-            &mut cal.v1_text,
-            p1_field,
-            &mut ui_state.pending_focus,
-            p1_mode,
-            cal.p1,
-        );
-        ui.add_space(2.0);
-        let p2_row = Self::render_calibration_row(
-            ui,
-            p2_label,
-            language,
-            cal.unit,
-            &mut cal.v2_text,
-            p2_field,
-            &mut ui_state.pending_focus,
-            p2_mode,
-            cal.p2,
-        );
-        if let Some(mode) = p1_row.requested_pick.or(p2_row.requested_pick) {
-            ui_state.pending_pick = Some(mode);
-        }
-
-        let (p1_invalid, p2_invalid) = cal.value_invalid_flags();
-        if let Some(rect) = p1_row.value_rect {
-            ui_state.highlight_jobs.push((rect, p1_invalid));
-        }
-        if let Some(rect) = p2_row.value_rect {
-            ui_state.highlight_jobs.push((rect, p2_invalid));
-        }
-        if let Some(rect) = p1_row.pick_rect {
-            ui_state.highlight_jobs.push((rect, cal.p1.is_none()));
-        }
-        if let Some(rect) = p2_row.pick_rect {
-            ui_state.highlight_jobs.push((rect, cal.p2.is_none()));
-        }
-
-        (p1_invalid, p2_invalid)
+        status.show(ui, self.i18n());
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn axis_cal_group(&mut self, ui: &mut egui::Ui, is_x: bool) {
-        let (label, p1_mode, p2_mode, p1_name, p2_name) = if is_x {
-            (
-                self.t(TextKey::XAxis),
-                PickMode::X1,
-                PickMode::X2,
-                "X1",
-                "X2",
-            )
+    fn axis_cal_group(&mut self, ui: &mut egui::Ui, is_x: bool) {
+        let (label, axis) = if is_x {
+            (self.t(TextKey::XAxis), CalibrationAxis::X)
         } else {
-            (
-                self.t(TextKey::YAxis),
-                PickMode::Y1,
-                PickMode::Y2,
-                "Y1",
-                "Y2",
-            )
+            (self.t(TextKey::YAxis), CalibrationAxis::Y)
         };
 
         let collapsing = egui::CollapsingHeader::new(label)
@@ -710,37 +702,14 @@ impl CurcatApp {
                             sanitize_axis_text(&mut cal.v2_text, cal.unit);
                         }
 
-                        let _ = Self::render_axis_rows(
-                            ui,
-                            self.ui.language,
-                            cal,
-                            p1_name,
-                            p2_name,
-                            if is_x {
-                                AxisValueField::X1
-                            } else {
-                                AxisValueField::Y1
-                            },
-                            if is_x {
-                                AxisValueField::X2
-                            } else {
-                                AxisValueField::Y2
-                            },
-                            p1_mode,
-                            p2_mode,
-                            &mut ui_state,
-                        );
+                        ui_state.show_axis_rows(ui, self.ui.language, cal, axis);
 
                         mapping_ready = cal.mapping().is_some();
                     }
                     self.finish_calibration_panel(
                         ui,
-                        ui_state,
-                        mapping_ready,
-                        self.t(TextKey::MappingOk),
-                        self.t(TextKey::MappingOkHover),
-                        self.t(TextKey::MappingIncomplete),
-                        self.t(TextKey::MappingIncompleteHover),
+                        &ui_state,
+                        MappingStatus::Cartesian(mapping_ready),
                     );
                 });
             });
@@ -758,9 +727,8 @@ impl CurcatApp {
             UiLanguage::En => (56.0, 92.0, 64.0),
             UiLanguage::Ru => (70.0, 100.0, 72.0),
         };
-        let mut pick_rect = None;
-        ui.horizontal(|ui| {
-            ui.style_mut().spacing.item_spacing.x = 6.0;
+        let row = ui.horizontal(|ui| {
+            ui.style_mut().spacing.item_spacing.x = style::SPACE_ROW;
             ui.add_sized(
                 [label_width, row_height],
                 egui::Label::new(format!("{}:", self.t(TextKey::Origin))),
@@ -772,18 +740,13 @@ impl CurcatApp {
             let pick_resp = ui
                 .add_enabled(
                     has_image,
-                    egui::Button::image_and_text(
-                        icons::image(icons::ICON_PICK_POINT, icons::BUTTON_ICON_SIZE),
-                        self.t(TextKey::PickOrigin),
-                    )
-                    .image_tint_follows_text_color(true)
-                    .min_size(egui::vec2(pick_width, row_height)),
+                    common::icon_button(icons::ICON_PICK_POINT, self.t(TextKey::PickOrigin))
+                        .min_size(egui::vec2(pick_width, row_height)),
                 )
                 .on_hover_text(self.t(TextKey::PickOriginHover));
             if pick_resp.clicked() {
                 self.begin_pick_mode(PickMode::Origin);
             }
-            pick_rect = Some(pick_resp.rect);
 
             let center_resp = ui
                 .add_enabled(
@@ -804,39 +767,17 @@ impl CurcatApp {
                     UiLanguage::Ru => "Начало координат установлено в центр изображения.",
                 });
             }
+            pick_resp.rect
         });
-        if let Some(p) = self.calibration.polar_cal.origin {
-            ui.horizontal(|ui| {
-                ui.add_space(label_width + 6.0);
-                ui.label(
-                    RichText::new(format!("@ ({:.1},{:.1})", p.x, p.y))
-                        .small()
-                        .weak(),
-                );
-            });
+        if let Some(point) = self.calibration.polar_cal.origin {
+            common::point_coordinates(ui, point, label_width + style::SPACE_ROW);
         }
-        if let Some(rect) = pick_rect {
-            self.paint_attention_outline_if(ui, rect, self.calibration.polar_cal.origin.is_none());
-        }
+        self.paint_attention_outline_if(ui, row.inner, self.calibration.polar_cal.origin.is_none());
     }
 
     #[allow(clippy::too_many_lines)]
     fn polar_axis_group(&mut self, ui: &mut egui::Ui, kind: PolarAxisKind) {
         let label = kind.label(self.ui.language);
-        let (p1_mode, p2_mode, p1_field, p2_field) = match kind {
-            PolarAxisKind::Radius => (
-                PickMode::R1,
-                PickMode::R2,
-                AxisValueField::R1,
-                AxisValueField::R2,
-            ),
-            PolarAxisKind::Angle => (
-                PickMode::A1,
-                PickMode::A2,
-                AxisValueField::A1,
-                AxisValueField::A2,
-            ),
-        };
         let collapsing = egui::CollapsingHeader::new(label)
             .default_open(true)
             .show(ui, |ui| {
@@ -930,47 +871,21 @@ impl CurcatApp {
                         });
                     }
 
-                    let (p1_invalid, p2_invalid) = {
+                    let axis_ready = {
                         let cal = match kind {
                             PolarAxisKind::Radius => &mut self.calibration.polar_cal.radius,
                             PolarAxisKind::Angle => &mut self.calibration.polar_cal.angle,
                         };
-                        Self::render_axis_rows(
-                            ui,
-                            self.ui.language,
-                            cal,
-                            kind.p1_label(),
-                            kind.p2_label(),
-                            p1_field,
-                            p2_field,
-                            p1_mode,
-                            p2_mode,
-                            &mut ui_state,
-                        )
+                        ui_state.show_axis_rows(ui, self.ui.language, cal, kind.axis())
                     };
 
                     let origin_ready = self.calibration.polar_cal.origin.is_some();
-                    let values_ready = !p1_invalid && !p2_invalid;
-                    let points_ready = match kind {
-                        PolarAxisKind::Radius => {
-                            self.calibration.polar_cal.radius.p1.is_some()
-                                && self.calibration.polar_cal.radius.p2.is_some()
-                        }
-                        PolarAxisKind::Angle => {
-                            self.calibration.polar_cal.angle.p1.is_some()
-                                && self.calibration.polar_cal.angle.p2.is_some()
-                        }
-                    };
-                    let mapping_ready = origin_ready && values_ready && points_ready;
+                    let mapping_ready = origin_ready && axis_ready;
 
                     self.finish_calibration_panel(
                         ui,
-                        ui_state,
-                        mapping_ready,
-                        self.t(TextKey::MappingOk),
-                        self.t(TextKey::MappingOkAxisHover),
-                        self.t(TextKey::MappingIncomplete),
-                        self.t(TextKey::MappingIncompleteAxisHover),
+                        &ui_state,
+                        MappingStatus::PolarAxis(mapping_ready),
                     );
                 });
             });

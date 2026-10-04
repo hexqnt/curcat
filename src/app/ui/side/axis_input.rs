@@ -1,148 +1,113 @@
-use super::super::icons;
-use crate::app::{AxisValueField, CurcatApp, PickMode};
+//! Calibration value inputs and point-picking controls.
+
+mod text;
+
+use super::super::{
+    common, icons,
+    style::{self, CalibrationRowWidths},
+};
+use crate::app::{AxisValueField, PickMode};
 use crate::i18n::UiLanguage;
 use crate::types::AxisUnit;
 use egui::{
-    Pos2, Rect, Response, RichText, TextBuffer, TextEdit,
-    text::{CCursor, CCursorRange, CharIndex},
+    Pos2, Rect, Response, TextEdit,
+    text::{CCursor, CCursorRange},
 };
-use std::any::TypeId;
-use std::borrow::Cow;
 
-/// Normalize axis input text by removing invalid characters and fixing decimals.
-pub fn sanitize_axis_text(value: &mut String, unit: AxisUnit) {
-    if value.is_empty() {
-        return;
-    }
-    if matches!(unit, AxisUnit::Float) && value.contains(',') {
-        *value = value.replace(',', ".");
-    }
-    value.retain(|ch| axis_char_allowed(unit, ch));
-}
+use text::FilteredAxisText;
+pub(super) use text::sanitize_axis_text;
 
-const fn axis_char_allowed(unit: AxisUnit, ch: char) -> bool {
-    match unit {
-        AxisUnit::Float => {
-            ch.is_ascii_digit()
-                || ch.is_ascii_whitespace()
-                || matches!(ch, '+' | '-' | '.' | ',')
-                || matches!(ch, 'e' | 'E')
-                || matches!(ch, 'n' | 'N' | 'a' | 'A' | 'i' | 'I' | 'f' | 'F')
-        }
-        AxisUnit::DateTime => {
-            ch.is_ascii_digit()
-                || matches!(
-                    ch,
-                    '-' | '/' | '.' | ':' | ' ' | 'T' | 't' | '+' | 'Z' | 'z'
-                )
-        }
-    }
-}
-
-/// Обычный ввод заимствуется; буфер нужен только при удалении или замене символов.
-fn filtered_axis_text(text: &str, unit: AxisUnit) -> Cow<'_, str> {
-    let map_char = |ch| {
-        axis_char_allowed(unit, ch).then_some(if unit == AxisUnit::Float && ch == ',' {
-            '.'
-        } else {
-            ch
-        })
-    };
-    let Some((first_changed, _)) = text
-        .char_indices()
-        .find(|&(_, ch)| map_char(ch) != Some(ch))
-    else {
-        return Cow::Borrowed(text);
-    };
-    let mut filtered = String::with_capacity(text.len());
-    filtered.push_str(&text[..first_changed]);
-    filtered.extend(text[first_changed..].chars().filter_map(map_char));
-    Cow::Owned(filtered)
-}
-
-struct AxisFilteredText<'a> {
-    value: &'a mut String,
-    unit: AxisUnit,
-}
-
-impl<'a> AxisFilteredText<'a> {
-    const fn new(value: &'a mut String, unit: AxisUnit) -> Self {
-        Self { value, unit }
-    }
-}
-
-impl TextBuffer for AxisFilteredText<'_> {
-    fn is_mutable(&self) -> bool {
-        true
-    }
-
-    fn as_str(&self) -> &str {
-        self.value.as_str()
-    }
-
-    fn insert_text(&mut self, text: &str, char_index: CharIndex) -> usize {
-        let filtered = filtered_axis_text(text, self.unit);
-        if filtered.is_empty() {
-            return 0;
-        }
-        let byte_idx = TextBuffer::byte_index_from_char_index(self, char_index);
-        self.value.insert_str(byte_idx.into(), &filtered);
-        filtered.chars().count()
-    }
-
-    fn delete_char_range(&mut self, char_range: std::ops::Range<CharIndex>) {
-        if char_range.start >= char_range.end {
-            return;
-        }
-        let byte_start = TextBuffer::byte_index_from_char_index(self, char_range.start);
-        let byte_end = TextBuffer::byte_index_from_char_index(self, char_range.end);
-        self.value
-            .drain(usize::from(byte_start)..usize::from(byte_end));
-    }
-
-    fn type_id(&self) -> TypeId {
-        TypeId::of::<AxisFilteredText<'static>>()
-    }
-}
-
-pub(super) struct CalRowResult {
-    pub(super) value_rect: Option<Rect>,
-    pub(super) pick_rect: Option<Rect>,
+pub(super) struct CalibrationRowResponse {
+    pub(super) value_rect: Rect,
+    pub(super) pick_rect: Rect,
     pub(super) requested_pick: Option<PickMode>,
 }
 
-impl CurcatApp {
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn render_calibration_row(
-        ui: &mut egui::Ui,
-        name: &str,
-        language: UiLanguage,
-        unit: AxisUnit,
-        value_text: &mut String,
-        focus_target: AxisValueField,
-        pending_focus: &mut Option<AxisValueField>,
-        pick_mode: PickMode,
-        point: Option<Pos2>,
-    ) -> CalRowResult {
-        let mut value_rect = None;
-        let mut pick_rect = None;
-        let mut requested_pick = None;
-        let row_height = ui.spacing().interact_size.y;
-        let row_spacing_x: f32 = 6.0;
-        let available_width = ui.available_width().max(220.0);
-        let label_width = match language {
-            UiLanguage::En => 70.0,
-            UiLanguage::Ru => 82.0,
-        };
-        let pick_width = match language {
-            UiLanguage::En => 82.0,
-            UiLanguage::Ru => 90.0,
-        };
-        let value_width = row_spacing_x
-            .mul_add(-2.0, available_width - label_width - pick_width)
-            .clamp(64.0, 110.0);
+impl AxisValueField {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::X1 => "X1",
+            Self::X2 => "X2",
+            Self::Y1 => "Y1",
+            Self::Y2 => "Y2",
+            Self::R1 => "R1",
+            Self::R2 => "R2",
+            Self::A1 => "A1",
+            Self::A2 => "A2",
+        }
+    }
 
-        ui.horizontal(|ui| {
+    const fn pick_mode(self) -> PickMode {
+        match self {
+            Self::X1 => PickMode::X1,
+            Self::X2 => PickMode::X2,
+            Self::Y1 => PickMode::Y1,
+            Self::Y2 => PickMode::Y2,
+            Self::R1 => PickMode::R1,
+            Self::R2 => PickMode::R2,
+            Self::A1 => PickMode::A1,
+            Self::A2 => PickMode::A2,
+        }
+    }
+}
+
+/// A calibration input and pick button whose identity determines its label and action.
+#[must_use = "Render the calibration row with show()."]
+pub(super) struct CalibrationRow<'a> {
+    field: AxisValueField,
+    value_text: &'a mut String,
+    language: UiLanguage,
+    unit: AxisUnit,
+    point: Option<Pos2>,
+}
+
+impl<'a> CalibrationRow<'a> {
+    pub(super) const fn new(
+        field: AxisValueField,
+        value_text: &'a mut String,
+        language: UiLanguage,
+    ) -> Self {
+        Self {
+            field,
+            value_text,
+            language,
+            unit: AxisUnit::Float,
+            point: None,
+        }
+    }
+
+    pub(super) const fn unit(mut self, unit: AxisUnit) -> Self {
+        self.unit = unit;
+        self
+    }
+
+    pub(super) const fn point(mut self, point: Option<Pos2>) -> Self {
+        self.point = point;
+        self
+    }
+
+    pub(super) fn show(
+        self,
+        ui: &mut egui::Ui,
+        pending_focus: &mut Option<AxisValueField>,
+    ) -> CalibrationRowResponse {
+        let Self {
+            field,
+            value_text,
+            language,
+            unit,
+            point,
+        } = self;
+        let name = field.name();
+        let row_height = ui.spacing().interact_size.y;
+        let row_spacing_x = style::SPACE_ROW;
+        let CalibrationRowWidths {
+            label: label_width,
+            pick: pick_width,
+            value: value_width,
+        } = CalibrationRowWidths::new(language, ui.available_width());
+
+        let row = ui.horizontal(|ui| {
             ui.style_mut().spacing.item_spacing.x = row_spacing_x;
             let value_label = match language {
                 UiLanguage::En => format!("{name} value:"),
@@ -156,26 +121,22 @@ impl CurcatApp {
                 .add_sized([label_width, row_height], egui::Label::new(value_label))
                 .on_hover_text(value_hover);
             let value_resp = {
-                let mut buffer = AxisFilteredText::new(value_text, unit);
+                let mut buffer = FilteredAxisText::new(value_text, unit);
                 ui.add_sized([value_width, row_height], TextEdit::singleline(&mut buffer))
             };
-            // Link labels only for querying fields in UI tests.
-            #[cfg(feature = "testing")]
-            let value_resp = value_resp.labelled_by(value_label.id);
-            #[cfg(not(feature = "testing"))]
-            let _ = value_label;
-            let value_resp = value_resp.on_hover_text(match unit {
-                AxisUnit::Float => match language {
-                    UiLanguage::En => "Enter a number (e.g., 1.23)",
-                    UiLanguage::Ru => "Введите число (например, 1.23)",
-                },
-                AxisUnit::DateTime => match language {
-                    UiLanguage::En => "Enter date/time (e.g., 2024-10-31 12:30)",
-                    UiLanguage::Ru => "Введите дату/время (например, 2024-10-31 12:30)",
-                },
-            });
-            Self::apply_pending_focus(pending_focus, focus_target, &value_resp, value_text);
-            value_rect = Some(value_resp.rect);
+            let value_resp = value_resp
+                .labelled_by(value_label.id)
+                .on_hover_text(match unit {
+                    AxisUnit::Float => match language {
+                        UiLanguage::En => "Enter a number (e.g., 1.23)",
+                        UiLanguage::Ru => "Введите число (например, 1.23)",
+                    },
+                    AxisUnit::DateTime => match language {
+                        UiLanguage::En => "Enter date/time (e.g., 2024-10-31 12:30)",
+                        UiLanguage::Ru => "Введите дату/время (например, 2024-10-31 12:30)",
+                    },
+                });
+            Self::apply_pending_focus(pending_focus, field, &value_resp, value_text);
 
             let pick_button = match language {
                 UiLanguage::En => format!("Pick {name}"),
@@ -188,44 +149,30 @@ impl CurcatApp {
             let pick_resp = ui
                 .add_sized(
                     [pick_width, row_height],
-                    egui::Button::image_and_text(
-                        icons::image(icons::ICON_PICK_POINT, icons::BUTTON_ICON_SIZE),
-                        pick_button,
-                    )
-                    .image_tint_follows_text_color(true)
-                    .min_size(egui::vec2(pick_width, row_height)),
+                    common::icon_button(icons::ICON_PICK_POINT, pick_button)
+                        .min_size(egui::vec2(pick_width, row_height)),
                 )
                 .on_hover_text(pick_hover);
-            if pick_resp.clicked() {
-                requested_pick = Some(pick_mode);
+            CalibrationRowResponse {
+                value_rect: value_resp.rect,
+                pick_rect: pick_resp.rect,
+                requested_pick: pick_resp.clicked().then_some(field.pick_mode()),
             }
-            pick_rect = Some(pick_resp.rect);
         });
-        if let Some(p) = point {
-            ui.horizontal(|ui| {
-                ui.add_space(label_width + row_spacing_x);
-                ui.label(
-                    RichText::new(format!("@ ({:.1},{:.1})", p.x, p.y))
-                        .small()
-                        .weak(),
-                );
-            });
+        if let Some(point) = point {
+            common::point_coordinates(ui, point, label_width + row_spacing_x);
         }
 
-        CalRowResult {
-            value_rect,
-            pick_rect,
-            requested_pick,
-        }
+        row.inner
     }
 
-    pub(super) fn apply_pending_focus(
+    fn apply_pending_focus(
         pending_focus: &mut Option<AxisValueField>,
         target: AxisValueField,
         response: &Response,
         text: &str,
     ) {
-        if pending_focus.is_some_and(|pending| pending == target) {
+        if *pending_focus == Some(target) {
             response.request_focus();
             if !text.is_empty() {
                 Self::select_all_text(response, text);
@@ -240,42 +187,5 @@ impl CurcatApp {
         let range = CCursorRange::two(CCursor::default(), CCursor::new(end));
         state.cursor.set_char_range(Some(range));
         TextEdit::store_state(&response.ctx, response.id, state);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn valid_axis_input_is_borrowed() {
-        for (unit, text) in [
-            (AxisUnit::Float, ""),
-            (AxisUnit::Float, "-1.25e+3"),
-            (AxisUnit::Float, " NaN inf\t"),
-            (AxisUnit::DateTime, "2026-09-22T12:30:45+03:00"),
-        ] {
-            let filtered = filtered_axis_text(text, unit);
-            assert!(matches!(filtered, Cow::Borrowed(_)));
-            assert_eq!(filtered, text);
-        }
-    }
-
-    #[test]
-    fn pasted_axis_input_preserves_filtering_rules() {
-        for (unit, input, expected) in [
-            (AxisUnit::Float, "12,34", "12.34"),
-            (AxisUnit::Float, "θ=−12,3 📈", "12.3 "),
-            (AxisUnit::Float, "abc123", "a123"),
-            (
-                AxisUnit::DateTime,
-                "2026/09/22\t12:30\nZ",
-                "2026/09/2212:30Z",
-            ),
-            (AxisUnit::DateTime, "1,5", "15"),
-            (AxisUnit::DateTime, "текст📈", ""),
-        ] {
-            assert_eq!(filtered_axis_text(input, unit), expected);
-        }
     }
 }

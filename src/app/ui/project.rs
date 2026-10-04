@@ -1,4 +1,5 @@
 use super::super::CurcatApp;
+use super::{common, style};
 use crate::i18n::{TextKey, UiLanguage};
 
 impl CurcatApp {
@@ -9,17 +10,15 @@ impl CurcatApp {
         let mut continue_load = false;
         let mut cancel_load = false;
         let mut open = true;
-        egui::Window::new(self.t(TextKey::ProjectWarningsWindow))
+        common::tool_window(self.t(TextKey::ProjectWarningsWindow))
             .open(&mut open)
-            .resizable(false)
-            .collapsible(false)
             .show(ctx, |ui| {
                 ui.label(self.t(TextKey::ProjectWarningsIntro));
-                ui.add_space(4.0);
+                ui.add_space(style::SPACE_SMALL);
                 for warn in &prompt.warnings {
                     ui.label(format!("• {}", self.project_warning_text(warn)));
                 }
-                ui.add_space(8.0);
+                ui.add_space(style::SPACE_GROUP);
                 ui.horizontal(|ui| {
                     if ui.button(self.t(TextKey::ContinueAnyway)).clicked() {
                         continue_load = true;

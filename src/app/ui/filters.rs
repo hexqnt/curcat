@@ -1,3 +1,4 @@
+use super::{common, style};
 use crate::app::CurcatApp;
 use crate::i18n::TextKey;
 use crate::image::ImageFilters;
@@ -10,10 +11,8 @@ impl CurcatApp {
         }
 
         let mut open = self.ui.image_filters_window_open;
-        egui::Window::new(self.t(TextKey::ImageFiltersWindow))
+        common::tool_window(self.t(TextKey::ImageFiltersWindow))
             .open(&mut open)
-            .resizable(false)
-            .collapsible(false)
             .show(ctx, |ui| {
                 self.ui_image_filters_section(ui);
             });
@@ -23,13 +22,13 @@ impl CurcatApp {
     fn ui_image_filters_section(&mut self, ui: &mut egui::Ui) {
         let i18n = self.i18n();
         ui.label(RichText::new(i18n.text(TextKey::FiltersAffectDisplayOnly)).small());
-        ui.add_space(4.0);
+        ui.add_space(style::SPACE_SMALL);
 
         let has_image = self.image.image.is_some();
         let mut changed = false;
 
         ui.add_enabled_ui(has_image, |ui| {
-            ui.spacing_mut().slider_width = 150.0;
+            ui.spacing_mut().slider_width = style::SLIDER_WIDTH;
 
             changed |= ui
                 .add(

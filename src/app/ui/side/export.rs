@@ -1,4 +1,4 @@
-use super::super::icons;
+use super::super::{common, icons, style};
 use crate::app::{CurcatApp, ExportKind, SAMPLE_COUNT_MIN};
 use crate::export::ExportFormat;
 use crate::i18n::TextKey;
@@ -79,9 +79,7 @@ impl CurcatApp {
         let resp = ui
             .add_enabled(
                 enabled,
-                egui::Button::image_and_text(icons::image(icon, icons::BUTTON_ICON_SIZE), label)
-                    .image_tint_follows_text_color(true)
-                    .shortcut_text(shortcut),
+                common::icon_button(icon, label).shortcut_text(shortcut),
             )
             .on_hover_text(hint);
         if resp.clicked() {
@@ -115,7 +113,7 @@ impl CurcatApp {
                 )
                 .on_hover_text(i18n.text(TextKey::RawPickedPointsHover));
             });
-        ui.add_space(4.0);
+        ui.add_space(style::SPACE_SMALL);
 
         match self.export.export_kind {
             ExportKind::Interpolated => {
@@ -138,7 +136,7 @@ impl CurcatApp {
 
                 ui.label(i18n.text(TextKey::Samples))
                     .on_hover_text(i18n.text(TextKey::SamplesHover));
-                ui.spacing_mut().slider_width = 150.0;
+                ui.spacing_mut().slider_width = style::SLIDER_WIDTH;
                 ui.horizontal(|ui| {
                     let max_samples = self.config.export.samples_max_sanitized();
                     self.export.sample_count = self

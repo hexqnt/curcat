@@ -32,6 +32,53 @@ fn picking_calibration_point_focuses_value_and_escape_cancels_next_pick() {
 }
 
 #[test]
+fn every_calibration_pick_focuses_and_edits_its_own_value() {
+    for (language, cartesian, polar) in [
+        (UiLanguage::En, "Cartesian", "Polar"),
+        (UiLanguage::Ru, "Декартова", "Полярная"),
+    ] {
+        for (polar_mode, names) in [
+            (false, ["X1", "X2", "Y1", "Y2"]),
+            (true, ["R1", "R2", "A1", "A2"]),
+        ] {
+            let mut harness = curcat_test_support::harness(0, language);
+            harness.set_size(vec2(1500.0, 1100.0));
+            advance(&mut harness);
+            if polar_mode {
+                harness.get_by_value(cartesian).click();
+                advance(&mut harness);
+                click(&mut harness, polar);
+            }
+            for name in names {
+                let (pick, value) = match language {
+                    UiLanguage::En => (format!("Pick {name}"), format!("{name} value:")),
+                    UiLanguage::Ru => (format!("Выбрать {name}"), format!("Значение {name}:")),
+                };
+                harness.get_by_label(&pick).scroll_to_me();
+                advance(&mut harness);
+                click(&mut harness, &pick);
+                assert!(state(&harness).picking);
+                click_image(&mut harness, pos2(200.0, 320.0));
+                advance(&mut harness);
+                assert!(!state(&harness).picking);
+                let field = harness.get_by_role_and_label(Role::TextInput, &value);
+                assert!(field.is_focused(), "Picking {name} must focus its value");
+                field.type_text("12,34");
+                advance(&mut harness);
+                assert_eq!(
+                    harness
+                        .get_by_role_and_label(Role::TextInput, &value)
+                        .value()
+                        .as_deref(),
+                    Some("12.34")
+                );
+                assert_eq!(state(&harness).points, 0);
+            }
+        }
+    }
+}
+
+#[test]
 fn undo_shortcut_removes_clicked_point_and_resize_preserves_points() {
     let mut harness = harness();
     let first = pos2(300.0, 200.0);

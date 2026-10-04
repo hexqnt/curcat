@@ -2,27 +2,26 @@ use super::super::{
     APP_REPOSITORY, APP_VERSION, CalibrationMapping, CurcatApp, PickMode, StatusLevel,
     describe_aspect_ratio, format_system_time, human_readable_bytes, total_pixel_count,
 };
-use super::icons;
 use super::stats::{AxisKind, axis_length, format_span};
+use super::{common, icons, style};
 use crate::i18n::TextKey;
 use crate::types::{AxisUnit, AxisValue, CoordSystem, PolarMapping};
 use egui::{Color32, CornerRadius, FontId, Margin, RichText, Stroke};
 use std::time::{Duration, Instant};
 
 impl CurcatApp {
-    const STATUS_BAR_FONT_SIZE: f32 = 13.0;
     const STATUS_INFO_TTL: Duration = Duration::from_secs(6);
     const STATUS_WARN_TTL: Duration = Duration::from_secs(10);
     const STATUS_COPY_FEEDBACK_TTL: Duration = Duration::from_secs(2);
 
     const fn status_bar_font() -> FontId {
-        FontId::proportional(Self::STATUS_BAR_FONT_SIZE)
+        FontId::proportional(style::STATUS_FONT_SIZE)
     }
 
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_status_bar(&mut self, ui: &mut egui::Ui) {
         self.tick_status_timers(ui.ctx());
-        ui.add_space(2.0);
+        ui.add_space(style::SPACE_TIGHT);
         let points_count = self.points.points.len();
         let i18n = self.i18n();
         let ui_lang = self.ui.language;
@@ -50,23 +49,23 @@ impl CurcatApp {
                     ui.label(
                         RichText::new(i18n.format_points_count(points_count))
                             .font(status_font.clone())
-                            .color(Color32::from_gray(180)),
+                            .color(style::secondary_text_color(ui.visuals())),
                     );
-                    Self::status_bar_separator(ui);
-                    Self::draw_mode_chip(ui, &mode_label, mode_color, &status_font);
+                    common::bar_separator(ui);
+                    Self::draw_mode_chip(ui, mode_label, mode_color, &status_font);
                     if let Some((status_text, status_level)) = status_snapshot.as_ref() {
-                        Self::status_bar_separator(ui);
+                        common::bar_separator(ui);
                         ui.add(
                             egui::Label::new(
                                 RichText::new(status_text.as_str())
                                     .font(status_font.clone())
-                                    .color(Self::status_color(*status_level)),
+                                    .color(style::status_color(*status_level, ui.visuals())),
                             )
                             .truncate(),
                         );
 
                         if *status_level == StatusLevel::Error {
-                            ui.add_space(6.0);
+                            ui.add_space(style::SPACE_ROW);
                             let copy_label = match (ui_lang, copied_feedback_active) {
                                 (crate::i18n::UiLanguage::En, false) => "Copy details",
                                 (crate::i18n::UiLanguage::En, true) => "Copied",
@@ -90,7 +89,7 @@ impl CurcatApp {
                             }
                         }
 
-                        ui.add_space(6.0);
+                        ui.add_space(style::SPACE_ROW);
                         let close_hover = match ui_lang {
                             crate::i18n::UiLanguage::En => "Dismiss status message",
                             crate::i18n::UiLanguage::Ru => "Скрыть сообщение статуса",
@@ -102,7 +101,7 @@ impl CurcatApp {
                                     icons::INLINE_ICON_SIZE,
                                 ))
                                 .frame(false)
-                                .min_size(egui::vec2(24.0, 24.0))
+                                .min_size(egui::Vec2::splat(style::ICON_BUTTON_SIZE))
                                 .image_tint_follows_text_color(true),
                             )
                             .on_hover_text(close_hover)
@@ -117,7 +116,7 @@ impl CurcatApp {
                         ui.label(
                             RichText::new(i18n.format_version(APP_VERSION))
                                 .font(status_font.clone())
-                                .color(Color32::from_gray(160)),
+                                .color(style::secondary_text_color(ui.visuals())),
                         );
 
                         let github_icon = egui::Image::new(egui::include_image!(
@@ -132,7 +131,7 @@ impl CurcatApp {
 
                         let mut github_button = egui::Button::image(github_icon)
                             .frame(true)
-                            .min_size(egui::vec2(24.0, 24.0));
+                            .min_size(egui::Vec2::splat(style::ICON_BUTTON_SIZE));
                         if ui.visuals().dark_mode {
                             github_button = github_button
                                 .fill(Color32::from_gray(230))
@@ -143,9 +142,9 @@ impl CurcatApp {
                             ui.ctx().open_url(egui::OpenUrl::new_tab(APP_REPOSITORY));
                         }
                     });
-                    ui.add_space(8.0);
+                    ui.add_space(style::SPACE_GROUP);
                     self.ui_language_selector(ui);
-                    ui.add_space(8.0);
+                    ui.add_space(style::SPACE_GROUP);
                     egui::widgets::global_theme_preference_switch(ui);
                 },
             );
@@ -168,10 +167,8 @@ impl CurcatApp {
         }
 
         let i18n = self.i18n();
-        egui::Window::new(i18n.text(TextKey::ImageInfoWindow))
+        common::tool_window(i18n.text(TextKey::ImageInfoWindow))
             .open(&mut self.ui.info_window_open)
-            .resizable(false)
-            .collapsible(false)
             .show(ctx, |ui| {
                 if let Some(image) = &self.image.image {
                     ui.heading(i18n.text(TextKey::FileSection));
@@ -218,8 +215,7 @@ impl CurcatApp {
                         ui.label(i18n.text(TextKey::NoFileMetadataForImage));
                     }
 
-                    ui.add_space(6.0);
-                    ui.heading(i18n.text(TextKey::ImageSection));
+                    common::section_heading(ui, i18n.text(TextKey::ImageSection));
                     let [w, h] = image.size;
                     ui.label(i18n.format_dimensions(w, h));
                     if let Some(aspect_text) = describe_aspect_ratio(image.size) {
@@ -258,9 +254,9 @@ impl CurcatApp {
 
         let mut open = self.ui.points_info_window_open;
         let i18n = self.i18n();
-        egui::Window::new(i18n.text(TextKey::PointsInfoWindow))
+        common::tool_window(i18n.text(TextKey::PointsInfoWindow))
             .open(&mut open)
-            .resizable(false)
+            .collapsible(true)
             .show(ctx, |ui| {
                 let total = self.points.points.len();
                 ui.heading(i18n.text(TextKey::Points));
@@ -280,8 +276,7 @@ impl CurcatApp {
                     ui.label(RichText::new(i18n.format_calibrated_pairs(calibrated)).weak());
                 }
 
-                ui.add_space(6.0);
-                ui.heading(i18n.text(TextKey::Ranges));
+                common::section_heading(ui, i18n.text(TextKey::Ranges));
                 match self.calibration.coord_system {
                     crate::types::CoordSystem::Cartesian => {
                         self.render_axis_stats(
@@ -313,12 +308,10 @@ impl CurcatApp {
                     }
                 }
 
-                ui.add_space(6.0);
-                ui.heading(i18n.text(TextKey::CalibrationSection));
+                common::section_heading(ui, i18n.text(TextKey::CalibrationSection));
                 self.render_calibration_stats(ui, polar_mapping.as_ref());
 
-                ui.add_space(6.0);
-                ui.heading(i18n.text(TextKey::Geometry));
+                common::section_heading(ui, i18n.text(TextKey::Geometry));
                 self.render_geometry_stats(ui);
             });
         self.ui.points_info_window_open = open;
@@ -356,15 +349,7 @@ impl CurcatApp {
         }
     }
 
-    const fn status_color(level: StatusLevel) -> Color32 {
-        match level {
-            StatusLevel::Info => Color32::from_gray(200),
-            StatusLevel::Warn => Color32::from_rgb(242, 194, 102),
-            StatusLevel::Error => Color32::from_rgb(240, 128, 128),
-        }
-    }
-
-    fn cursor_mode_chip(&self, ctx: &egui::Context) -> (String, Color32) {
+    fn cursor_mode_chip(&self, ctx: &egui::Context) -> (&'static str, Color32) {
         let (delete_down, shift_pressed, ctrl_pressed) = ctx.input(|i| {
             (
                 i.key_down(egui::Key::Delete),
@@ -375,151 +360,45 @@ impl CurcatApp {
         if let Some(pick_mode) = self.pick_mode_chip() {
             return pick_mode;
         }
-        if self.interaction.auto_place_state.active {
-            return match self.ui.language {
-                crate::i18n::UiLanguage::En => {
-                    ("Auto-place".to_string(), Color32::from_rgb(170, 220, 255))
-                }
-                crate::i18n::UiLanguage::Ru => (
-                    "Авто-расстановка".to_string(),
-                    Color32::from_rgb(170, 220, 255),
-                ),
-            };
-        }
-        if delete_down {
-            return match self.ui.language {
-                crate::i18n::UiLanguage::En => {
-                    ("Delete point".to_string(), Color32::from_rgb(255, 150, 150))
-                }
-                crate::i18n::UiLanguage::Ru => (
-                    "Удаление точки".to_string(),
-                    Color32::from_rgb(255, 150, 150),
-                ),
-            };
-        }
-        if shift_pressed {
-            return match self.ui.language {
-                crate::i18n::UiLanguage::En => {
-                    ("Drag".to_string(), Color32::from_rgb(190, 225, 255))
-                }
-                crate::i18n::UiLanguage::Ru => (
-                    "Перетаскивание".to_string(),
-                    Color32::from_rgb(190, 225, 255),
-                ),
-            };
-        }
-        if ctrl_pressed {
-            return match self.ui.language {
-                crate::i18n::UiLanguage::En => {
-                    ("Zoom".to_string(), Color32::from_rgb(186, 235, 186))
-                }
-                crate::i18n::UiLanguage::Ru => {
-                    ("Масштаб".to_string(), Color32::from_rgb(186, 235, 186))
-                }
-            };
-        }
-        match self.ui.language {
-            crate::i18n::UiLanguage::En => ("Normal".to_string(), Color32::from_gray(210)),
-            crate::i18n::UiLanguage::Ru => ("Обычный".to_string(), Color32::from_gray(210)),
-        }
+        let (english, russian, color) = if self.interaction.auto_place_state.active {
+            ("Auto-place", "Авто-расстановка", style::MODE_AUTO_PLACE)
+        } else if delete_down {
+            ("Delete point", "Удаление точки", style::MODE_DELETE)
+        } else if shift_pressed {
+            ("Drag", "Перетаскивание", style::MODE_PAN)
+        } else if ctrl_pressed {
+            ("Zoom", "Масштаб", style::MODE_ZOOM)
+        } else {
+            ("Normal", "Обычный", style::MODE_NORMAL)
+        };
+        let label = match self.ui.language {
+            crate::i18n::UiLanguage::En => english,
+            crate::i18n::UiLanguage::Ru => russian,
+        };
+        (label, color)
     }
 
-    fn pick_mode_chip(&self) -> Option<(String, Color32)> {
-        match self.calibration.pick_mode {
-            PickMode::None => None,
-            PickMode::X1 => Some(match self.ui.language {
-                crate::i18n::UiLanguage::En => {
-                    ("Pick X1".to_string(), Color32::from_rgb(190, 225, 255))
-                }
-                crate::i18n::UiLanguage::Ru => {
-                    ("Выбор X1".to_string(), Color32::from_rgb(190, 225, 255))
-                }
-            }),
-            PickMode::X2 => Some(match self.ui.language {
-                crate::i18n::UiLanguage::En => {
-                    ("Pick X2".to_string(), Color32::from_rgb(190, 225, 255))
-                }
-                crate::i18n::UiLanguage::Ru => {
-                    ("Выбор X2".to_string(), Color32::from_rgb(190, 225, 255))
-                }
-            }),
-            PickMode::Y1 => Some(match self.ui.language {
-                crate::i18n::UiLanguage::En => {
-                    ("Pick Y1".to_string(), Color32::from_rgb(200, 255, 200))
-                }
-                crate::i18n::UiLanguage::Ru => {
-                    ("Выбор Y1".to_string(), Color32::from_rgb(200, 255, 200))
-                }
-            }),
-            PickMode::Y2 => Some(match self.ui.language {
-                crate::i18n::UiLanguage::En => {
-                    ("Pick Y2".to_string(), Color32::from_rgb(200, 255, 200))
-                }
-                crate::i18n::UiLanguage::Ru => {
-                    ("Выбор Y2".to_string(), Color32::from_rgb(200, 255, 200))
-                }
-            }),
-            PickMode::Origin => Some(match self.ui.language {
-                crate::i18n::UiLanguage::En => {
-                    ("Pick origin".to_string(), Color32::from_rgb(255, 230, 180))
-                }
-                crate::i18n::UiLanguage::Ru => {
-                    ("Выбор начала".to_string(), Color32::from_rgb(255, 230, 180))
-                }
-            }),
-            PickMode::R1 => Some(match self.ui.language {
-                crate::i18n::UiLanguage::En => {
-                    ("Pick R1".to_string(), Color32::from_rgb(255, 210, 160))
-                }
-                crate::i18n::UiLanguage::Ru => {
-                    ("Выбор R1".to_string(), Color32::from_rgb(255, 210, 160))
-                }
-            }),
-            PickMode::R2 => Some(match self.ui.language {
-                crate::i18n::UiLanguage::En => {
-                    ("Pick R2".to_string(), Color32::from_rgb(255, 210, 160))
-                }
-                crate::i18n::UiLanguage::Ru => {
-                    ("Выбор R2".to_string(), Color32::from_rgb(255, 210, 160))
-                }
-            }),
-            PickMode::A1 => Some(match self.ui.language {
-                crate::i18n::UiLanguage::En => {
-                    ("Pick A1".to_string(), Color32::from_rgb(200, 210, 255))
-                }
-                crate::i18n::UiLanguage::Ru => {
-                    ("Выбор A1".to_string(), Color32::from_rgb(200, 210, 255))
-                }
-            }),
-            PickMode::A2 => Some(match self.ui.language {
-                crate::i18n::UiLanguage::En => {
-                    ("Pick A2".to_string(), Color32::from_rgb(200, 210, 255))
-                }
-                crate::i18n::UiLanguage::Ru => {
-                    ("Выбор A2".to_string(), Color32::from_rgb(200, 210, 255))
-                }
-            }),
-            PickMode::CurveColor => Some(match self.ui.language {
-                crate::i18n::UiLanguage::En => (
-                    "Pick curve color".to_string(),
-                    Color32::from_rgb(255, 210, 160),
-                ),
-                crate::i18n::UiLanguage::Ru => (
-                    "Выбор цвета кривой".to_string(),
-                    Color32::from_rgb(255, 210, 160),
-                ),
-            }),
-            PickMode::AutoTrace => Some(match self.ui.language {
-                crate::i18n::UiLanguage::En => (
-                    "Auto-trace pick".to_string(),
-                    Color32::from_rgb(215, 215, 255),
-                ),
-                crate::i18n::UiLanguage::Ru => (
-                    "Авто-трассировка".to_string(),
-                    Color32::from_rgb(215, 215, 255),
-                ),
-            }),
-        }
+    const fn pick_mode_chip(&self) -> Option<(&'static str, Color32)> {
+        let mode = self.calibration.pick_mode;
+        let (english, russian) = match mode {
+            PickMode::None => return None,
+            PickMode::X1 => ("Pick X1", "Выбор X1"),
+            PickMode::X2 => ("Pick X2", "Выбор X2"),
+            PickMode::Y1 => ("Pick Y1", "Выбор Y1"),
+            PickMode::Y2 => ("Pick Y2", "Выбор Y2"),
+            PickMode::Origin => ("Pick origin", "Выбор начала"),
+            PickMode::R1 => ("Pick R1", "Выбор R1"),
+            PickMode::R2 => ("Pick R2", "Выбор R2"),
+            PickMode::A1 => ("Pick A1", "Выбор A1"),
+            PickMode::A2 => ("Pick A2", "Выбор A2"),
+            PickMode::CurveColor => ("Pick curve color", "Выбор цвета кривой"),
+            PickMode::AutoTrace => ("Auto-trace pick", "Авто-трассировка"),
+        };
+        let label = match self.ui.language {
+            crate::i18n::UiLanguage::En => english,
+            crate::i18n::UiLanguage::Ru => russian,
+        };
+        Some((label, style::pick_mode_color(mode)))
     }
 
     fn draw_mode_chip(ui: &mut egui::Ui, label: &str, color: Color32, font: &FontId) {
@@ -532,14 +411,12 @@ impl CurcatApp {
             .corner_radius(CornerRadius::same(6))
             .inner_margin(Margin::symmetric(7, 3))
             .show(ui, |ui| {
-                ui.label(RichText::new(label).font(font.clone()).color(color));
+                ui.label(
+                    RichText::new(label)
+                        .font(font.clone())
+                        .color(style::mode_text_color(color, ui.visuals())),
+                );
             });
-    }
-
-    fn status_bar_separator(ui: &mut egui::Ui) {
-        ui.add_space(2.0);
-        ui.separator();
-        ui.add_space(2.0);
     }
 
     fn render_axis_stats(

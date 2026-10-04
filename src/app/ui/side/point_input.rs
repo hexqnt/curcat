@@ -1,4 +1,4 @@
-use super::super::common::toggle_switch;
+use super::super::{common, style};
 use crate::app::snap_helpers::SNAP_SWATCH_SIZE;
 use crate::app::{CurcatApp, PickMode, PointInputMode};
 use crate::i18n::TextKey;
@@ -42,7 +42,7 @@ impl CurcatApp {
             PointInputMode::ContrastSnap => {
                 self.ui_snap_radius_slider(ui);
                 self.ui_snap_overlay_color_selector(ui);
-                ui.add_space(4.0);
+                ui.add_space(style::SPACE_SMALL);
                 ui.label(i18n.text(TextKey::FeatureSource))
                     .on_hover_text(i18n.text(TextKey::FeatureSourceHover));
                 egui::ComboBox::from_id_salt("snap_feature_source")
@@ -62,7 +62,7 @@ impl CurcatApp {
                 ) {
                     self.ui_curve_color_controls(ui);
                 }
-                ui.add_space(4.0);
+                ui.add_space(style::SPACE_SMALL);
                 ui.label(i18n.text(TextKey::ThresholdMode))
                     .on_hover_text(i18n.text(TextKey::ThresholdModeHover));
                 ui.horizontal(|ui| {
@@ -98,10 +98,10 @@ impl CurcatApp {
                 ui.label(i18n.text(TextKey::CenterlineDetectsFlat))
                     .on_hover_text(i18n.text(TextKey::CenterlineDetectsFlatHover));
                 self.ui_curve_color_controls(ui);
-                ui.add_space(4.0);
+                ui.add_space(style::SPACE_SMALL);
                 ui.label(i18n.text(TextKey::StrengthThreshold))
                     .on_hover_text(i18n.text(TextKey::StrengthThresholdHover));
-                ui.spacing_mut().slider_width = 150.0;
+                ui.spacing_mut().slider_width = style::SLIDER_WIDTH;
                 ui.add(
                     egui::Slider::new(&mut self.snap.centerline_threshold, 0.0..=255.0)
                         .text(i18n.text(TextKey::Threshold))
@@ -109,7 +109,7 @@ impl CurcatApp {
                 )
                 .on_hover_text(i18n.text(TextKey::HigherOnlyWellDefined));
                 ui.scope(|ui| {
-                    ui.style_mut().spacing.item_spacing.x = 4.0;
+                    ui.style_mut().spacing.item_spacing.x = style::SPACE_SMALL;
                     ui.label(RichText::new(i18n.text(TextKey::BestResultsColorSample)).small());
                 });
             }
@@ -119,26 +119,27 @@ impl CurcatApp {
             PointInputMode::ContrastSnap | PointInputMode::CenterlineSnap
         ) {
             ui.scope(|ui| {
-                ui.style_mut().spacing.item_spacing.x = 4.0;
+                ui.style_mut().spacing.item_spacing.x = style::SPACE_SMALL;
                 ui.label(RichText::new(i18n.text(TextKey::PreviewCircleHint)).small());
             });
         }
-        ui.add_space(6.0);
+        ui.add_space(style::SPACE_ROW);
         ui.horizontal(|ui| {
-            toggle_switch(ui, &mut self.points.show_curve_segments)
-                .on_hover_text(i18n.text(TextKey::ShowPointConnectionsHover));
-            ui.add_space(4.0);
-            ui.label(i18n.text(TextKey::ShowPointConnections))
-                .on_hover_text(i18n.text(TextKey::ShowPointConnectionsHover));
+            common::labelled_toggle(
+                ui,
+                &mut self.points.show_curve_segments,
+                i18n.text(TextKey::ShowPointConnections),
+                i18n.text(TextKey::ShowPointConnectionsHover),
+            );
         });
     }
 
     fn ui_snap_radius_slider(&mut self, ui: &mut egui::Ui) {
         let i18n = self.i18n();
-        ui.add_space(4.0);
+        ui.add_space(style::SPACE_SMALL);
         ui.label(i18n.text(TextKey::SearchRadiusPx))
             .on_hover_text(i18n.text(TextKey::SearchRadiusHover));
-        ui.spacing_mut().slider_width = 150.0;
+        ui.spacing_mut().slider_width = style::SLIDER_WIDTH;
         ui.add(
             egui::Slider::new(&mut self.snap.contrast_search_radius, 3.0..=60.0)
                 .logarithmic(false)
@@ -150,7 +151,7 @@ impl CurcatApp {
 
     fn ui_curve_color_controls(&mut self, ui: &mut egui::Ui) {
         let i18n = self.i18n();
-        ui.add_space(4.0);
+        ui.add_space(style::SPACE_SMALL);
         ui.horizontal(|ui| {
             ui.label(i18n.text(TextKey::CurveColor));
             let color_button = ui
@@ -184,11 +185,11 @@ impl CurcatApp {
         if self.snap.snap_overlay_choices.is_empty() {
             return;
         }
-        ui.add_space(4.0);
+        ui.add_space(style::SPACE_SMALL);
         ui.label(i18n.text(TextKey::SnapOverlayColor))
             .on_hover_text(i18n.text(TextKey::SnapOverlayColorHover));
         ui.horizontal_wrapped(|ui| {
-            ui.style_mut().spacing.item_spacing.x = 6.0;
+            ui.style_mut().spacing.item_spacing.x = style::SPACE_ROW;
             for (idx, color) in self.snap.snap_overlay_choices.iter().enumerate() {
                 let selected = idx == self.snap.snap_overlay_choice;
                 let (rect, response) =

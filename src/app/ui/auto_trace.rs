@@ -1,4 +1,4 @@
-use super::icons;
+use super::{common, icons, style};
 use crate::app::{AutoTraceDirection, CurcatApp, PickMode, PointInputMode};
 use crate::i18n::{TextKey, UiLanguage};
 use crate::types::CoordSystem;
@@ -11,10 +11,8 @@ impl CurcatApp {
         }
 
         let mut open = self.ui.auto_trace_window_open;
-        egui::Window::new(self.t(TextKey::AutoTraceWindow))
+        common::tool_window(self.t(TextKey::AutoTraceWindow))
             .open(&mut open)
-            .resizable(false)
-            .collapsible(false)
             .show(ctx, |ui| {
                 self.ui_auto_trace_section(ui);
             });
@@ -48,11 +46,7 @@ impl CurcatApp {
         if ui
             .add_enabled(
                 can_trace,
-                egui::Button::image_and_text(
-                    icons::image(icons::ICON_AUTO_TRACE, icons::BUTTON_ICON_SIZE),
-                    i18n.text(TextKey::TraceFromClick),
-                )
-                .image_tint_follows_text_color(true),
+                common::icon_button(icons::ICON_AUTO_TRACE, i18n.text(TextKey::TraceFromClick)),
             )
             .on_hover_text(trace_hint)
             .clicked()
@@ -60,7 +54,7 @@ impl CurcatApp {
             self.begin_pick_mode(PickMode::AutoTrace);
         }
 
-        ui.add_space(4.0);
+        ui.add_space(style::SPACE_SMALL);
         ui.label(i18n.text(TextKey::DirectionShort));
         egui::ComboBox::from_id_salt("auto_trace_direction")
             .selected_text(
@@ -94,7 +88,7 @@ impl CurcatApp {
                 }
             });
 
-        ui.spacing_mut().slider_width = 150.0;
+        ui.spacing_mut().slider_width = style::SLIDER_WIDTH;
         ui.add(
             egui::Slider::new(&mut self.interaction.auto_trace_cfg.step_px, 2.0..=40.0)
                 .text(i18n.text(TextKey::StepPx))
