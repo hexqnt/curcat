@@ -7,6 +7,8 @@ mod controls;
 mod dialogs;
 mod image;
 mod presentation;
+mod scrollbars;
+mod widgets;
 
 fn harness() -> AppHarness {
     curcat_test_support::harness(0, UiLanguage::En)

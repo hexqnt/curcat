@@ -1,4 +1,5 @@
 use super::{common, icons, style};
+use crate::app::widgets::{ActionButton, Choice};
 use crate::app::{AutoTraceDirection, CurcatApp, PickMode, PointInputMode};
 use crate::i18n::{TextKey, UiLanguage};
 use crate::types::CoordSystem;
@@ -46,7 +47,7 @@ impl CurcatApp {
         if ui
             .add_enabled(
                 can_trace,
-                common::icon_button(icons::ICON_AUTO_TRACE, i18n.text(TextKey::TraceFromClick)),
+                ActionButton::new(icons::ICON_AUTO_TRACE, i18n.text(TextKey::TraceFromClick)),
             )
             .on_hover_text(trace_hint)
             .clicked()
@@ -56,37 +57,24 @@ impl CurcatApp {
 
         ui.add_space(style::SPACE_SMALL);
         ui.label(i18n.text(TextKey::DirectionShort));
-        egui::ComboBox::from_id_salt("auto_trace_direction")
-            .selected_text(
-                match (self.ui.language, self.interaction.auto_trace_cfg.direction) {
-                    (UiLanguage::En, AutoTraceDirection::Forward) => "Forward (+X)",
-                    (UiLanguage::En, AutoTraceDirection::Backward) => "Backward (-X)",
-                    (UiLanguage::En, AutoTraceDirection::Both) => "Both",
-                    (UiLanguage::Ru, AutoTraceDirection::Forward) => "Вперёд (+X)",
-                    (UiLanguage::Ru, AutoTraceDirection::Backward) => "Назад (-X)",
-                    (UiLanguage::Ru, AutoTraceDirection::Both) => "В обе стороны",
-                },
-            )
-            .show_ui(ui, |ui| {
-                for dir in [
-                    AutoTraceDirection::Forward,
-                    AutoTraceDirection::Backward,
-                    AutoTraceDirection::Both,
-                ] {
-                    ui.selectable_value(
-                        &mut self.interaction.auto_trace_cfg.direction,
-                        dir,
-                        match (self.ui.language, dir) {
-                            (UiLanguage::En, AutoTraceDirection::Forward) => "Forward (+X)",
-                            (UiLanguage::En, AutoTraceDirection::Backward) => "Backward (-X)",
-                            (UiLanguage::En, AutoTraceDirection::Both) => "Both",
-                            (UiLanguage::Ru, AutoTraceDirection::Forward) => "Вперёд (+X)",
-                            (UiLanguage::Ru, AutoTraceDirection::Backward) => "Назад (-X)",
-                            (UiLanguage::Ru, AutoTraceDirection::Both) => "В обе стороны",
-                        },
-                    );
-                }
-            });
+        let language = self.ui.language;
+        ui.add(Choice::new(
+            "auto_trace_direction",
+            &mut self.interaction.auto_trace_cfg.direction,
+            &[
+                AutoTraceDirection::Forward,
+                AutoTraceDirection::Backward,
+                AutoTraceDirection::Both,
+            ],
+            |direction| match (language, direction) {
+                (UiLanguage::En, AutoTraceDirection::Forward) => "Forward (+X)",
+                (UiLanguage::En, AutoTraceDirection::Backward) => "Backward (-X)",
+                (UiLanguage::En, AutoTraceDirection::Both) => "Both",
+                (UiLanguage::Ru, AutoTraceDirection::Forward) => "Вперёд (+X)",
+                (UiLanguage::Ru, AutoTraceDirection::Backward) => "Назад (-X)",
+                (UiLanguage::Ru, AutoTraceDirection::Both) => "В обе стороны",
+            },
+        ));
 
         ui.spacing_mut().slider_width = style::SLIDER_WIDTH;
         ui.add(

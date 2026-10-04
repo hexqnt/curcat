@@ -37,6 +37,7 @@ mod snap_helpers;
 mod snap_state;
 mod ui;
 mod ui_state;
+mod widgets;
 
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -74,6 +75,8 @@ pub struct CurcatApp {
     ui: UiState,
     #[cfg(feature = "testing")]
     image_rect: Option<egui::Rect>,
+    #[cfg(feature = "testing")]
+    image_viewport: Option<egui::Rect>,
 }
 
 enum DialogPoll {
@@ -104,6 +107,8 @@ impl CurcatApp {
         Self {
             #[cfg(feature = "testing")]
             image_rect: None,
+            #[cfg(feature = "testing")]
+            image_viewport: None,
             config,
             image: ImageState {
                 image: None,
@@ -744,14 +749,6 @@ impl CurcatApp {
         }
         if self.fit_image_to_viewport_with_status(false) {
             self.image.pending_fit_on_load = false;
-        }
-    }
-
-    fn format_zoom(zoom: f32) -> String {
-        if (zoom - 1.0).abs() < 0.005 {
-            "100%".to_string()
-        } else {
-            format!("{:.0}%", zoom * 100.0)
         }
     }
 

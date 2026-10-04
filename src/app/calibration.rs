@@ -61,7 +61,7 @@ pub enum PickMode {
     AutoTrace,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AxisValueField {
     X1,
     X2,

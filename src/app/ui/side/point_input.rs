@@ -1,41 +1,42 @@
-use super::super::{common, style};
-use crate::app::snap_helpers::SNAP_SWATCH_SIZE;
+use super::super::style;
 use crate::app::{CurcatApp, PickMode, PointInputMode};
+use crate::app::{
+    snap_helpers::SNAP_SWATCH_SIZE,
+    widgets::{Choice, ColorPalette, ToggleRow},
+};
 use crate::i18n::TextKey;
 use crate::snap::{SnapFeatureSource, SnapThresholdKind};
-use egui::{Color32, CornerRadius, RichText, StrokeKind, Vec2};
+use egui::RichText;
 
 impl CurcatApp {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn ui_point_input_section(&mut self, ui: &mut egui::Ui) {
         let i18n = self.i18n();
-        let mode_label = match self.snap.point_input_mode {
-            PointInputMode::Free => i18n.text(TextKey::Free),
-            PointInputMode::ContrastSnap => i18n.text(TextKey::ContrastSnap),
-            PointInputMode::CenterlineSnap => i18n.text(TextKey::CenterlineSnap),
-        };
-        egui::ComboBox::from_id_salt("point_input_mode_combo")
-            .selected_text(mode_label)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    &mut self.snap.point_input_mode,
+        ui.add(
+            Choice::new(
+                "point_input_mode_combo",
+                &mut self.snap.point_input_mode,
+                &[
                     PointInputMode::Free,
-                    i18n.text(TextKey::Free),
-                )
-                .on_hover_text(i18n.text(TextKey::FreeHover));
-                ui.selectable_value(
-                    &mut self.snap.point_input_mode,
                     PointInputMode::ContrastSnap,
-                    i18n.text(TextKey::ContrastSnap),
-                )
-                .on_hover_text(i18n.text(TextKey::ContrastSnapHover));
-                ui.selectable_value(
-                    &mut self.snap.point_input_mode,
                     PointInputMode::CenterlineSnap,
-                    i18n.text(TextKey::CenterlineSnap),
-                )
-                .on_hover_text(i18n.text(TextKey::CenterlineSnapHover));
-            });
+                ],
+                |mode| {
+                    i18n.text(match mode {
+                        PointInputMode::Free => TextKey::Free,
+                        PointInputMode::ContrastSnap => TextKey::ContrastSnap,
+                        PointInputMode::CenterlineSnap => TextKey::CenterlineSnap,
+                    })
+                },
+            )
+            .hints(|mode| {
+                i18n.text(match mode {
+                    PointInputMode::Free => TextKey::FreeHover,
+                    PointInputMode::ContrastSnap => TextKey::ContrastSnapHover,
+                    PointInputMode::CenterlineSnap => TextKey::CenterlineSnapHover,
+                })
+            }),
+        );
 
         match self.snap.point_input_mode {
             PointInputMode::Free => {}
@@ -45,17 +46,12 @@ impl CurcatApp {
                 ui.add_space(style::SPACE_SMALL);
                 ui.label(i18n.text(TextKey::FeatureSource))
                     .on_hover_text(i18n.text(TextKey::FeatureSourceHover));
-                egui::ComboBox::from_id_salt("snap_feature_source")
-                    .selected_text(i18n.snap_feature_source_label(self.snap.snap_feature_source))
-                    .show_ui(ui, |ui| {
-                        for variant in SnapFeatureSource::ALL {
-                            ui.selectable_value(
-                                &mut self.snap.snap_feature_source,
-                                variant,
-                                i18n.snap_feature_source_label(variant),
-                            );
-                        }
-                    });
+                ui.add(Choice::new(
+                    "snap_feature_source",
+                    &mut self.snap.snap_feature_source,
+                    &SnapFeatureSource::ALL,
+                    |source| i18n.snap_feature_source_label(source),
+                ));
                 if matches!(
                     self.snap.snap_feature_source,
                     SnapFeatureSource::ColorMatch | SnapFeatureSource::Hybrid
@@ -124,14 +120,11 @@ impl CurcatApp {
             });
         }
         ui.add_space(style::SPACE_ROW);
-        ui.horizontal(|ui| {
-            common::labelled_toggle(
-                ui,
-                &mut self.points.show_curve_segments,
-                i18n.text(TextKey::ShowPointConnections),
-                i18n.text(TextKey::ShowPointConnectionsHover),
-            );
-        });
+        ui.add(ToggleRow::new(
+            &mut self.points.show_curve_segments,
+            i18n.text(TextKey::ShowPointConnections),
+            i18n.text(TextKey::ShowPointConnectionsHover),
+        ));
     }
 
     fn ui_snap_radius_slider(&mut self, ui: &mut egui::Ui) {
@@ -188,37 +181,16 @@ impl CurcatApp {
         ui.add_space(style::SPACE_SMALL);
         ui.label(i18n.text(TextKey::SnapOverlayColor))
             .on_hover_text(i18n.text(TextKey::SnapOverlayColorHover));
-        ui.horizontal_wrapped(|ui| {
-            ui.style_mut().spacing.item_spacing.x = style::SPACE_ROW;
-            for (idx, color) in self.snap.snap_overlay_choices.iter().enumerate() {
-                let selected = idx == self.snap.snap_overlay_choice;
-                let (rect, response) =
-                    ui.allocate_exact_size(Vec2::splat(SNAP_SWATCH_SIZE), egui::Sense::click());
-                if ui.is_rect_visible(rect) {
-                    let stroke_color = if selected {
-                        Color32::WHITE
-                    } else {
-                        Color32::from_gray(90)
-                    };
-                    let stroke_width = if selected { 2.0_f32 } else { 1.0_f32 };
-                    let rounding = CornerRadius::same(4);
-                    ui.painter().rect_filled(rect, rounding, *color);
-                    ui.painter().rect_stroke(
-                        rect,
-                        rounding,
-                        egui::Stroke::new(stroke_width, stroke_color),
-                        StrokeKind::Outside,
-                    );
-                }
-                if response.clicked() {
-                    self.snap.snap_overlay_choice = idx;
-                    self.snap.snap_overlay_color = *color;
-                }
-                response.on_hover_ui(|ui| {
-                    let [r, g, b, _] = color.to_array();
-                    ui.label(format!("RGB {r}, {g}, {b}"));
-                });
-            }
-        });
+        if let Some((index, color)) = ColorPalette::new(
+            &self.snap.snap_overlay_choices,
+            self.snap.snap_overlay_choice,
+            SNAP_SWATCH_SIZE,
+        )
+        .show(ui)
+        .inner
+        {
+            self.snap.snap_overlay_choice = index;
+            self.snap.snap_overlay_color = color;
+        }
     }
 }

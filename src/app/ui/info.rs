@@ -4,9 +4,10 @@ use super::super::{
 };
 use super::stats::{AxisKind, axis_length, format_span};
 use super::{common, icons, style};
+use crate::app::widgets::{ActionButton, ModeChip, format_zoom};
 use crate::i18n::TextKey;
 use crate::types::{AxisUnit, AxisValue, CoordSystem, PolarMapping};
-use egui::{Color32, CornerRadius, FontId, Margin, RichText, Stroke};
+use egui::{Color32, FontId, RichText};
 use std::time::{Duration, Instant};
 
 impl CurcatApp {
@@ -52,7 +53,7 @@ impl CurcatApp {
                             .color(style::secondary_text_color(ui.visuals())),
                     );
                     common::bar_separator(ui);
-                    Self::draw_mode_chip(ui, mode_label, mode_color, &status_font);
+                    ui.add(ModeChip::new(mode_label, mode_color, &status_font));
                     if let Some((status_text, status_level)) = status_snapshot.as_ref() {
                         common::bar_separator(ui);
                         ui.add(
@@ -96,13 +97,13 @@ impl CurcatApp {
                         };
                         if ui
                             .add(
-                                egui::Button::image(icons::image(
-                                    icons::ICON_CLOSE,
-                                    icons::INLINE_ICON_SIZE,
-                                ))
+                                ActionButton::image(
+                                    icons::image(icons::ICON_CLOSE, icons::INLINE_ICON_SIZE),
+                                    close_hover,
+                                )
+                                .tint_follows_text()
                                 .frame(false)
-                                .min_size(egui::Vec2::splat(style::ICON_BUTTON_SIZE))
-                                .image_tint_follows_text_color(true),
+                                .min_size(egui::Vec2::splat(style::ICON_BUTTON_SIZE)),
                             )
                             .on_hover_text(close_hover)
                             .clicked()
@@ -129,7 +130,7 @@ impl CurcatApp {
                             crate::i18n::UiLanguage::Ru => "Открыть репозиторий на GitHub",
                         };
 
-                        let mut github_button = egui::Button::image(github_icon)
+                        let mut github_button = ActionButton::image(github_icon, hover)
                             .frame(true)
                             .min_size(egui::Vec2::splat(style::ICON_BUTTON_SIZE));
                         if ui.visuals().dark_mode {
@@ -230,7 +231,7 @@ impl CurcatApp {
                         &human_readable_bytes(rgba_bytes),
                         rgba_bytes,
                     ));
-                    ui.label(i18n.format_current_zoom(&Self::format_zoom(self.image.zoom)));
+                    ui.label(i18n.format_current_zoom(&format_zoom(self.image.zoom)));
                 } else {
                     ui.label(i18n.text(TextKey::LoadImageToInspectMetadata));
                 }
@@ -399,24 +400,6 @@ impl CurcatApp {
             crate::i18n::UiLanguage::Ru => russian,
         };
         Some((label, style::pick_mode_color(mode)))
-    }
-
-    fn draw_mode_chip(ui: &mut egui::Ui, label: &str, color: Color32, font: &FontId) {
-        let [r, g, b, _] = color.to_array();
-        let bg = Color32::from_rgba_unmultiplied(r, g, b, 44);
-        let stroke = Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(r, g, b, 150));
-        egui::Frame::new()
-            .fill(bg)
-            .stroke(stroke)
-            .corner_radius(CornerRadius::same(6))
-            .inner_margin(Margin::symmetric(7, 3))
-            .show(ui, |ui| {
-                ui.label(
-                    RichText::new(label)
-                        .font(font.clone())
-                        .color(style::mode_text_color(color, ui.visuals())),
-                );
-            });
     }
 
     fn render_axis_stats(

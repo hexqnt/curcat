@@ -1,12 +1,11 @@
 //! Shared presentation values; widget interaction still follows the active egui theme.
 
 use crate::app::{PickMode, StatusLevel};
-use crate::i18n::UiLanguage;
 use egui::{Color32, Margin, Visuals};
 
-pub(super) const SPACE_TIGHT: f32 = 2.0;
-pub(super) const SPACE_SMALL: f32 = 4.0;
-pub(super) const SPACE_ROW: f32 = 6.0;
+pub(in crate::app) const SPACE_TIGHT: f32 = 2.0;
+pub(in crate::app) const SPACE_SMALL: f32 = 4.0;
+pub(in crate::app) const SPACE_ROW: f32 = 6.0;
 pub(super) const SPACE_GROUP: f32 = 8.0;
 pub(super) const SPACE_SECTION: f32 = 10.0;
 pub(super) const CARD_MARGIN: Margin = Margin::symmetric(10, 8);
@@ -50,7 +49,7 @@ pub(super) fn mapping_color(ready: bool, visuals: &Visuals) -> Color32 {
 }
 
 /// Keep cursor colors unchanged while making chip text readable on light panels.
-pub(super) const fn mode_text_color(base: Color32, visuals: &Visuals) -> Color32 {
+pub(in crate::app) const fn mode_text_color(base: Color32, visuals: &Visuals) -> Color32 {
     if visuals.dark_mode {
         base
     } else {
@@ -69,29 +68,6 @@ pub(super) const fn pick_mode_color(mode: PickMode) -> Color32 {
         PickMode::R1 | PickMode::R2 | PickMode::CurveColor => Color32::from_rgb(255, 210, 160),
         PickMode::A1 | PickMode::A2 => Color32::from_rgb(200, 210, 255),
         PickMode::AutoTrace => Color32::from_rgb(215, 215, 255),
-    }
-}
-
-pub(super) struct CalibrationRowWidths {
-    pub(super) label: f32,
-    pub(super) pick: f32,
-    pub(super) value: f32,
-}
-
-impl CalibrationRowWidths {
-    pub(super) fn new(language: UiLanguage, available_width: f32) -> Self {
-        let (label_width, pick_width) = match language {
-            UiLanguage::En => (70.0, 82.0),
-            UiLanguage::Ru => (82.0, 90.0),
-        };
-        let value_width = SPACE_ROW
-            .mul_add(-2.0, available_width.max(220.0) - label_width - pick_width)
-            .clamp(64.0, 110.0);
-        Self {
-            label: label_width,
-            pick: pick_width,
-            value: value_width,
-        }
     }
 }
 

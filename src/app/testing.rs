@@ -12,6 +12,7 @@ pub use crate::i18n::UiLanguage;
 
 pub struct AppState<'a> {
     pub image_rect: Option<Rect>,
+    pub image_viewport: Option<Rect>,
     pub image_size: Option<[usize; 2]>,
     pub zoom: f32,
     pub points: usize,
@@ -68,10 +69,16 @@ pub fn render(app: &mut CurcatApp, ui: &mut egui::Ui) {
 }
 
 impl CurcatApp {
+    /// Enable production zoom animation in fixtures that disable it by default.
+    pub const fn set_smooth_zoom(&mut self, enabled: bool) {
+        self.config.smooth_zoom = enabled;
+    }
+
     #[must_use]
     pub fn inspect(&self) -> AppState<'_> {
         AppState {
             image_rect: self.image_rect,
+            image_viewport: self.image_viewport,
             image_size: self.image.image.as_ref().map(|image| image.size),
             zoom: self.image.zoom,
             points: self.points.points.len(),

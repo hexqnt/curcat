@@ -1,12 +1,11 @@
 use super::super::{
-    common::{self, ToggleSwitch, side_section_card_collapsible},
+    common::{self, side_section_card_collapsible},
     icons, style,
 };
-use super::axis_input::{CalibrationRow, sanitize_axis_text};
+use crate::app::widgets::{ActionButton, CalibrationRow, Choice, ToggleRow, sanitize_axis_text};
 use crate::app::{AxisCalUi, AxisValueField, CurcatApp, PickMode, safe_usize_to_f32};
 use crate::i18n::{I18n, TextKey, UiLanguage};
 use crate::types::{AngleDirection, AngleUnit, AxisUnit, AxisValue, CoordSystem, ScaleKind};
-use egui::containers::menu::MenuButton;
 use egui::{Pos2, Rect, RichText};
 
 #[derive(Clone, Copy)]
@@ -151,7 +150,7 @@ const fn angle_direction_label(lang: UiLanguage, direction: AngleDirection) -> &
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash)]
 enum CalibrationAxis {
     X,
     Y,
@@ -267,26 +266,21 @@ impl CurcatApp {
                     ui.label(i18n.text(TextKey::CoordinateSystem))
                         .on_hover_text(i18n.text(TextKey::CoordinateSystemHover));
                     let mut system = self.calibration.coord_system;
-                    let resp = egui::ComboBox::from_id_salt("coord_system_combo")
-                        .selected_text(match system {
-                            CoordSystem::Cartesian => i18n.text(TextKey::Cartesian),
-                            CoordSystem::Polar => i18n.text(TextKey::Polar),
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut system,
-                                CoordSystem::Cartesian,
-                                i18n.text(TextKey::Cartesian),
-                            );
-                            ui.selectable_value(
-                                &mut system,
-                                CoordSystem::Polar,
-                                i18n.text(TextKey::Polar),
-                            );
-                        });
-                    resp.response
-                        .on_hover_text(i18n.text(TextKey::CoordSystemForCalibrationExport));
-                    if system != self.calibration.coord_system {
+                    let changed = ui
+                        .add(Choice::new(
+                            "coord_system_combo",
+                            &mut system,
+                            &[CoordSystem::Cartesian, CoordSystem::Polar],
+                            |system| {
+                                i18n.text(match system {
+                                    CoordSystem::Cartesian => TextKey::Cartesian,
+                                    CoordSystem::Polar => TextKey::Polar,
+                                })
+                            },
+                        ))
+                        .on_hover_text(i18n.text(TextKey::CoordSystemForCalibrationExport))
+                        .changed();
+                    if changed {
                         self.calibration.coord_system = system;
                         self.mark_points_dirty();
                         self.calibration.pick_mode = PickMode::None;
@@ -333,14 +327,11 @@ impl CurcatApp {
                 }
 
                 ui.separator();
-                ui.horizontal(|ui| {
-                    common::labelled_toggle(
-                        ui,
-                        &mut self.calibration.show_calibration_segments,
-                        i18n.text(TextKey::ShowCalibrationOverlay),
-                        i18n.text(TextKey::ShowCalibrationOverlayHover),
-                    );
-                });
+                ui.add(ToggleRow::new(
+                    &mut self.calibration.show_calibration_segments,
+                    i18n.text(TextKey::ShowCalibrationOverlay),
+                    i18n.text(TextKey::ShowCalibrationOverlayHover),
+                ));
             },
         );
         ui.add_space(style::SPACE_SECTION);
@@ -368,10 +359,9 @@ impl CurcatApp {
     ) {
         let lang = self.ui.language;
         ui.add_enabled_ui(enabled, |ui| {
-            let button = egui::Button::image(icons::image(preset.icon(), icons::BUTTON_ICON_SIZE))
-                .min_size(egui::Vec2::splat(style::ICON_BUTTON_SIZE))
-                .image_tint_follows_text_color(true);
-            let menu = MenuButton::from_button(button).ui(ui, |ui| {
+            let button = ActionButton::icon_only(preset.icon(), preset.label(lang))
+                .min_size(egui::Vec2::splat(style::ICON_BUTTON_SIZE));
+            let menu = button.show_menu(ui, |ui| {
                 for quadrant in CalibrationQuadrant::ALL {
                     let resp = ui
                         .button(quadrant.label())
@@ -382,19 +372,16 @@ impl CurcatApp {
                     }
                 }
             });
-            menu.0.on_hover_text(preset.hover_text(lang));
+            menu.response.on_hover_text(preset.hover_text(lang));
         });
     }
 
     fn ui_calibration_snap_toggle(ui: &mut egui::Ui, enabled: &mut bool, label: &str, hover: &str) {
-        let toggle = ui
-            .add(ToggleSwitch::new(enabled, label))
-            .on_hover_text(hover);
-        ui.add_space(style::SPACE_TIGHT);
-        let caption = ui
-            .label(RichText::new(label).small().monospace())
-            .on_hover_text(hover);
-        toggle.labelled_by(caption.id);
+        ui.add(
+            ToggleRow::new(enabled, label, hover)
+                .caption(RichText::new(label).small().monospace())
+                .gap(style::SPACE_TIGHT),
+        );
     }
 
     fn ui_calibration_snap_group_toggle(
@@ -403,12 +390,11 @@ impl CurcatApp {
         label: &str,
         hover: &str,
     ) {
-        let toggle = ui
-            .add(ToggleSwitch::new(group_enabled, label))
-            .on_hover_text(hover);
-        ui.add_space(style::SPACE_SMALL);
-        let caption = common::toggle_label(ui, group_enabled, RichText::new(label).strong(), hover);
-        toggle.labelled_by(caption.id);
+        ui.add(
+            ToggleRow::new(group_enabled, label, hover)
+                .caption(RichText::new(label).strong())
+                .clickable_caption(),
+        );
     }
 
     #[allow(clippy::too_many_lines)]
@@ -429,18 +415,16 @@ impl CurcatApp {
                 0
             };
         let total = if cartesian { 5 } else { 1 };
-        let button = common::icon_button(
+        let button = ActionButton::new(
             icons::ICON_MENU,
             format!(
                 "{} ({active_count}/{total})",
                 i18n.text(TextKey::CalSnapMenu)
             ),
         );
-        let menu_cfg = egui::containers::menu::MenuConfig::new()
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-        let (response, _) = MenuButton::from_button(button)
-            .config(menu_cfg)
-            .ui(ui, |ui| {
+        let menu = button
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show_menu(ui, |ui| {
                 ui.horizontal(|ui| {
                     Self::ui_calibration_snap_toggle(
                         ui,
@@ -517,7 +501,8 @@ impl CurcatApp {
                     );
                 });
             });
-        response.on_hover_text(i18n.text(TextKey::CalSnapMenuHover));
+        menu.response
+            .on_hover_text(i18n.text(TextKey::CalSnapMenuHover));
     }
 
     fn apply_calibration_preset(
@@ -627,9 +612,10 @@ impl CurcatApp {
         };
 
         let collapsing = egui::CollapsingHeader::new(label)
+            .id_salt(axis)
             .default_open(true)
             .show(ui, |ui| {
-                ui.push_id(label, |ui| {
+                ui.push_id(axis, |ui| {
                     let mut ui_state =
                         CalibrationUiState::new(self.calibration.pending_value_focus);
                     let mapping_ready;
@@ -649,49 +635,28 @@ impl CurcatApp {
                         ui.horizontal(|ui| {
                             ui.label(unit_label).on_hover_text(unit_hover);
                             let mut unit = cal.unit;
-                            let unit_ir =
-                                egui::ComboBox::from_id_salt(format!("{label}_unit_combo"))
-                                    .selected_text(axis_unit_label(self.ui.language, unit))
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(
-                                            &mut unit,
-                                            AxisUnit::Float,
-                                            axis_unit_label(self.ui.language, AxisUnit::Float),
-                                        );
-                                        ui.selectable_value(
-                                            &mut unit,
-                                            AxisUnit::DateTime,
-                                            axis_unit_label(self.ui.language, AxisUnit::DateTime),
-                                        );
-                                    });
-                            unit_ir.response.on_hover_text(axis_value_type_hover);
+                            ui.add(Choice::new(
+                                "unit_combo",
+                                &mut unit,
+                                &[AxisUnit::Float, AxisUnit::DateTime],
+                                |unit| axis_unit_label(self.ui.language, unit),
+                            ))
+                            .on_hover_text(axis_value_type_hover);
                             cal.unit = unit;
                             ui.separator();
 
                             ui.label(scale_label).on_hover_text(scale_hover);
                             let mut scale = cal.scale;
                             let allow_log = matches!(cal.unit, AxisUnit::Float);
-                            let scale_ir =
-                                egui::ComboBox::from_id_salt(format!("{label}_scale_combo"))
-                                    .selected_text(scale_kind_label(self.ui.language, scale))
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(
-                                            &mut scale,
-                                            ScaleKind::Linear,
-                                            scale_kind_label(self.ui.language, ScaleKind::Linear),
-                                        );
-                                        if allow_log {
-                                            ui.selectable_value(
-                                                &mut scale,
-                                                ScaleKind::Log10,
-                                                scale_kind_label(
-                                                    self.ui.language,
-                                                    ScaleKind::Log10,
-                                                ),
-                                            );
-                                        }
-                                    });
-                            scale_ir.response.on_hover_text(axis_scale_hover);
+                            let scales = if allow_log {
+                                &[ScaleKind::Linear, ScaleKind::Log10][..]
+                            } else {
+                                &[ScaleKind::Linear][..]
+                            };
+                            ui.add(Choice::new("scale_combo", &mut scale, scales, |scale| {
+                                scale_kind_label(self.ui.language, scale)
+                            }))
+                            .on_hover_text(axis_scale_hover);
                             if !allow_log && matches!(scale, ScaleKind::Log10) {
                                 scale = ScaleKind::Linear;
                             }
@@ -740,7 +705,7 @@ impl CurcatApp {
             let pick_resp = ui
                 .add_enabled(
                     has_image,
-                    common::icon_button(icons::ICON_PICK_POINT, self.t(TextKey::PickOrigin))
+                    ActionButton::new(icons::ICON_PICK_POINT, self.t(TextKey::PickOrigin))
                         .min_size(egui::vec2(pick_width, row_height)),
                 )
                 .on_hover_text(self.t(TextKey::PickOriginHover));
@@ -778,10 +743,12 @@ impl CurcatApp {
     #[allow(clippy::too_many_lines)]
     fn polar_axis_group(&mut self, ui: &mut egui::Ui, kind: PolarAxisKind) {
         let label = kind.label(self.ui.language);
+        let axis = kind.axis();
         let collapsing = egui::CollapsingHeader::new(label)
+            .id_salt(axis)
             .default_open(true)
             .show(ui, |ui| {
-                ui.push_id(label, |ui| {
+                ui.push_id(axis, |ui| {
                     let mut ui_state =
                         CalibrationUiState::new(self.calibration.pending_value_focus);
                     {
@@ -805,22 +772,13 @@ impl CurcatApp {
                             ui.label(scale_label).on_hover_text(scale_hover);
                             let cal = &mut self.calibration.polar_cal.radius;
                             let mut scale = cal.scale;
-                            let scale_ir =
-                                egui::ComboBox::from_id_salt(format!("{label}_scale_combo"))
-                                    .selected_text(scale_kind_label(self.ui.language, scale))
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(
-                                            &mut scale,
-                                            ScaleKind::Linear,
-                                            scale_kind_label(self.ui.language, ScaleKind::Linear),
-                                        );
-                                        ui.selectable_value(
-                                            &mut scale,
-                                            ScaleKind::Log10,
-                                            scale_kind_label(self.ui.language, ScaleKind::Log10),
-                                        );
-                                    });
-                            scale_ir.response.on_hover_text(scale_choice_hover);
+                            ui.add(Choice::new(
+                                "scale_combo",
+                                &mut scale,
+                                &[ScaleKind::Linear, ScaleKind::Log10],
+                                |scale| scale_kind_label(self.ui.language, scale),
+                            ))
+                            .on_hover_text(scale_choice_hover);
                             cal.scale = scale;
                         });
                     } else {
@@ -832,41 +790,22 @@ impl CurcatApp {
                         ui.horizontal(|ui| {
                             ui.label(angle_unit_caption).on_hover_text(angle_unit_hover);
                             let mut unit = self.calibration.polar_cal.angle_unit;
-                            egui::ComboBox::from_id_salt(format!("{label}_unit_combo"))
-                                .selected_text(angle_unit_label(self.ui.language, unit))
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut unit,
-                                        AngleUnit::Degrees,
-                                        angle_unit_label(self.ui.language, AngleUnit::Degrees),
-                                    );
-                                    ui.selectable_value(
-                                        &mut unit,
-                                        AngleUnit::Radians,
-                                        angle_unit_label(self.ui.language, AngleUnit::Radians),
-                                    );
-                                });
+                            ui.add(Choice::new(
+                                "unit_combo",
+                                &mut unit,
+                                &[AngleUnit::Degrees, AngleUnit::Radians],
+                                |unit| angle_unit_label(self.ui.language, unit),
+                            ));
                             self.calibration.polar_cal.angle_unit = unit;
                             ui.separator();
                             ui.label(direction_label).on_hover_text(direction_hover);
                             let mut direction = self.calibration.polar_cal.angle_direction;
-                            egui::ComboBox::from_id_salt(format!("{label}_dir_combo"))
-                                .selected_text(angle_direction_label(self.ui.language, direction))
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut direction,
-                                        AngleDirection::Ccw,
-                                        angle_direction_label(
-                                            self.ui.language,
-                                            AngleDirection::Ccw,
-                                        ),
-                                    );
-                                    ui.selectable_value(
-                                        &mut direction,
-                                        AngleDirection::Cw,
-                                        angle_direction_label(self.ui.language, AngleDirection::Cw),
-                                    );
-                                });
+                            ui.add(Choice::new(
+                                "dir_combo",
+                                &mut direction,
+                                &[AngleDirection::Ccw, AngleDirection::Cw],
+                                |direction| angle_direction_label(self.ui.language, direction),
+                            ));
                             self.calibration.polar_cal.angle_direction = direction;
                         });
                     }

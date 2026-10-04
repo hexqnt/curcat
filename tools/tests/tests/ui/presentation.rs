@@ -82,11 +82,21 @@ fn missing_image_disables_transform_info_filters_and_trace_actions() {
     ] {
         let mut harness =
             curcat_test_support::harness_with(move |ctx| curcat::testing::empty(ctx, language));
-        assert!(
-            harness
-                .get_all_by_role_and_label(Role::Button, "90°")
-                .all(|node| node.accesskit_node().is_disabled())
-        );
+        let rotations = match language {
+            UiLanguage::En => ["Rotate 90° counter-clockwise.", "Rotate 90° clockwise."],
+            UiLanguage::Ru => [
+                "Повернуть на 90° против часовой стрелки.",
+                "Повернуть на 90° по часовой стрелке.",
+            ],
+        };
+        for label in rotations {
+            assert!(
+                harness
+                    .get_by_role_and_label(Role::Button, label)
+                    .accesskit_node()
+                    .is_disabled()
+            );
+        }
         click(&mut harness, appearance);
         let switch = harness.get_by_role_and_label(Role::CheckBox, info);
         assert!(switch.accesskit_node().is_disabled());

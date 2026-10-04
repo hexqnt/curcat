@@ -5,7 +5,7 @@ use egui::{TextBuffer, text::CharIndex};
 use std::{any::TypeId, borrow::Cow};
 
 /// Normalize axis input text by removing invalid characters and fixing decimals.
-pub(in crate::app::ui::side) fn sanitize_axis_text(value: &mut String, unit: AxisUnit) {
+pub(in crate::app) fn sanitize_axis_text(value: &mut String, unit: AxisUnit) {
     if value.is_empty() {
         return;
     }

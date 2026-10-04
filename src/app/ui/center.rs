@@ -4,10 +4,11 @@ use super::super::{
     safe_usize_to_f32,
 };
 use super::{icons, style};
+use crate::app::widgets::Navigator;
 
 use crate::i18n::TextKey;
 use crate::types::{AxisMapping, AxisValue, CoordSystem, PolarMapping};
-use egui::{Color32, CornerRadius, Key, PointerButton, Pos2, Sense, Vec2, pos2};
+use egui::{Color32, Key, PointerButton, Pos2, Sense, Vec2, pos2};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -615,41 +616,16 @@ impl CurcatApp {
         }
     }
 
-    #[allow(clippy::unused_self)]
     fn add_centered_image(
-        &self,
         ui: &mut egui::Ui,
         image: egui::Image,
         display_size: Vec2,
+        viewport_size: Vec2,
     ) -> egui::Response {
-        let viewport = ui.available_size();
-        let pad = Self::center_padding(viewport, display_size);
-        if pad.x > 0.0 || pad.y > 0.0 {
-            ui.vertical(|ui| {
-                if pad.y > 0.0 {
-                    ui.add_space(pad.y);
-                }
-                let response = ui
-                    .horizontal(|ui| {
-                        if pad.x > 0.0 {
-                            ui.add_space(pad.x);
-                        }
-                        let response = ui.add(image.sense(Sense::click_and_drag()));
-                        if pad.x > 0.0 {
-                            ui.add_space(pad.x);
-                        }
-                        response
-                    })
-                    .inner;
-                if pad.y > 0.0 {
-                    ui.add_space(pad.y);
-                }
-                response
-            })
-            .inner
-        } else {
-            ui.add(image.sense(Sense::click_and_drag()))
-        }
+        // Reserving the rounded viewport as content can cause false overflow and scrollbar flicker.
+        let pad = Self::center_padding(viewport_size, display_size);
+        let image_rect = egui::Rect::from_min_size(ui.max_rect().min + pad, display_size);
+        ui.put(image_rect, image.sense(Sense::click_and_drag()))
     }
 
     fn compute_scroll_zoom(
@@ -1742,160 +1718,6 @@ impl CurcatApp {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn draw_navigator_minimap(
-        &mut self,
-        ui: &egui::Ui,
-        texture_id: egui::TextureId,
-        image_rect: egui::Rect,
-        image_size: Vec2,
-        viewport_rect: egui::Rect,
-    ) {
-        if image_size.x <= f32::EPSILON || image_size.y <= f32::EPSILON {
-            return;
-        }
-
-        let display_size = image_size * self.image.zoom;
-        let is_large = display_size.x > viewport_rect.width() * 1.10
-            || display_size.y > viewport_rect.height() * 1.10;
-        if !is_large {
-            return;
-        }
-
-        let minimap_max = Vec2::new(190.0, 145.0);
-        let scale = (minimap_max.x / image_size.x).min(minimap_max.y / image_size.y);
-        if !scale.is_finite() || scale <= f32::EPSILON {
-            return;
-        }
-        let thumb_size = image_size * scale;
-        let frame_padding = Vec2::new(8.0, 8.0);
-        let panel_size = thumb_size + frame_padding * 2.0;
-        let outer_rect = ui.max_rect();
-        let panel_rect = egui::Rect::from_min_size(
-            pos2(
-                outer_rect.right() - panel_size.x - 12.0,
-                outer_rect.top() + 12.0,
-            ),
-            panel_size,
-        );
-        let thumb_rect = egui::Rect::from_min_size(panel_rect.min + frame_padding, thumb_size);
-
-        let id = ui.make_persistent_id("navigator_minimap");
-        let response = ui.interact(panel_rect, id, Sense::click_and_drag());
-        let hover_text = match self.ui.language {
-            crate::i18n::UiLanguage::En => "Navigator: click or drag to pan the viewport",
-            crate::i18n::UiLanguage::Ru => {
-                "Навигатор: кликните или тяните, чтобы панорамировать вид"
-            }
-        };
-        let response = response.on_hover_text(hover_text);
-        if (response.clicked() || response.dragged())
-            && let Some(pointer) = response.interact_pointer_pos()
-        {
-            let clamped = pos2(
-                pointer.x.clamp(thumb_rect.left(), thumb_rect.right()),
-                pointer.y.clamp(thumb_rect.top(), thumb_rect.bottom()),
-            );
-            let local = clamped - thumb_rect.min;
-            let image_target = pos2(
-                (local.x / scale).clamp(0.0, image_size.x),
-                (local.y / scale).clamp(0.0, image_size.y),
-            );
-            let viewport = viewport_rect.size();
-            let max_pan = Vec2::new(
-                (display_size.x - viewport.x).max(0.0),
-                (display_size.y - viewport.y).max(0.0),
-            );
-            let pan_target = Vec2::new(
-                viewport
-                    .x
-                    .mul_add(-0.5, image_target.x * self.image.zoom)
-                    .clamp(0.0, max_pan.x),
-                viewport
-                    .y
-                    .mul_add(-0.5, image_target.y * self.image.zoom)
-                    .clamp(0.0, max_pan.y),
-            );
-            self.set_zoom_to_pan_target(self.image.zoom, pan_target);
-        }
-
-        let visible = image_rect.intersect(viewport_rect);
-        let visible_min_display = Vec2::new(
-            (visible.min.x - image_rect.min.x).clamp(0.0, display_size.x),
-            (visible.min.y - image_rect.min.y).clamp(0.0, display_size.y),
-        );
-        let visible_max_display = Vec2::new(
-            (visible.max.x - image_rect.min.x).clamp(0.0, display_size.x),
-            (visible.max.y - image_rect.min.y).clamp(0.0, display_size.y),
-        );
-        let inv_zoom = self.image.zoom.recip();
-        let view_min_image = pos2(
-            (visible_min_display.x * inv_zoom).clamp(0.0, image_size.x),
-            (visible_min_display.y * inv_zoom).clamp(0.0, image_size.y),
-        );
-        let view_max_image = pos2(
-            (visible_max_display.x * inv_zoom).clamp(0.0, image_size.x),
-            (visible_max_display.y * inv_zoom).clamp(0.0, image_size.y),
-        );
-
-        let [r, g, b, _] = Color32::from_rgb(120, 185, 255).to_array();
-        let painter = ui.painter();
-        painter.rect_filled(
-            panel_rect,
-            CornerRadius::same(6),
-            Color32::from_rgba_unmultiplied(20, 24, 28, 190),
-        );
-        painter.rect_stroke(
-            panel_rect,
-            CornerRadius::same(6),
-            egui::Stroke::new(1.0_f32, Color32::from_gray(90)),
-            egui::StrokeKind::Outside,
-        );
-        painter.image(
-            texture_id,
-            thumb_rect,
-            egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-            Color32::WHITE,
-        );
-        painter.rect_stroke(
-            thumb_rect,
-            CornerRadius::same(3),
-            egui::Stroke::new(1.0_f32, Color32::from_gray(130)),
-            egui::StrokeKind::Outside,
-        );
-
-        let mut viewport_min = thumb_rect.min + view_min_image.to_vec2() * scale;
-        let mut viewport_max = thumb_rect.min + view_max_image.to_vec2() * scale;
-        if viewport_max.x < viewport_min.x {
-            std::mem::swap(&mut viewport_min.x, &mut viewport_max.x);
-        }
-        if viewport_max.y < viewport_min.y {
-            std::mem::swap(&mut viewport_min.y, &mut viewport_max.y);
-        }
-        let mut viewport_marker = egui::Rect::from_min_max(viewport_min, viewport_max);
-        if viewport_marker.width() < 4.0 {
-            let cx = viewport_marker.center().x;
-            viewport_marker.min.x = (cx - 2.0).max(thumb_rect.left());
-            viewport_marker.max.x = (cx + 2.0).min(thumb_rect.right());
-        }
-        if viewport_marker.height() < 4.0 {
-            let cy = viewport_marker.center().y;
-            viewport_marker.min.y = (cy - 2.0).max(thumb_rect.top());
-            viewport_marker.max.y = (cy + 2.0).min(thumb_rect.bottom());
-        }
-        painter.rect_filled(
-            viewport_marker,
-            CornerRadius::same(2),
-            Color32::from_rgba_unmultiplied(r, g, b, 30),
-        );
-        painter.rect_stroke(
-            viewport_marker,
-            CornerRadius::same(2),
-            egui::Stroke::new(1.4_f32, Color32::from_rgba_unmultiplied(r, g, b, 235)),
-            egui::StrokeKind::Outside,
-        );
-    }
-
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn draw_crosshair_overlay(
         &self,
@@ -2109,6 +1931,7 @@ impl CurcatApp {
         #[cfg(feature = "testing")]
         {
             self.image_rect = None;
+            self.image_viewport = None;
         }
         self.image.last_pixels_per_point = ctx.pixels_per_point().max(1.0);
         self.image.last_viewport_size = Some(ui.available_size());
@@ -2127,20 +1950,21 @@ impl CurcatApp {
             let (tex_id, img_size) = (img.texture.id(), img.size);
             let scroll_out = egui::ScrollArea::both()
                 .id_salt("image_scroll")
+                .auto_shrink([false, false])
                 .scroll_offset(self.image.pan)
                 .scroll_source(egui::scroll_area::ScrollSource {
                     mouse_wheel: false,
                     ..egui::scroll_area::ScrollSource::ALL
                 })
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-                .show(ui, |ui| {
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+                .show_viewport(ui, |ui, viewport| {
                 let base_size = egui::vec2(
                     safe_usize_to_f32(img_size[0]),
                     safe_usize_to_f32(img_size[1]),
                 );
                 let display_size = base_size * self.image.zoom;
                 let image = egui::Image::new((tex_id, display_size));
-                let response = self.add_centered_image(ui, image, display_size);
+                let response = Self::add_centered_image(ui, image, display_size, viewport.size());
                 let rect = response.rect;
                 #[cfg(feature = "testing")]
                 {
@@ -2453,6 +2277,10 @@ impl CurcatApp {
                 self.image.pan = scroll_out.state.offset;
             }
             self.image.last_viewport_size = Some(scroll_out.inner_rect.size());
+            #[cfg(feature = "testing")]
+            {
+                self.image_viewport = Some(scroll_out.inner_rect);
+            }
             if let Some(next_zoom) = pending_zoom {
                 if let Some(anchor_screen) = pending_zoom_anchor {
                     let anchor = anchor_screen - scroll_out.inner_rect.min;
@@ -2461,14 +2289,21 @@ impl CurcatApp {
                     self.set_zoom_about_viewport_center(next_zoom);
                 }
             }
-            if let (Some(image_rect), Some(image_size)) = (image_screen_rect, image_base_size) {
-                self.draw_navigator_minimap(
-                    ui,
+            if let (Some(image_rect), Some(image_size)) = (image_screen_rect, image_base_size)
+                && let Some(target) = Navigator::new(
                     tex_id,
                     image_rect,
                     image_size,
                     scroll_out.inner_rect,
-                );
+                    self.ui.language,
+                )
+                .show(ui)
+            {
+                let viewport = scroll_out.inner_rect.size();
+                let max_pan = (image_size * self.image.zoom - viewport).max(Vec2::ZERO);
+                let pan = (target.to_vec2() * self.image.zoom - viewport * 0.5)
+                    .clamp(Vec2::ZERO, max_pan);
+                self.set_zoom_to_pan_target(self.image.zoom, pan);
             }
             self.step_zoom_animation(ui.ctx());
         } else if self.project.pending_image_task.is_some() {
